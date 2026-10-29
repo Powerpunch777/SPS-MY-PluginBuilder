@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<meta content="dark" name="color-scheme"/>
+<title>SPS Builder — Lead 설계·UI 정합성 (UI Prototype v9)</title>
+<style>
+:root{--bg:#090f17;--shell:#0d1520;--surface:#101a27;--surface2:#152233;--surface3:#1b293a;--edge:#28374a;--edge2:#36485c;--text:#e9f0f7;--sub:#aec0d2;--muted:#8498ab;--mint:#a8efd1;--mint2:#54c8a3;--blue:#8bafff;--amber:#e3c089;--red:#e79a9c;--r:13px;--greenbg:#183c33;--amberbg:#403324}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0} body{background:var(--bg);color:var(--text);font:13px/1.55 -apple-system,BlinkMacSystemFont,'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif;overflow:hidden}
+button,input,select,textarea{font:inherit}button{cursor:pointer}button:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--mint2);outline-offset:2px}button:disabled{opacity:.48;cursor:not-allowed}::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-thumb{background:#34455b;border-radius:30px}::-webkit-scrollbar-track{background:transparent}
+.shell{height:100dvh;min-height:610px;display:grid;grid-template-columns:240px minmax(0,1fr)}
+.sidebar{display:flex;flex-direction:column;background:var(--shell);border-right:1px solid var(--edge);padding:22px 13px 17px;min-width:0}.logo{display:flex;gap:11px;align-items:center;padding:3px 10px 26px}.logo-icon{width:37px;height:37px;border-radius:11px;background:var(--mint);color:#08261e;display:grid;place-items:center;font-size:13px;font-weight:900;letter-spacing:-1px}.logo strong{font-size:16px;letter-spacing:-.3px}.logo small{font-size:9px;display:block;color:var(--muted);letter-spacing:1.9px;font-weight:800}.overline{font-size:10px;letter-spacing:1.8px;color:#72869d;font-weight:800;padding:17px 10px 9px}.workspace-card{background:#142133;border:1px solid #2b3e50;border-radius:12px;padding:11px 11px 10px;margin:0 3px 9px}.workspace-card label{font-size:10px;font-weight:800;color:#9ab0c3;display:block;margin:0 0 7px}.workspace-card select{color:#e8f2fa;background:#1b2c41;border:1px solid #385069;border-radius:8px;width:100%;padding:10px 8px;font-size:11px;font-weight:750}.scope-note{font-size:10px;color:#8197a9;margin-top:8px}.nav{display:flex;flex-direction:column;gap:4px}.nav button{width:100%;display:flex;gap:11px;align-items:center;padding:11px 12px;border:1px solid transparent;border-radius:9px;background:transparent;color:#acbed0;text-align:left;font-weight:680}.nav button:hover{background:#1d2b3d;color:white}.nav button.active{background:#203648;border-color:#375266;color:#dcfff0}.nav-icon{width:20px;font-size:16px;text-align:center;color:#9bb0c3}.nav button.active .nav-icon{color:var(--mint)}.nav-count{margin-left:auto;color:#d9fbe9;background:#2a5049;padding:1px 7px;border-radius:6px;font-size:10px}.sidebar-divider{height:1px;background:var(--edge);margin:18px 11px 3px}.sidebar-foot{margin-top:auto}.sample-pill{margin:10px 4px 15px;padding:10px 11px;color:#e0c796;background:#4a39232e;border:1px solid #735b354f;border-radius:9px;font-size:10px;line-height:1.65}.profile{display:flex;gap:10px;align-items:center;border-top:1px solid var(--edge);padding:15px 7px 2px}.profile-avatar{width:32px;height:32px;border:1px solid #476273;background:#284050;border-radius:10px;display:grid;place-items:center;font-size:11px;font-weight:800;color:var(--mint)}.profile strong{font-size:11px}.profile span{display:block;font-size:10px;color:var(--muted)}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0}.topbar{flex:0 0 70px;border-bottom:1px solid var(--edge);background:#0d1622;display:flex;justify-content:space-between;align-items:center;padding:0 26px;gap:14px}.crumb{color:#7f94a7;font-size:12px;display:flex;align-items:center;gap:9px;white-space:nowrap;min-width:0}.crumb strong{font-weight:700;color:#e2ecf6;overflow:hidden;text-overflow:ellipsis}.tools{display:flex;align-items:center;gap:9px;white-space:nowrap}.badge{font-size:10px;font-weight:750;border:1px solid #3c5365;background:#1b2b3c;color:#a7c5d1;border-radius:30px;padding:6px 10px}.badge.sample{color:var(--amber);border-color:#735c35;background:#4436245e}.ghost{background:transparent;color:#d4e1ee;border:1px solid #3c4e62;border-radius:9px;padding:8px 12px;font-weight:750;font-size:11px}.ghost:hover{background:#253549}.accent{background:var(--mint);border:0;border-radius:9px;color:#12382e;padding:9px 13px;font-weight:850;font-size:11px}.accent:hover{background:#ccffea}.mini-btn{font-size:11px;padding:7px 9px;border-radius:7px;background:#1b2d3f;color:#c7d9e9;border:1px solid #34485b}.mini-btn:hover{background:#283d50}.muted{color:var(--muted)}
+.screen{flex:1;min-width:0;min-height:0;overflow:hidden}.view{display:none;width:100%;height:100%}.view.active{display:block}
+/* chat */
+.chat-grid{display:grid;grid-template-columns:minmax(0,1fr) 384px;height:100%}.conversation{display:flex;flex-direction:column;min-width:0;min-height:0}.chat-head{padding:20px 30px 15px;border-bottom:1px solid #1e3041;display:flex;gap:15px;align-items:center;justify-content:space-between}.chat-head h1{font-size:18px;letter-spacing:-.3px;margin:0 0 4px}.chat-head .descr{font-size:11px;color:var(--muted)}.chat-meta{display:flex;gap:9px;align-items:center}.agent-dot{width:33px;height:33px;border-radius:11px;display:grid;place-items:center;background:#284637;border:1px solid #4a8a6d;color:#b6ffe0;font-weight:900;font-size:10px}.agent-picker{padding:7px 9px;border-radius:9px;background:#1b2a3e;border:1px solid #354a5c;color:#e9f4f5;font-size:11px;font-weight:750;max-width:170px}.chat-log{min-height:0;flex:1;overflow:auto;padding:27px max(24px,8%) 28px}.msg{display:flex;align-items:flex-start;gap:12px;max-width:790px;margin:0 auto 28px}.msg.user{flex-direction:row-reverse}.msg-avatar{flex:0 0 32px;width:32px;height:32px;background:#213646;color:#b6e9d6;border-radius:10px;display:grid;place-items:center;font-size:10px;font-weight:800}.msg.user .msg-avatar{background:#35365a;color:#cad7fe}.msg-text{max-width:calc(100% - 45px);min-width:0}.msg-meta{font-size:11px;color:#859ab1;margin-bottom:7px;font-weight:750}.msg.user .msg-meta{text-align:right}.bubble{white-space:pre-wrap;color:#d7e5f0;border-radius:4px 14px 14px 14px;background:#142233;border:1px solid #293d52;padding:16px 18px;line-height:1.8;font-size:12px;box-shadow:0 8px 17px #0000001c}.msg.user .bubble{background:#253a43;border:1px solid #3e605e;border-radius:14px 4px 14px 14px}.bubble strong{color:var(--mint)}.chat-composer{background:#0c151f;border-top:1px solid #243247;padding:15px 26px 16px}.composer-box{border:1px solid #3b5061;background:#19283b;max-width:890px;display:flex;gap:9px;padding:9px 10px;border-radius:14px;margin:auto;align-items:flex-end}.composer-box:focus-within{border-color:#71bfa7}.composer-box textarea{border:0;background:transparent;outline:0;color:#e3effa;resize:vertical;min-height:41px;max-height:130px;padding:10px 9px;flex:1;font-size:12px}.composer-box textarea::placeholder{color:#879bae}.send{background:var(--mint);color:#14382e;width:38px;height:38px;flex-shrink:0;border:0;border-radius:9px;font-size:19px;font-weight:900}.composer-note{max-width:890px;margin:9px auto 0;text-align:center;font-size:10px;color:#71869a}
+/* change rail */
+.change-rail{border-left:1px solid var(--edge);background:#101924;display:flex;flex-direction:column;min-width:0;min-height:0}.rail-head{padding:20px 20px 15px;border-bottom:1px solid #263446}.rail-head-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.rail-head h2{margin:0;font-size:15px;letter-spacing:-.25px}.rail-head p{margin:5px 0 0;color:var(--muted);font-size:11px}.rail-tabs{display:flex;gap:5px;margin-top:17px;background:#141f2c;border:1px solid #2d3e50;padding:4px;border-radius:9px}.rail-tabs button{flex:1;border:0;background:transparent;color:#91a5b7;padding:8px 4px;border-radius:6px;font-size:11px;font-weight:800}.rail-tabs button.active{background:#2b4153;color:#dbfff0}.rail-body{overflow:auto;flex:1;padding:17px 17px 30px}.rail-panel{display:none}.rail-panel.active{display:block}.rail-section-label{display:flex;align-items:center;justify-content:space-between;color:#9badc0;font-size:10px;font-weight:850;letter-spacing:.6px;margin:4px 1px 10px}.change-item{display:block;text-align:left;width:100%;background:#152331;border:1px solid #2b3d51;border-radius:12px;padding:13px 13px 12px;color:var(--text);margin-bottom:8px}.change-item.active{border-color:#6dc7a7;background:#1c3039}.change-item:hover{border-color:#55788a}.change-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.change-name{font-size:12px;font-weight:800}.change-desc{font-size:11px;color:#9eafbe;line-height:1.55;margin-top:6px}.change-meta{display:flex;align-items:center;gap:7px;margin-top:9px;font-size:10px;color:#859bae}.tag{font-size:10px;font-weight:800;display:inline-flex;align-items:center;gap:5px;border:1px solid #41556a;border-radius:6px;padding:2px 7px;color:#c3d3e2;background:#1e2b3c;white-space:nowrap}.tag.proposed{border-color:#8a6849;color:#e4c38e;background:#4535267a}.tag.review{border-color:#688bad;color:#c2ddff;background:#263f5b}.tag.approved{border-color:#4b8976;color:#aff1d2;background:#1a4038}.tag.rejected{border-color:#986266;color:#eeb1b5;background:#4a2b30}.tag.running{border-color:#688bad;color:#a9c9ff;background:#233955}.diff-card{background:#111c28;border:1px solid #30445a;border-radius:12px;margin-top:16px;overflow:hidden}.diff-head{background:#1b2a3b;padding:12px 13px;border-bottom:1px solid #314153}.diff-head strong{font-size:12px;display:block;overflow-wrap:anywhere}.diff-head span{font-size:10px;color:#a0b1c3;display:block;margin-top:3px}.diff-code{font:11px/1.7 ui-monospace,Menlo,Consolas,monospace;padding:13px;white-space:pre-wrap;overflow-wrap:anywhere}.minus{color:#e4a5ac;background:#51272f67;margin:0 -13px;padding:0 13px}.plus{color:#abefd3;background:#1d483b5f;margin:0 -13px;padding:0 13px}.diff-foot{display:flex;gap:8px;padding:12px;border-top:1px solid #2f4154}.diff-foot button{flex:1}.info-block{background:#13212e;border:1px solid #2c3e50;border-radius:10px;padding:13px;margin-bottom:11px}.info-block h3{font-size:12px;margin:0 0 8px}.info-block p{font-size:11px;color:#a9baca;margin:0;line-height:1.7}.file-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;border-bottom:1px solid #28394c;padding:11px 2px;font-size:11px}.file-row strong{display:block;overflow-wrap:anywhere}.file-row small{display:block;color:#8297aa;margin-top:4px}.rail-bottom{padding:12px 19px;border-top:1px solid #263448;color:#71879b;font-size:10px}
+/* shared pages */
+.panel{height:100%;overflow:auto;padding:29px min(38px,4vw) 60px}.head{display:flex;align-items:flex-end;gap:20px;justify-content:space-between;margin-bottom:22px}.eyebrow{font-size:10px;color:var(--mint2);letter-spacing:2px;font-weight:850}.head h1{font-size:27px;letter-spacing:-1px;margin:6px 0}.head p{font-size:12px;color:#9bafc0;margin:0}.head-actions{display:flex;gap:7px;align-items:center}.card{background:var(--surface);border:1px solid var(--edge);border-radius:14px;padding:20px;min-width:0}.card h2{font-size:14px;margin:0 0 11px}.card h3{font-size:12px;margin:0 0 8px}.card-sub{font-size:11px;color:var(--muted);margin-top:-4px;margin-bottom:12px}.kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:15px}.kpis .card{padding:16px 18px}.kpi-name{font-size:11px;color:#95a8bd}.kpi-value{font-size:20px;font-weight:800;margin-top:5px;letter-spacing:-.3px}.kpi-help{font-size:10px;color:#7d90a2;margin-top:4px}.status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:750;white-space:nowrap}.status:before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}.status.done{color:var(--mint2)}.status.working{color:#88b0f0}.status.wait{color:var(--amber)}.status.blocked{color:var(--red)}.two-col{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);gap:15px;margin-bottom:15px}.milestone{display:grid;grid-template-columns:28px 1fr auto;gap:12px;border-bottom:1px solid var(--edge);padding:14px 0;align-items:start}.milestone:last-child{border:0}.step-num{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;background:#213249;border:1px solid #35495c;font-size:12px;font-weight:850;color:#b5c5d4}.step-num.done{background:#244c3d;color:var(--mint);border-color:#47775e}.step-num.working{background:#263e63;color:#b5d4ff}.milestone button{text-align:left;border:0;padding:0;background:transparent;color:var(--text);font-weight:800;font-size:12px}.milestone button:hover{color:var(--mint)}.milestone p{color:#94a7bb;font-size:11px;margin:3px 0 4px}.milestone small{color:#71889b;font-size:10px}.selected-detail{border:1px solid #385263;background:#172839;border-radius:10px;padding:15px;margin-top:10px;font-size:11px;color:#c2d1df;line-height:1.8}.selected-detail h3{margin:0 0 5px;font-size:12px;color:#e9f2f9}.thin-line{border-bottom:1px solid #27394b;padding:12px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;font-size:11px}.thin-line:last-child{border:0}.thin-line strong{font-size:11px}.thin-line small{display:block;color:#7e95a8;margin-top:3px}.notice{font-size:11px;border-radius:10px;background:#40332155;border:1px solid #79603969;color:#ead0a4;padding:12px 15px;line-height:1.7;margin-top:15px}
+/* architecture graph */
+.arch-layout{display:grid;grid-template-columns:minmax(0,1fr) 305px;gap:15px;height:calc(100% - 106px);min-height:470px}.diagram-frame{display:flex;flex-direction:column;min-height:470px;overflow:hidden;background:#101c2a;border:1px solid #30455a;border-radius:15px}.diagram-tools{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;background:#132130;border-bottom:1px solid #2d3e50}.mode-pills{display:flex;gap:5px;overflow-x:auto;scrollbar-width:none}.mode-pills button{white-space:nowrap;background:#172637;border:1px solid transparent;border-radius:7px;color:#9bb0c5;padding:7px 10px;font-size:11px;font-weight:750}.mode-pills button.active{border-color:#507666;background:#244237;color:#c8f8e0}.zoom-tools{display:flex;gap:4px}.zoom-tools button{width:30px;height:30px;border-radius:7px;border:1px solid #3a5063;color:#d7e3ef;background:#1d2c3e;font-size:16px}.diagram-viewport{position:relative;flex:1;min-height:0;overflow:auto;background-color:#0e1825;background-image:radial-gradient(#34506a77 .9px,transparent .9px);background-size:19px 19px}.diagram-world{width:880px;height:530px;position:relative;transform-origin:top left}.edges{position:absolute;inset:0;width:880px;height:530px;pointer-events:none;overflow:visible}.diagram-node{position:absolute;width:172px;min-height:79px;text-align:left;background:#1a2d3e;border:1px solid #496079;color:#e4eef8;border-radius:12px;padding:11px 13px;z-index:2;box-shadow:0 10px 22px #01050a4d}.diagram-node:hover{border-color:#95d4bb}.diagram-node.active{border:2px solid var(--mint2);background:#22433c}.diagram-node .nd-type{font-size:9px;letter-spacing:1px;font-weight:850;color:#9ac6ba;text-transform:uppercase}.diagram-node strong{display:block;font-size:12px;margin:4px 0;line-height:1.3}.diagram-node small{display:block;font-size:10px;color:#9daebc}.diagram-note{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-top:1px solid #2b4052;font-size:10px;color:#91a7b9;gap:8px}.detail-panel{display:flex;flex-direction:column;gap:11px;overflow:auto;min-height:0}.detail-panel .card{padding:18px}.detail-panel h2{font-size:15px;margin:3px 0 9px}.detail-panel p{font-size:11px;color:#a8b9ca;line-height:1.8}.detail-meta{display:grid;grid-template-columns:85px 1fr;gap:8px 10px;font-size:11px;margin-top:15px}.detail-meta dt{color:#8ca2b7}.detail-meta dd{margin:0;color:#d8e4ef}.detail-panel .callout{border:1px solid #40596a;background:#172a3b;border-radius:11px;padding:15px;font-size:11px;color:#b5c9db;line-height:1.75}
+/* docs */
+.doc-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);gap:15px}.doc-item{display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid var(--edge);padding:16px 2px}.doc-item:last-child{border-bottom:0}.doc-item h3{margin:0 0 4px;font-size:12px}.doc-item p{margin:0;color:#8198ad;font-size:10px}.doc-item button{border:1px solid #3b5264;color:#c5d8e8;background:#1d3040;border-radius:7px;padding:6px 9px;font-size:10px}.doc-preview{white-space:pre-wrap;background:#0c1723;border-radius:8px;padding:15px;color:#b6c9d7;border:1px solid #2d4153;font-size:11px;line-height:1.8;min-height:120px}.op-row{display:flex;gap:9px;align-items:center;margin:12px 0;color:#b0c0ce;font-size:11px}
+/* small screen modification drawer */
+.mobile-changes-btn,.mobile-rail-close{display:none}
+/* modal and notification */
+.modal-backdrop{display:none;position:fixed;inset:0;background:#03070cbd;align-items:center;justify-content:center;z-index:12;padding:18px}.modal-backdrop.active{display:flex}.modal{width:min(540px,100%);background:#172635;border:1px solid #4d6474;box-shadow:0 25px 80px #0009;border-radius:16px;padding:23px}.modal h2{font-size:17px;margin:0 0 12px}.modal p{font-size:12px;line-height:1.8;color:#b7c6d6}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:23px}.toast{position:fixed;z-index:20;right:22px;bottom:19px;background:#27473e;border:1px solid #5eaa8e;padding:11px 14px;border-radius:10px;color:#e1fff2;font-size:12px;box-shadow:0 10px 28px #0006;display:none;max-width:390px}.toast.show{display:block}
+@media(max-width:1260px){.shell{grid-template-columns:214px minmax(0,1fr)}.chat-grid{grid-template-columns:minmax(0,1fr) 335px}.sidebar{padding-left:9px;padding-right:9px}.arch-layout{grid-template-columns:minmax(0,1fr) 285px}.chat-log{padding-left:5%;padding-right:5%}}
+@media(max-width:1020px){.chat-grid{grid-template-columns:minmax(0,1fr) 296px}.topbar{padding:0 18px}.tools .badge{display:none}.arch-layout{grid-template-columns:1fr;height:auto}.detail-panel{max-height:none}.panel{height:100%}.diagram-frame{height:575px}.two-col,.doc-grid{grid-template-columns:1fr}}
+@media(max-width:790px){.chat-grid{grid-template-columns:1fr}.mobile-changes-btn,.mobile-rail-close{display:inline-flex}.change-rail{display:none}.mobile-rail-open .change-rail{display:flex;position:fixed;right:0;top:70px;bottom:0;width:min(410px,calc(100vw - 64px));z-index:11;box-shadow:-24px 0 80px #000a;border-left:1px solid #466579}.mobile-rail-open .change-rail .rail-body{min-height:0}.head{flex-direction:column;align-items:flex-start}.kpis{grid-template-columns:1fr 1fr}.tools .ghost:not(.mobile-changes-btn){display:none}.chat-head{padding:18px}.chat-log{padding:20px 16px}.chat-composer{padding:13px 14px}}
+@media(max-width:625px){.shell{grid-template-columns:64px minmax(0,1fr)}.sidebar{padding:14px 5px}.logo{justify-content:center;padding:2px 0 18px}.logo>div:last-child,.workspace-card,.overline,.nav button span:not(.nav-icon),.nav-count,.sidebar-divider,.sidebar-foot{display:none}.nav button{justify-content:center;padding:11px 6px}.nav-icon{width:auto}.topbar{height:59px;flex-basis:59px}.mobile-rail-open .change-rail{top:59px}.crumb{font-size:10px;gap:5px}.crumb strong{max-width:125px}.tools .accent{padding:8px}.tools .badge{display:none}.panel{padding:22px 13px 40px}.kpis{grid-template-columns:1fr}.chat-head h1{font-size:15px}.chat-head .descr{font-size:10px}.agent-picker{width:120px;font-size:10px}.diagram-tools{flex-wrap:wrap}.head h1{font-size:23px}}
+
+/* v3: specified navigation, iPad touch, agent view, Core settings */
+html{overflow:clip}.shell{grid-template-rows:minmax(0,1fr)}.sidebar{min-height:0;overflow-y:auto}body{overscroll-behavior:none}button,a,select{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.nav a{width:100%;display:flex;gap:11px;align-items:center;padding:11px 12px;border:1px solid transparent;border-radius:9px;background:transparent;color:#acbed0;text-align:left;font-weight:680;text-decoration:none;cursor:pointer}
+.nav a:hover{background:#1d2b3d;color:#fff}.nav a.active{background:#203648;border-color:#375266;color:#dcfff0}.nav a.active .nav-icon{color:var(--mint)}
+.lead-only-label{font-size:11px;font-weight:760;color:#d7efdf;background:#223b34;border:1px solid #3b6658;border-radius:9px;padding:9px 10px;white-space:nowrap}
+.profile-button{width:100%;background:transparent;color:inherit;text-align:left;cursor:pointer;border-left:0;border-right:0;border-bottom:0}.profile-button:hover{background:#1c2b3c;border-radius:8px}.profile-gear{margin-left:auto;color:#bed2de;font-size:17px}.sidebar-foot{position:relative}.core-menu{position:absolute;bottom:62px;left:1px;right:1px;z-index:13;background:#1b2e40;border:1px solid #456175;border-radius:12px;padding:7px;box-shadow:0 15px 40px #000a}.core-menu[hidden]{display:none}.core-menu button{width:100%;background:#203b4b;border:0;color:#e9f1f6;text-align:left;border-radius:8px;padding:12px;font-weight:700}
+.rail-tabs{overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}.rail-tabs button{flex:0 0 auto;min-width:69px;padding:9px 8px}
+.agent-work-grid{display:grid;grid-template-columns:minmax(0,1fr) 384px;height:100%}.agent-work-main{display:flex;min-width:0;min-height:0;flex-direction:column}.agent-work-head{flex-shrink:0}.agent-switch{display:flex;align-items:center;gap:8px;white-space:nowrap}.agent-switch label{font-size:11px;color:#b7c7d8}.agent-work-scroll{overflow:auto;min-height:0;padding:24px max(22px,7%)}.work-intro{padding:12px 15px;background:#182a39;border:1px solid #344d5b;border-radius:10px;margin-bottom:17px}.work-intro p{font-size:11px;color:#a5b8c9;margin:8px 0 0}.work-cards{display:grid;grid-template-columns:1fr;gap:13px}.work-item{padding:13px 0;border-bottom:1px solid #2a3c4c}.work-item:last-child{border:0}.work-item strong{display:block;font-size:12px}.work-item p{font-size:11px;color:#a0b3c6;margin:5px 0 0}.work-item small{display:block;font-size:10px;color:#819bae;margin-top:7px}
+.org-frame{border:1px solid #30465b;background:#101e2d;border-radius:16px;padding:32px 24px;min-height:510px}.org-row{display:flex;justify-content:center;gap:22px}.org-row.center{justify-content:center}.org-line{height:38px;width:1px;background:#517080;margin:auto}.org-agent{min-width:210px;display:flex;gap:11px;align-items:center;text-align:left;background:#1d3042;border:1px solid #50667c;color:#eaf3fa;border-radius:13px;padding:15px 13px;box-shadow:0 7px 20px #0002}.org-agent.lead{background:#203e39;border-color:#69a58d}.org-agent:hover{border-color:#a9e6ce;background:#244334}.org-avatar{width:42px;height:42px;flex-shrink:0;background:#294b52;color:#d1f8ed;display:grid;place-items:center;border-radius:12px;font-weight:850;font-size:11px}.org-agent strong{display:block;font-size:12px}.org-agent small{display:block;margin-top:3px;color:#a4b9c8;font-size:10px}.org-arrow{margin-left:auto;color:#99b9b3;font-size:22px}
+.node-main{border:0;background:transparent;color:inherit;text-align:left;width:100%;height:100%;padding:10px 13px 11px;display:block;cursor:pointer;padding-right:38px}.diagram-node{padding:0}.node-agent{position:absolute;right:7px;top:15px;width:34px;height:34px;border-radius:9px;background:#315c57;border:1px solid #76b9a1;color:#d7ffef;font-size:9px;font-weight:900;z-index:3;display:grid;place-items:center}.node-agent:hover{background:#427c6b}.diagram-node .nd-type{pointer-events:none}
+.graph-owner-link{width:100%;margin-top:9px}
+.route-anchor{position:absolute;top:0;left:0;width:0;height:0;overflow:hidden;pointer-events:none}
+@supports selector(body:has(.route-anchor:target)) {
+ body:has(.route-anchor:target) .view{display:none !important}
+ body:has(#panel-chat:target) #view-chat,body:has(#panel-architecture:target) #view-architecture,body:has(#panel-org:target) #view-org,body:has(#panel-documents:target) #view-documents,body:has(#panel-agents:target) #view-agents{display:block !important}
+}
+@media(max-width:1260px){.agent-work-grid{grid-template-columns:minmax(0,1fr) 335px}}
+@media(max-width:1040px){.org-ctos{gap:10px}.org-agent{min-width:0;flex:1}.org-frame{padding:24px 12px}}
+@media(max-width:790px){.agent-work-grid{grid-template-columns:1fr}.agent-work-grid .change-rail{display:none}#view-agents.mobile-rail-open .change-rail{display:flex;position:fixed;right:0;top:70px;bottom:0;width:min(410px,calc(100vw - 64px));z-index:11;box-shadow:-24px 0 80px #000a}.org-ctos{flex-direction:column}.org-workers{flex-direction:column}.org-agent{width:100%}}
+@media(max-width:625px){.org-frame{padding:20px 12px}.sidebar-foot{display:flex !important;align-items:center;margin-top:auto}.sidebar-foot .sample-pill{display:none}.sidebar-foot .profile-button{padding:10px 0;justify-content:center}.sidebar-foot .profile-button>div:not(.profile-avatar),.sidebar-foot .profile-gear{display:none}.core-menu{bottom:53px;left:0;min-width:180px;right:auto}.agent-work-scroll{padding:14px}.agent-switch label{display:none}.agent-switch select{width:120px}#view-agents.mobile-rail-open .change-rail{top:59px}}
+
+@media(max-width:625px){.nav a{justify-content:center;padding:11px 6px}.nav a span:not(.nav-icon){display:none}}
+@media(max-height:850px){.sidebar{padding-top:12px;padding-bottom:10px}.logo{padding-bottom:12px}.overline{padding-top:10px;padding-bottom:6px}.nav a{padding-top:8px;padding-bottom:8px}.sidebar-divider{margin-top:9px;margin-bottom:0}.sidebar-foot .sample-pill{display:none}}
+
+/* v4: current active AI list, CTO ownership territories, current-function overlay */
+@media(max-width:1240px){.arch-layout{grid-template-columns:1fr;height:auto}.diagram-frame{height:540px}.detail-panel{max-height:none}}
+.active-ai-count{font-size:10px;letter-spacing:0;color:#93c8b7;padding-left:5px}
+.active-agents{display:flex;flex-direction:column;gap:5px;padding:0 4px 5px}
+.active-ai-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 8px;text-align:left;border:1px solid #293f50;border-radius:10px;color:#e0eaf1;background:#122232;min-height:49px}
+.active-ai-item:hover,.active-ai-item:focus-visible{border-color:#6ea998;background:#203747}
+.active-ai-icon{width:29px;height:29px;border-radius:9px;display:grid;place-items:center;background:#274e4a;border:1px solid #467c70;font-weight:860;font-size:9px;color:#d1fbea;flex-shrink:0}
+.active-ai-item.cto .active-ai-icon{background:#24455f;border-color:#527ca1;color:#d1e4ff}
+.active-ai-item.worker .active-ai-icon{background:#464060;border-color:#796b9e;color:#e6dbff}
+.active-ai-copy{min-width:0;flex:1}.active-ai-copy strong{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.active-ai-copy small{display:block;font-size:10px;color:#91a6b6;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.active-ai-live{display:flex;align-items:center;gap:4px;color:#9ae7bb;font-size:9px;flex-shrink:0}
+.active-ai-live:before{content:'';width:6px;height:6px;border-radius:50%;background:#5acb90;box-shadow:0 0 0 3px #5acb9024}
+.territory-map{position:absolute;inset:0;width:880px;height:530px;z-index:0;pointer-events:none}
+.territory-labels{position:absolute;inset:0;z-index:2;pointer-events:none}
+.territory-label{position:absolute;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:9px;border:1px solid;font-size:11px;font-weight:800;background:#102c32e8;box-shadow:0 6px 15px #0004}
+.territory-label.team-a{color:#bdfbe6;border-color:#6cccb2;background:#163e3cbf}
+.territory-label.team-b{color:#c3d9ff;border-color:#84aef5;background:#1c3355bf}
+.territory-label .team-avatar{width:22px;height:22px;display:grid;place-items:center;border:1px solid currentColor;border-radius:7px;font-size:10px}
+.diagram-node{z-index:3;overflow:visible}
+.diagram-node.team-a{border-color:#497f76;background:#183335}
+.diagram-node.team-b{border-color:#506e9c;background:#1a2c46}
+.diagram-node.team-a.active{border-color:#9fedd2}.diagram-node.team-b.active{border-color:#a3c4ff}
+.diagram-node.current-function{min-height:100px}
+.node-current{margin-top:7px;display:block;font-size:9px;line-height:1.4;font-weight:750;color:#c5f7df;background:#163a33;border:1px solid #3b7c66;border-radius:5px;padding:3px 5px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.diagram-node.team-b .node-current{color:#cadcff;background:#213960;border-color:#4569a7}
+.diagram-node .node-agent.floating-cto{right:9px;top:-22px;width:39px;height:39px;border-radius:12px;border:2px solid #a3edd5;box-shadow:0 8px 16px #0008;background:#247360;color:#f3fff8;font-size:11px}
+.diagram-node.team-b .node-agent.floating-cto{background:#4166a2;border-color:#a8c9fc;color:#fff}
+.diagram-node .node-agent.floating-cto:after{content:'';position:absolute;left:50%;bottom:-5px;width:6px;height:6px;transform:translateX(-50%) rotate(45deg);background:inherit;border-right:1px solid currentColor;border-bottom:1px solid currentColor}
+@media(max-width:625px){.active-agents{padding:0 1px}.active-ai-item{justify-content:center;padding:7px 1px;min-height:43px}.active-ai-copy,.active-ai-live,.active-ai-count{display:none}.active-ai-icon{width:32px;height:32px}.overline{font-size:8px;letter-spacing:0;padding:8px 1px;text-align:center}.sidebar .nav{gap:2px}}
+
+/* v5: Only requested deltas: readonly AI session transcripts and decision-only Lead */
+.agent-work-main{background:#0f1925}.session-readonly-banner{padding:12px 21px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--edge);font-size:11px;color:#9fb4c5;flex-wrap:wrap}
+.agent-session-log{overflow-y:auto;min-height:0;flex:1;padding:29px max(20px,7%)}
+.agent-session-log .msg{margin-bottom:24px}.agent-session-footer{border-top:1px solid var(--edge);padding:12px 22px;font-size:10px;color:#8196ac;text-align:center}
+.decision-grid{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 384px;min-width:0;min-height:0}
+.decision-main{display:flex;flex-direction:column;min-width:0;min-height:0;background:#0e1825}
+.decision-main .chat-head{flex-shrink:0}.decision-context{margin:15px 24px 0;background:#192938;border:1px solid #345468;border-radius:12px;padding:12px 16px;font-size:12px;line-height:1.6}
+.decision-context strong{display:block;font-size:12px;color:#d4f3e6}.decision-context small{color:#9db2c4}.decision-context .tag{margin-right:7px}
+.decision-messages{flex:1;min-height:0;overflow:auto;padding:22px 24px 24px}.decision-messages .msg{margin-bottom:23px}
+.decision-rail .change-item.active{border-color:#9bdfc1;background:#1b343a}.decision-rail .change-item{cursor:pointer}
+.decision-detail{margin-top:16px;padding:14px;border-radius:12px;border:1px solid #385265;background:#142535}.decision-detail h3{margin:0 0 8px;font-size:12px}.decision-detail p{font-size:11px;color:#b4c5d1;white-space:pre-wrap;line-height:1.65}.decision-detail .meta{font-size:10px;color:#879eae}
+@supports selector(body:has(.route-anchor:target)) {
+ body:has(#panel-decisions:target) #view-decisions{display:block !important}
+}
+@media(max-width:1260px){.decision-grid{grid-template-columns:minmax(0,1fr) 335px}}
+@media(max-width:1080px){.decision-grid{grid-template-columns:1fr}.decision-grid .decision-rail{display:none}#view-decisions.mobile-rail-open .decision-rail{display:flex;position:fixed;right:0;top:70px;bottom:0;width:min(410px,calc(100vw - 64px));z-index:11;box-shadow:-24px 0 80px #000a;border-left:1px solid #466579}}
+@media(max-width:625px){.decision-context{margin:10px 12px 0;padding:10px}.decision-messages{padding:17px 13px}#view-decisions.mobile-rail-open .decision-rail{top:59px}}
+
+/* v6: full-height work area, host-level system screen, mobile rail controls */
+.main{height:100%;min-height:0}
+.mobile-changes-btn,.decision-rail-toggle{display:none}
+.system-panel{overflow:auto}
+.system-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:21px 0 20px}
+.system-summary-card{padding:17px 18px;border-radius:12px;border:1px solid #2c4154;background:#142334}
+.system-summary-card span{font-size:11px;color:#9aafc1;display:block}
+.system-summary-card strong{font-size:25px;line-height:1.3;color:#e7f7f0;display:block;margin-top:5px}
+.system-columns{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,1fr);gap:16px;align-items:start}
+.system-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.runner-list{display:flex;flex-direction:column;gap:9px;margin-top:17px}
+.runner-item{width:100%;text-align:left;display:flex;gap:13px;align-items:center;justify-content:space-between;border:1px solid #344758;background:#182b3c;color:#e6eef7;border-radius:11px;padding:15px 14px}
+.runner-item.selected{background:#203a47;border-color:#7abca4}.runner-item:hover{border-color:#799aaf}
+.runner-name{font-weight:800;display:block;font-size:13px}.runner-sub{display:block;font-size:10px;color:#94adbf;margin-top:5px}
+.runner-status{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-size:10px;font-weight:800;color:#a9e7c8}
+.runner-status::before{content:'';width:7px;height:7px;border-radius:50%;background:#65d19b}
+.runner-status.offline{color:#c6adad}.runner-status.offline::before{background:#b47d7d}
+.runner-status.busy{color:#c8d9ff}.runner-status.busy::before{background:#8cb6ff}
+.runner-detail-row{padding:12px 0;display:flex;gap:14px;border-bottom:1px solid #293e4e;justify-content:space-between;font-size:11px}
+.runner-detail-row .key{color:#90a8bb;flex:0 0 100px}.runner-detail-row .value{color:#dbe6f1;text-align:right;overflow-wrap:anywhere}
+.runner-labels{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.system-note{margin-top:23px;background:#172b38;border:1px solid #344b5c;color:#90a9bb;border-radius:10px;padding:13px;font-size:10px;line-height:1.75}
+@media(max-width:1020px){.system-columns{grid-template-columns:1fr}.system-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1080px){.decision-rail-toggle{display:inline-flex}#view-decisions.mobile-rail-open .decision-rail{top:0}}
+@media(max-width:790px){.mobile-changes-btn{display:inline-flex}.mobile-rail-open .change-rail,#view-agents.mobile-rail-open .change-rail{top:0}.chat-head{padding-left:17px;padding-right:17px}.agent-switch{flex-wrap:wrap;justify-content:flex-end}}
+@media(max-width:625px){.system-summary{gap:8px;margin:14px 0}.system-summary-card{padding:12px}.system-summary-card strong{font-size:21px}.system-panel .head{padding-top:6px}.chat-meta{gap:5px}.chat-meta .lead-only-label{display:none}#view-decisions.mobile-rail-open .decision-rail{top:0}}
+@supports selector(body:has(.route-anchor:target)) {body:has(#panel-system:target) #view-system{display:block !important}}
+
+/* Lead 대화 헤더에만 표시되는 HTML 뷰어 진입점 */
+.lead-html-viewer-btn{flex-shrink:0;white-space:nowrap;border-color:#537565;color:#c8f6e1;background:#173027;font-size:11px}
+.lead-html-viewer-btn:hover{background:#224336;border-color:#83cbb0}
+@media(max-width:625px){.lead-html-viewer-btn{padding:8px 9px;font-size:10px}}
+/* v8: small content-only additions to existing decision detail */
+.decision-options{display:flex;flex-direction:column;gap:7px;margin-top:10px}.decision-option{border:1px solid #3f6277;background:#14283a;color:#e4eff5;text-align:left;border-radius:9px;padding:10px;cursor:pointer;font:inherit}.decision-option:hover{background:#1e3951}.decision-option strong{display:block;font-size:12px}.decision-option small{display:block;margin-top:3px;color:#a1b9c7;font-size:11px}.decision-recommendation{margin-top:10px;padding:10px;border:1px solid #355c53;border-radius:9px;background:#112823;font-size:11px;color:#bfe8d9}
+</style>
+</head>
+<body><span aria-hidden="true" class="route-anchor" id="panel-system"></span><span aria-hidden="true" class="route-anchor" id="panel-decisions"></span><span aria-hidden="true" class="route-anchor" id="panel-agents"></span><span aria-hidden="true" class="route-anchor" id="panel-documents"></span><span aria-hidden="true" class="route-anchor" id="panel-org"></span><span aria-hidden="true" class="route-anchor" id="panel-architecture"></span><span aria-hidden="true" class="route-anchor" id="panel-chat"></span>
+<div class="shell">
+<aside aria-label="SPS Builder 메뉴" class="sidebar">
+<div class="logo"><div class="logo-icon">SPS</div><div><strong>SPS Builder</strong><small>PRIVATE SOLUTION STUDIO</small></div></div>
+<div class="workspace-card"><label for="workspaceSelect">SPS CORE WORKSPACE</label><select aria-label="SPS Workspace 선택" id="workspaceSelect"></select><div class="scope-note">프로젝트별 대화 · 설계 · 메모리 분리</div></div>
+<div class="overline">WORKSPACE</div>
+<nav class="nav"><a class="active" data-view="chat" href="#panel-chat"><span class="nav-icon">◉</span><span>Lead 대화</span></a><a data-view="architecture" href="#panel-architecture"><span class="nav-icon">⌘</span><span>설계 시각화</span></a><a data-view="org" href="#panel-org"><span class="nav-icon">⊞</span><span>조직도</span></a><a data-view="documents" href="#panel-documents"><span class="nav-icon">▣</span><span>설계 문서</span></a><a data-view="decisions" href="#panel-decisions"><span class="nav-icon">◇</span><span>미결정사항</span><span id="decisionSidebarCount" class="nav-count"></span></a><a data-view="system" href="#panel-system"><span class="nav-icon">▤</span><span>시스템</span></a></nav>
+<div class="sidebar-divider"></div>
+<div class="overline">현재 활성 AI <span class="active-ai-count" id="activeAgentCount"></span></div>
+<div class="active-agents" id="activeAgentList" aria-label="현재 작업 중인 AI"></div>
+
+<div class="sidebar-foot"><div class="sample-pill">UI 프로토타입 · 샘플 데이터<br/>SPS / Codex / GitHub 미연결</div><div class="core-menu" hidden="" id="coreMenu"><button id="openCoreSettings" type="button">⚙  SPS Core 설정 열기</button></div><button aria-controls="coreMenu" aria-expanded="false" class="profile profile-button" id="profileButton" type="button"><div class="profile-avatar">OP</div><div><strong>개인 운영자</strong><span>Private Workspace</span></div><span class="profile-gear">⚙</span></button></div>
+</aside>
+<div class="main">
+
+<main class="screen">
+<section aria-label="AI 대화" class="view active" id="view-chat">
+<div class="chat-grid">
+<div class="conversation">
+<div class="chat-head"><div><h1 id="chatTitle">Lead와 대화</h1><div class="descr" id="chatSubtitle">전체 설계와 기능 통합을 담당하는 AI</div></div><div class="chat-meta"><button type="button" class="ghost lead-html-viewer-btn" id="leadHtmlViewer" title="Lead가 생성한 HTML 시안을 새 창에서 보기">▣ HTML 뷰어 ↗</button><div class="agent-dot" id="agentAvatar">LEAD</div><span class="lead-only-label">Lead · 대화 가능</span><button type="button" class="ghost mobile-changes-btn" data-mobile-rail="chat" aria-label="AI 작업 기록 열기">기록</button></div></div>
+<div aria-live="polite" class="chat-log" id="chatMessages" role="log"></div>
+<div class="chat-composer"><form class="composer-box" id="chatForm"><textarea aria-label="메시지 입력" id="chatInput" placeholder="Lead에게 메시지를 입력하세요…" rows="1"></textarea><button aria-label="전송" class="send" title="전송" type="submit">↑</button></form><div class="composer-note">Enter 전송 · Shift+Enter 줄바꿈 · 응답과 변경 기록은 화면 시뮬레이션입니다</div></div>
+</div>
+<aside aria-label="현재 선택된 AI의 변경사항·작업 지시·기록" class="change-rail" id="sharedChangeRail">
+<div class="rail-head"><div class="rail-head-top"><h2>AI 작업 기록</h2><div style="display:flex;align-items:center;gap:8px"><span class="tag" id="changeCount">0건</span><button aria-label="변경사항 닫기" class="ghost mobile-rail-close" id="mobileRailClose">✕</button></div></div><p><strong id="railAgentName" style="color:#d8eee5">Lead</strong>의 수정사항·지시·작업 기록을 확인합니다.</p><div class="rail-tabs" id="railTabs"><button class="active" data-tab="changes" type="button">수정사항</button><button data-tab="orders" type="button">작업 지시</button><button data-tab="history" type="button">기록</button><button data-tab="files" type="button">작업 파일</button><button data-tab="preview" type="button">설계</button></div></div>
+<div class="rail-body"><div class="rail-panel active" id="rail-changes"><div class="rail-section-label"><span>최근 변경안</span><span id="railRevision">Spec r03</span></div><div id="changeList"></div><div class="diff-card" id="diffCard"></div></div><div class="rail-panel" id="rail-orders"><div class="rail-section-label"><span>받은 지시 / 내린 지시</span></div><div id="ordersList"></div></div><div class="rail-panel" id="rail-history"><div class="rail-section-label"><span>최근 활동 · 실행 기록</span></div><div id="historyList"></div></div><div class="rail-panel" id="rail-files"><div class="rail-section-label"><span>관련 파일 · 문서</span><span>시연용</span></div><div id="filesList"></div></div><div class="rail-panel" id="rail-preview"><div class="rail-section-label"><span>설계 흐름 요약</span><span>상세 화면 제공</span></div><div class="info-block"><h3>설계 수정은 그래프와 연결</h3><p>Lead가 변경한 기능·의존성은 시각화 화면에서 확인합니다. 변경 승인 전에는 확정된 설계 Revision이 바뀌지 않도록 구분합니다.</p></div><div id="railGraphPreview"></div><button class="accent" id="railOpenGraph" style="width:100%;margin-top:15px">설계 시각화 전체 보기 ↗</button></div></div><div class="rail-bottom">현재 AI 기준 · 수정 승인 동작은 로컬 데모</div>
+</aside>
+</div>
+</section>
+<section aria-label="설계 시각화" class="view" id="view-architecture">
+<div class="panel" id="archPanel"><div class="head"><div><div class="eyebrow">VISUAL ARCHITECTURE STUDIO</div><h1>설계 시각화</h1><p>Lead가 편집하는 설계 · CTO별 담당 기능과 현재 작업을 조회</p></div><div class="head-actions"><span class="badge sample">대화형 데모 그래프</span><button class="ghost" id="archChatBtn">Lead와 설계 논의 ↗</button></div></div>
+<div class="arch-layout"><div class="diagram-frame"><div class="diagram-tools"><div class="mode-pills" id="graphModes"><button class="active" data-mode="architecture">제품 아키텍처</button><button data-mode="dependencies">기능 의존성</button><button data-mode="workflow">개발 · QA 흐름</button></div><div class="zoom-tools"><button aria-label="축소" id="zoomOut">−</button><button aria-label="기본 확대율" id="zoomReset" style="font-size:11px;width:47px">100%</button><button aria-label="확대" id="zoomIn">+</button></div></div><div class="diagram-viewport" id="diagramViewport"><div class="diagram-world" id="diagramWorld"><svg aria-hidden="true" class="territory-map" id="graphTerritories" viewBox="0 0 880 530"></svg><div class="territory-labels" id="territoryLabels" aria-hidden="true"></div><svg aria-hidden="true" class="edges" id="graphEdges" viewbox="0 0 880 530"></svg><div id="graphNodes"></div></div></div><div class="diagram-note"><span>배정된 색상 영역은 CTO의 담당 범위입니다. 기능 위 아이콘을 누르면 CTO 작업 기록으로 이동합니다.</span><span>실제 React Flow 연동 전 · HTML 그래프 데모</span></div></div><div class="detail-panel"><div class="card"><div class="eyebrow">SELECTED NODE</div><h2 id="graphNodeTitle">노드를 선택하세요</h2><span class="tag" id="graphNodeType">—</span><p id="graphNodeDesc">선택한 노드의 설명이 표시됩니다.</p><dl class="detail-meta"><dt>담당</dt><dd id="graphNodeOwner">—</dd><dt>상태</dt><dd id="graphNodeStatus">—</dd><dt>현재 작업</dt><dd id="graphNodeCurrent">—</dd><dt>연결</dt><dd id="graphNodeLinks">—</dd></dl><button class="ghost graph-owner-link" id="openNodeAgent" type="button">담당 AI 작업 화면 열기 ↗</button><button class="ghost" id="askAboutNode" style="margin-top:17px;width:100%">Lead에게 이 노드 질문하기 ↗</button></div><div class="callout"><strong style="color:#d9fff0">Lead가 설계를 편집합니다</strong><div style="margin-top:7px">사용자는 이 화면에서 설계·담당 영역을 조회하고 Lead에게 대화로 변경을 요청합니다. Lead가 Graph Revision을 수정하고, CTO는 담당 기능의 실행·검증 상태만 갱신합니다. GitHub 실행 기록은 GitHub가 원본입니다.</div></div></div></div>
+</div>
+</section>
+<section aria-label="AI 조직도" class="view" id="view-org"><div class="panel">
+<div class="head"><div><div class="eyebrow">AGENT ORGANIZATION</div><h1>조직도</h1><p>에이전트를 선택하면 해당 세션의 대화와 작업 기록을 읽기 전용으로 확인할 수 있습니다.</p></div><span class="badge sample">데모 조직</span></div>
+<div class="org-frame">
+<div class="org-row center"><button class="org-agent lead" data-agent-open="lead"><span class="org-avatar">LD</span><span><strong>Lead</strong><small>전체 설계 · 분배 · 통합</small></span><span class="org-arrow">›</span></button></div>
+<div class="org-line"></div>
+<div class="org-row org-ctos">
+<button class="org-agent" data-agent-open="cto_a"><span class="org-avatar">A</span><span><strong>CTO A</strong><small>설계 · UI 기능 그룹</small></span><span class="org-arrow">›</span></button>
+<button class="org-agent" data-agent-open="cto_b"><span class="org-avatar">B</span><span><strong>CTO B</strong><small>실행 · 연동 기능 그룹</small></span><span class="org-arrow">›</span></button>
+</div>
+<div class="org-line"></div>
+<div class="org-row org-workers">
+<button class="org-agent" data-agent-open="worker"><span class="org-avatar">DEV</span><span><strong>Development Worker</strong><small>기능 구현 · PR</small></span><span class="org-arrow">›</span></button>
+<button class="org-agent" data-agent-open="qa"><span class="org-avatar">QA</span><span><strong>QA Worker</strong><small>테스트 · Runner 실행</small></span><span class="org-arrow">›</span></button>
+</div>
+</div>
+</div></section><section aria-label="AI 작업 조회" class="view" id="view-agents"><div class="agent-work-grid" id="agentGrid">
+<div class="agent-work-main"><div class="chat-head agent-work-head"><div><div class="eyebrow">AGENT WORKSPACE · READ ONLY</div><h1 id="workAgentTitle">AI 작업 현황</h1><div class="descr" id="workAgentSubtitle">작업 중 주고받은 대화 내용과 진행 기록을 확인합니다.</div></div><div class="agent-switch"><label for="workAgentSelect">AI 선택</label><select aria-label="조회할 AI" class="agent-picker" id="workAgentSelect"><option value="lead">Lead</option><option value="cto_a">CTO A</option><option value="cto_b">CTO B</option><option value="worker">Development Worker</option><option value="qa">QA Worker</option></select><button type="button" class="ghost mobile-changes-btn" data-mobile-rail="agents" aria-label="AI 작업 기록 열기">기록</button></div></div>
+<div class="session-readonly-banner"><span class="tag" id="workRoleBadge">세션 읽기 전용</span><span>CTO · Worker 실제 대화 기록을 이 영역에서 조회 · 메시지 전송 불가</span></div>
+<div class="agent-session-log" id="agentSessionMessages" aria-label="선택한 AI의 세션 대화 기록" role="log"></div>
+<div class="agent-session-footer">세션 조회 전용 · 수정·지시·작업 기록은 오른쪽에서 확인 · 현재는 샘플 데이터</div></div>
+</div></section><section aria-label="미결정사항" class="view" id="view-decisions">
+<div class="decision-grid">
+<div class="decision-main">
+ <div class="chat-head"><div><div class="eyebrow">DECISION LEAD · QUESTIONS</div><h1>미결정사항</h1><div class="descr">CTO가 전달한 불확실한 사항을 내부 Lead가 검토하고, 질문 전용 Lead가 확인합니다.</div></div><div class="chat-meta"><div class="agent-dot">LD</div><span class="lead-only-label">질문 전용 Lead</span><button type="button" class="ghost decision-rail-toggle" data-mobile-rail="decisions" aria-label="질문 목록 열기">질문 목록</button></div></div>
+ <div class="decision-context" id="decisionContext"></div>
+ <div class="decision-messages" id="decisionMessages" role="log" aria-live="polite"></div>
+ <div class="chat-composer"><form class="composer-box" id="decisionForm"><textarea id="decisionInput" aria-label="질문 전용 Lead에게 답변 입력" placeholder="선택한 질문에 대해 Lead와 대화하세요…" rows="1"></textarea><button type="submit" class="send" aria-label="질문에 답변 전송">↑</button></form><div class="composer-note">질문 전용 Lead 세션 · 답변한 결정은 별도 재승인 없이 설계 Revision에 반영 · 현재는 데모</div></div>
+</div>
+<aside aria-label="미결정 질문 목록" class="change-rail decision-rail" id="decisionRail">
+ <div class="rail-head"><div class="rail-head-top"><h2>확인할 질문</h2><span class="tag" id="decisionCount">0건</span></div><p>CTO → 내부 Lead 검토 → 사용자 질문</p></div>
+ <div class="rail-body"><div class="rail-section-label">질문 목록 · 선택해서 대화</div><div id="decisionList"></div><div id="decisionDetail"></div></div>
+ <div class="rail-bottom">사용자 결정은 설계 Revision에 반영하고 관련 CTO에게 개정 명세를 전달합니다. 이 HTML은 시뮬레이션입니다.</div>
+</aside>
+</div>
+</section>
+<section aria-label="설계 문서" class="view" id="view-documents">
+<div class="panel"><div class="head"><div><div class="eyebrow">LEAD / PROJECT SPECIFICATION</div><h1>설계 문서</h1><p>Lead가 관리하는 계약·기술 선정·변경 명세 · 상담 원문은 별도 보관</p></div><span class="badge sample">문서 데이터 데모</span></div><div class="doc-grid"><div class="card"><h2>프로젝트 파일</h2><div class="card-sub">각 문서는 해당 SPS Workspace의 프로젝트에 속합니다.</div><div id="documentRows"></div></div><div class="card"><h2>미리보기</h2><div class="card-sub" id="docPreviewTitle">파일을 선택하세요</div><div class="doc-preview" id="docPreview">상담·요구사항·설계 변경 내역을 여기서 확인할 수 있습니다.</div><div class="notice">이 파일은 UI 시연용이며 실제 고객 상담 내용이나 Codex 작업 결과를 포함하지 않습니다.</div></div></div></div>
+</section>
+<section aria-label="시스템 · GitHub Self-hosted Runner 상태" class="view" id="view-system">
+<div class="panel system-panel">
+ <div class="head"><div><div class="eyebrow">SYSTEM / GITHUB ACTIONS</div><h1>시스템</h1><p>이 SPS Host에 연결된 Self-hosted Runner 컴퓨터의 상태를 확인합니다.</p></div><span class="badge sample">상태 데이터 데모 · GitHub 미연결</span></div>
+ <div class="system-summary" aria-label="Runner 상태 개요"><div class="system-summary-card"><span>등록된 Runner</span><strong id="runnerTotal">—</strong></div><div class="system-summary-card"><span>온라인</span><strong id="runnerOnline">—</strong></div><div class="system-summary-card"><span>작업 실행 중</span><strong id="runnerBusy">—</strong></div><div class="system-summary-card"><span>오프라인</span><strong id="runnerOffline">—</strong></div></div>
+ <div class="system-columns"><div class="card system-fleet"><div class="system-card-head"><div><h2>연결된 컴퓨터</h2><div class="card-sub">컴퓨터를 선택하면 GitHub Runner 등록·실행 상태를 볼 수 있습니다.</div></div><span class="tag">Host 공통</span></div><div id="runnerList" class="runner-list"></div></div>
+ <div class="card system-info"><h2 id="runnerDetailTitle">Runner 상세</h2><div class="card-sub">선택한 컴퓨터의 GitHub 기준 상태입니다.</div><div id="runnerDetails"></div><div class="system-note">이 화면의 상태는 실제 컴퓨터 연결 정보가 아닌 시연 데이터입니다. 실제 구현 시 GitHub Actions Runner API를 조회하고, 조회 실패는 마지막 확인 시각과 함께 별도로 표시합니다.</div></div></div>
+</div>
+</section>
+</main>
+</div>
+</div>
+<div aria-labelledby="modalTitle" aria-modal="true" class="modal-backdrop" id="actionModal" role="dialog"><div class="modal"><h2 id="modalTitle">변경안 검토</h2><p id="modalText"></p><div class="modal-actions"><button class="ghost" id="modalCancel">취소</button><button class="accent" id="modalConfirm">확인</button></div></div></div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+'use strict';
+// 이 파일은 네트워크 요청·저장·실제 개발/승인·SPS Core 접근을 하지 않는 로컬 UI 시연입니다.
+const agentMeta={lead:{name:'Lead',title:'Lead와 대화',caption:'전체 설계·의존성·CTO 조정 및 통합',badge:'LEAD'},cto_a:{name:'CTO A',title:'CTO A와 대화',caption:'시각적 설계·요구사항·UI 기능 그룹',badge:'CTO A'},cto_b:{name:'CTO B',title:'CTO B와 대화',caption:'GitHub·Codex·Runner 연동 기능 그룹',badge:'CTO B'},qa:{name:'QA Worker',title:'QA 작업 조회',caption:'CTO가 설계한 테스트 실행·로그·증거 보고',badge:'QA'},worker:{name:'Development Worker',title:'Worker 작업 조회',caption:'기능 구현·PR·개별 작업 진행',badge:'DEV'}};
+const initialProjects={
+ alpha:{id:'alpha',name:'SPS Builder 구축',rev:'r03',focus:'React Flow 노드 상세 패널과 GitHub 작업 결과 연결',next:'CTO 간 API 계약 검토 후 CI의 Core 호환성 확인',block:'Core / SDK 호환성 검증 증거가 아직 없습니다.',milestones:[{name:'고객 요구사항 및 명세',desc:'Lead의 상담 분석·요구사항 확정',owner:'Lead',state:'done',accept:'요구사항 ID와 Spec Revision 승인',proof:'Spec r03 · 샘플 승인 기록'},{name:'재사용·오픈소스 조사',desc:'GitHub Actions · Codex · React Flow 선택 근거',owner:'Lead · CTO',state:'done',accept:'후보 대체 가능성, 라이선스·지원 범위 기록',proof:'기술 선택 비교 문서 · 데모'},{name:'기능 계약과 설계 의존성',desc:'UI·GitHub 연동 계약 확인',owner:'Lead · CTO A',state:'working',accept:'공통 인터페이스 검증과 의존성 충돌 없음',proof:'공통 API 계약 일부 검토 중'},{name:'CTO별 구현 및 내부 통합',desc:'Worker 변경 검토·PR 단위 통합',owner:'CTO A · CTO B',state:'working',accept:'기능별 구현·단위 테스트·PR 검증',proof:'UI 시제품 수정안 · 데모'},{name:'교차 기능 QA·회귀 검증',desc:'GitHub Actions / Self-hosted Runner 검증',owner:'QA Worker',state:'wait',accept:'Core compatibility, 권한, 지원 OS 테스트 통과',proof:'실제 Run ID 없음 · 미연결'},{name:'최종 승인·릴리스',desc:'고객 인수 기준과 납품 검증',owner:'Lead · 운영자',state:'wait',accept:'필수 검증 완료·사용자 승인·Release',proof:'아직 승인·배포되지 않음'}],workers:[['Lead','전체 설계 · CTO 조정','working'],['CTO A','시각화 UI · 명세 계약','working'],['CTO B','GitHub / Runner 연동','working'],['Dev Worker','패널 및 계약별 구현','working'],['QA Worker','Core 호환성 테스트 준비','wait']],evidence:[['승인 명세','샘플 r03','done'],['GitHub Actions','Run ID 없음','wait'],['Core compatibility','실제 통과 증거 없음','blocked']],changes:{lead:[{id:'l1',title:'기능 의존성 계약 정리',summary:'설계 그래프의 데이터 원본과 실행 상태를 분리',file:'docs/architecture.md',state:'proposed',lines:['- Canvas 노드 JSON을 설계의 원본으로 사용','+ 승인된 Solution Graph를 설계의 원본으로 사용','+ GitHub 실행 상태는 조회 데이터로 연결'],stamp:'19:24 · 제안된 변경'},{id:'l2',title:'작업 그룹 경계 조정',summary:'의존성 대신 기능 그룹 단위로 CTO에게 분배',file:'spec/task-groups.json',state:'review',lines:['- CTO 배정: 각 의존성 노드','+ CTO 배정: 독립 개발 가능한 기능 그룹','+ 공유 계약은 Lead가 선행 관리'],stamp:'19:18 · 검토 중'}],cto_a:[{id:'a1',title:'설계 화면 패널 변경',summary:'노드 선택 시 담당 CTO와 검증 조건 표시',file:'ui/visual-studio.tsx',state:'review',lines:['- 선택 노드: 제목만 표시','+ 선택 노드: 담당자 · 계약 · 연결 관계 · QA 조건','+ 노드 변경안은 별도 승인 단계로 표시'],stamp:'19:21 · 검토 중'},{id:'a2',title:'명세 편집 UI',summary:'Markdown과 설계 노드의 동기화 경계 정의',file:'ui/spec-editor.tsx',state:'running',lines:['- 설계 문서와 캔버스 상태 혼합','+ 승인 Spec Revision을 기준으로 편집','+ 노드 위치 정보는 별도 보관'],stamp:'19:13 · 작업 중'}],cto_b:[{id:'b1',title:'GitHub Runner 연결 규칙',summary:'자체 Fleet 제거 · GitHub 실행 상태만 표시',file:'adapters/github-actions.ts',state:'review',lines:['- 자체 Runner 등록 API 구현','+ GitHub Runner Groups / Labels 사용','+ 작업 상태는 GitHub API에서 조회'],stamp:'19:10 · 검토 중'}],qa:[{id:'q1',title:'호환성 테스트 조건 추가',summary:'Build 성공과 Core compatibility를 별개로 검증',file:'.github/workflows/verify.yml',state:'proposed',lines:['- typecheck와 build 결과만 확인','+ SPS Core compatibility 게이트 확인','+ 실제 Runner 로그 및 증거를 연결'],stamp:'18:51 · 검토 필요'}]},chat:{lead:[{from:'ai',body:'현재 설계에서 CTO 간 기능 계약을 먼저 정리하고 있어. 변경사항은 오른쪽에 모았어.\n\nCore compatibility는 아직 실증되지 않았으니 검증 완료라고 표시하지 않을게.',time:'19:24'}],cto_a:[{from:'ai',body:'설계 시각화의 노드 상세 패널을 수정하는 안을 정리했어. 변경된 파일과 구체적인 차이는 오른쪽에서 확인할 수 있어.',time:'19:21'}],cto_b:[{from:'ai',body:'GitHub Actions와 Self-hosted Runner를 기존 제품 그대로 사용하고, Builder에는 조회·작업 연결 기능만 남기려 해.',time:'19:10'}],qa:[{from:'ai',body:'현재 연결된 실제 테스트 로그는 없어. Core compatibility와 권한 검증을 별도 완료 조건으로 두는 변경안을 제안했어.',time:'18:51'}]}},
+ beta:{id:'beta',name:'M01 게임 개발 워크스테이션',rev:'r01',focus:'Unity 버전과 Windows 빌드 환경 확인',next:'Unity 환경과 GitHub Runner 라벨 검증',block:'Unity 라이선스·정확한 빌드 버전 조건 미확정',milestones:[{name:'고객 상담·요구사항',desc:'게임 개발 워크스테이션 요구 정리',owner:'Lead',state:'done',accept:'지원 플랫폼과 필수 기능 승인',proof:'명세 r01 · 데모'},{name:'기존 툴·오픈소스 조사',desc:'Unity · Codex · GitHub Actions 기능 비교',owner:'Lead',state:'working',accept:'도구별 채택 근거와 적합성 확인',proof:'비교표 작성 중'},{name:'기능 의존성·설계',desc:'게임 프로젝트 관리와 빌드 간 계약',owner:'CTO A',state:'wait',accept:'프로젝트 경로·버전 계약 확정',proof:'미착수'},{name:'개발 및 통합',desc:'워크스테이션 조립·연동',owner:'CTO B',state:'wait',accept:'GitHub PR·테스트 통과',proof:'미착수'},{name:'QA 검증',desc:'Windows Runner와 Unity 빌드',owner:'QA Worker',state:'wait',accept:'실제 Windows 빌드·테스트 성공',proof:'실제 Run ID 없음'},{name:'납품',desc:'실사용 검수·고객 승인',owner:'Lead',state:'wait',accept:'요구사항·테스트·설치 확인',proof:'미완료'}],workers:[['Lead','Unity 재사용 조사','working'],['CTO A','게임 UI 구조','wait'],['CTO B','빌드 자동화','wait'],['QA Worker','Windows Runner 테스트','wait']],evidence:[['프로젝트 명세','샘플 r01','done'],['Unity Build','미실행','wait'],['GitHub Runner','상태 미연결','wait']],changes:{lead:[{id:'bl1',title:'Unity 빌드 재사용 검토',summary:'직접 빌드 서버를 만들지 않고 GitHub Actions 활용',file:'docs/reuse-unity.md',state:'proposed',lines:['- 빌드 서버를 별도 구현','+ GitHub Actions + Windows Runner 활용','+ 라이선스와 Unity 버전 확인 후 확정'],stamp:'18:42 · 제안된 변경'}],cto_a:[],cto_b:[],qa:[]},chat:{lead:[{from:'ai',body:'M01 프로젝트에서는 Unity·GitHub Actions를 먼저 조사하고 있어. 빌드 서버를 직접 구현하기 전에 사용 가능한 기능부터 검증할 거야.',time:'18:42'}],cto_a:[{from:'ai',body:'설계와 기능 범위를 확인 중이야. Unity 프로젝트 요구가 확정되면 작업을 나눌게.',time:'18:40'}],cto_b:[{from:'ai',body:'GitHub Actions에서 Windows Runner를 사용할 수 있지만, 실제 Unity 버전과 라이선스 조건은 검증해야 해.',time:'18:40'}],qa:[{from:'ai',body:'실제 Runner 실행 결과가 없어. 테스트 수행 전에는 통과 표시하지 않을게.',time:'18:38'}]}}
+};
+// Each SPS Core Workspace retains a distinct question queue and question-only Lead transcript.
+const questionSeeds={
+ alpha:[
+ {id:'DQ-014',source:'CTO A',owner:'설계 시각화',title:'공통 그래프 계약 변경 범위',context:'CTO A가 설계 그래프 노드에 담당 CTO·현재 작업을 추가하는 중, 공유 Graph 스키마 변경 승인이 필요한지 확인을 요청했습니다.',prompt:'담당 CTO와 작업 상태를 설계 원본과 표시 상태 중 어디에 저장할까요?',status:'답변 필요',created:'19:34',messages:[],options:[{label:'담당자만 Graph에 저장',detail:'실행 중인 작업 상태는 Task/Run 정보에서 조회합니다.'},{label:'모두 Graph에 저장',detail:'표시는 단순하지만 실행 정보와 설계 정보가 섞일 수 있습니다.'}],recommendation:'담당자는 설계 Graph, 현재 실행 상태는 Task/Run에 분리'},
+ {id:'DQ-015',source:'CTO B',owner:'빌드·Runner 연동',title:'Runner 테스트 범위 확정',context:'CTO B가 CI와 Self-hosted Runner의 운영 범위가 불명확하다고 내부 Lead에 전달했습니다.',prompt:'Windows와 Linux에서 모두 필수 테스트를 수행해야 하나요, 아니면 초기 검수에서는 Windows만 필수로 할까요?',status:'답변 필요',created:'19:27',messages:[],options:[{label:'Windows·Linux 모두',detail:'지원 운영체제 전체를 계약 테스트에 포함합니다.'},{label:'Windows 먼저',detail:'초기 검수 범위를 좁히고 Linux는 후속 검증합니다.'}],recommendation:'실제로 지원하는 OS 전체에서 필수 테스트'},
+ {id:'DQ-016',source:'CTO B',owner:'파일·보관 정책',title:'고객 첨부파일 보관 기준',context:'CTO B가 고객 첨부파일의 저장·보존 범위가 명세에 없어 내부 Lead에 질문했습니다.',prompt:'크몽 상담에 첨부된 파일을 프로젝트 Workspace에 원본 그대로 저장할까요, 아니면 사용자 선택 시에만 보관할까요?',status:'답변 필요',created:'19:09',messages:[],options:[{label:'필요할 때만 보관',detail:'고객 자료 보존을 최소화합니다.'},{label:'프로젝트별 원본 보관',detail:'추후 추적에는 편리하지만 보존 정책이 필요합니다.'}],recommendation:'고객이 선택한 첨부파일만 보관'}
+ ],
+ beta:[
+ {id:'DQ-021',source:'CTO A',owner:'Unity 빌드',title:'지원할 Unity 버전',context:'게임 개발 워크스테이션의 빌드 범위를 결정하려면 지원할 Unity 버전이 필요합니다.',prompt:'이번 프로젝트에서 기본 지원할 Unity 에디터 버전을 지정해 주세요. 고객이 이미 사용 중인 버전을 우선할까요?',status:'답변 필요',created:'18:45',messages:[],options:[{label:'고객 프로젝트 버전',detail:'기존 프로젝트 호환성을 우선합니다.'},{label:'새 LTS 버전',detail:'신규 기능·지원 기간을 우선 검토합니다.'}],recommendation:'고객이 실제 사용 중인 버전을 우선 확인'}
+ ]
+};
+const deep=x=>JSON.parse(JSON.stringify(x));let projects=deep(initialProjects),decisionQueues=deep(questionSeeds),selectedDecisionId=null,workspace='alpha',activeAgent='lead',selectedChange=null,activeView='chat',railTab='changes',graphMode='architecture',selectedGraphNode=null,scale=1,selectedMilestone=0,pendingAction=null;
+const $=id=>document.getElementById(id),project=()=>projects[workspace],html=s=>String(s).replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
+const stateNames={proposed:'제안',review:'검토 중',approved:'승인됨',rejected:'보류됨',running:'수정 중'};const stateText={done:'완료',working:'진행',wait:'대기',blocked:'차단'};
+function statusMark(s){return `<span class="status ${s}">${stateText[s]||s}</span>`}
+function showToast(s){const t=$('toast');t.textContent=s;t.classList.add('show');clearTimeout(showToast.t);showToast.t=setTimeout(()=>t.classList.remove('show'),2800)}
+function now(){return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',hour12:false})}
+function refreshWorkspace(){const pr=project();$('workspaceSelect').value=workspace;renderChat();renderAgentWork();renderRail();renderActiveAgents();renderDocs();renderGraph();renderDecisions();}
+function setView(name,updateHash=true){
+ const allowed=['chat','architecture','org','documents','agents','decisions','system'];if(!allowed.includes(name))name='chat';
+ $('view-chat').classList.remove('mobile-rail-open');$('view-agents').classList.remove('mobile-rail-open');$('view-decisions').classList.remove('mobile-rail-open');
+ activeView=name;document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id==='view-'+name));
+ document.querySelectorAll('.nav [data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===name&&!b.dataset.quick));
+ if(name==='chat'){activeAgent='lead';$('view-chat').querySelector('.chat-grid').appendChild($('sharedChangeRail'));renderChat();renderRail();}
+ else if(name==='agents'){$('agentGrid').appendChild($('sharedChangeRail'));renderAgentWork();renderRail();}
+ if(name==='decisions'){renderDecisions();}if(name==='architecture'){renderGraph();requestAnimationFrame(fitGraph);}if(name==='system'){renderSystem();}
+ if(updateHash && location.hash!=='#panel-'+name)location.hash='panel-'+name;
+ window.scrollTo(0,0);document.body.scrollTop=0;document.documentElement.scrollTop=0;
+}
+function openAgent(a){setAgent(a);setView('agents');}
+function setAgent(a){if(!agentMeta[a])return;activeAgent=a;selectedChange=null;if(a==='lead'&&activeView==='chat')renderChat();renderAgentWork();renderRail();}
+function renderChat(){const agent=agentMeta.lead;$('agentAvatar').textContent=agent.badge;$('chatTitle').textContent=agent.title;$('chatSubtitle').textContent=agent.caption+' · '+project().name;const x=$('chatMessages');x.innerHTML=project().chat.lead.map(m=>`<article class="msg ${m.from==='user'?'user':''}"><div class="msg-avatar">${m.from==='user'?'ME':html(agent.badge)}</div><div class="msg-text"><div class="msg-meta">${m.from==='user'?'운영자':html(agent.name)} · ${html(m.time)}</div><div class="bubble">${html(m.body).replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}</div></div></article>`).join('');x.scrollTop=x.scrollHeight;}
+function answer(q){const pr=project(),agent=agentMeta.lead;const compact=q.replace(/\s+/g,'');if(/진행|얼마|체크포인트|현황/.test(compact))return `작업 상태 기준으로 확인하면 ${pr.milestones.filter(x=>x.state==='done').length}개 단계가 완료 상태야. 나머지는 진행·대기 상태로 나눠 보여줄게.\n\n현재 집중 작업: ${pr.focus}\n확인 필요: ${pr.block}\n\n실제 API 연결 전이라 모두 시연 데이터야.`;if(/변경|수정|파일|차이|diff/i.test(q))return `${agent.name}의 변경안은 오른쪽 ‘AI 작업 기록’에서 확인할 수 있어.\n\n승인 버튼도 데모로 작동하지만 실제 코드나 설계 원본은 바꾸지 않아. 변경안과 확정된 Spec Revision은 분리해서 관리하도록 설계했어.`;if(/설계|아키텍처|의존성|그래프/.test(compact))return `설계 시각화에서 ‘제품 아키텍처’, ‘기능 의존성’, ‘개발·QA 흐름’을 전환해 확인할 수 있어.\n\n노드를 선택하면 담당자·연결 관계·상태가 표시돼. 실제 Builder에서는 React Flow로 구현할 화면이야.`;if(/QA|테스트|CI|러너|runner/i.test(q))return `QA는 GitHub Actions 워크플로를 실행하고, 등록된 Self-hosted Runner에서 검증하는 구조야.\n\n현재 프로토타입에는 실제 Run ID가 없으므로 테스트를 완료 처리하지 않아.`;if(/막힌|문제|차단|블로커/.test(compact))return `확인이 필요한 사항: ${pr.block}\n\n이 상태는 실제 증거가 확인되기 전까지 해소되었다고 표시하지 않아.`;return `${agent.name} 대화 시뮬레이션이야. 요청은 이 Workspace의 대화에만 기록하고, 실제 AI·SPS·GitHub에는 전달하지 않아.\n\n프로젝트 설계·수정안·검증 상태는 각각 설계 시각화, 오른쪽 변경사항, AI 작업 기록에서 확인할 수 있어.`;}
+function submitChat(text){const q=text.trim();if(!q)return;const list=project().chat.lead;list.push({from:'user',body:q,time:now()});list.push({from:'ai',body:answer(q),time:now()});renderChat();}
+// The agent transcript is for observation only; these samples are not live CLI sessions.
+for(const pr of Object.values(projects)){
+ pr.chat.cto_a=[
+  {from:'lead',body:'설계 시각화와 데이터 계약 영역을 맡아 주세요. 기존 컴포넌트를 먼저 조사한 후 Worker에게 작업을 분배하세요.',time:'19:03'},
+  {from:'ai',body:'기존 React Flow 구성을 확인했고, 새 그래프 엔진 없이 담당 영역 시각화만 추가하겠습니다.',time:'19:08'},
+  {from:'worker',body:'노드 상세 패널의 API 계약을 확인하고 있습니다. 담당 CTO 표시 데이터를 Graph 원본에 둘지 결정이 필요합니다.',time:'19:15'},
+  {from:'ai',body:'공유 Graph 계약이 변경될 수 있어 내부 Lead에게 미결정사항을 보냈습니다. 확인 전에는 기존 스키마를 유지하겠습니다.',time:'19:21'}
+ ];
+ pr.chat.cto_b=[
+  {from:'lead',body:'GitHub Actions·Codex 연동을 담당해 주세요. Runner를 새로 구현하지 말고 공식 기능을 활용하세요.',time:'19:01'},
+  {from:'ai',body:'GitHub Actions 워크플로와 Self-hosted Runner 라벨 구성을 검토했습니다. 실행 상태만 Builder에 연결하겠습니다.',time:'19:10'},
+  {from:'qa',body:'CTO가 지정한 Windows·Linux 테스트의 실행 환경이 아직 확정되지 않아 테스트 시작을 보류하고 CTO에게 알렸습니다.',time:'19:19'},
+  {from:'ai',body:'범위 확정을 위한 질문을 내부 Lead에 전달했습니다. 답변 전에는 실제 테스트를 통과로 표시하지 않겠습니다.',time:'19:27'}
+ ];
+ pr.chat.document=[
+  {from:'lead',body:'크몽 상담 원문과 첨부파일을 대화 순서·출처를 유지해 가져와 전달해 주세요.',time:'18:44'},
+  {from:'ai',body:'원문·첨부·발신자·시간 정보를 정리해 프로젝트 Workspace의 Lead에게 전달했습니다. 요구사항 분석은 Lead가 수행합니다.',time:'18:58'}
+ ];
+ pr.chat.qa=[
+  {from:'cto',body:'Runner 테스트 실행 전 필수 OS·환경을 확인해 주세요.',time:'18:44'},
+  {from:'ai',body:'현재 실제 Run ID나 통과 로그가 없습니다. OS·Runner 연결과 Core compatibility를 별도 검증해야 합니다.',time:'18:51'},
+  {from:'cto',body:'테스트 범위가 확정되면 해당 워크플로로 검증해 주세요.',time:'18:57'}
+ ];
+ pr.chat.worker=[
+  {from:'cto',body:'설계 노드 선택 UI와 결과 표시 영역을 맡아 주세요. 기존 소스 재사용을 먼저 확인합니다.',time:'19:06'},
+  {from:'ai',body:'기존 패널 컴포넌트와 설정을 확인했습니다. 공통 스타일을 유지하고 데이터 연결만 수정하겠습니다.',time:'19:11'},
+  {from:'cto',body:'수정 파일과 테스트 증거를 PR에 연결해 주세요. 공통 계약이 불명확하면 즉시 보고해 주세요.',time:'19:16'},
+  {from:'ai',body:'상세 패널 수정안을 정리했습니다. 담당 CTO의 검토를 요청합니다.',time:'19:22'}
+ ];
+}
+function currentChanges(){return project().changes[activeAgent]||[]}
+const agentOrders={
+ lead:[['지시 내림','CTO A','설계 UI와 데이터 계약 확인'],['지시 내림','CTO B','GitHub Actions 재사용 범위 검토'],['지시 내림','QA Worker','Core compatibility 검증 준비']],
+ cto_a:[['지시 받음','Lead','설계 시각화 기능 그룹 담당'],['지시 내림','Development Worker','노드 선택·상세 패널 작업']],
+ cto_b:[['지시 받음','Lead','GitHub·Codex 연동 담당'],['지시 내림','Development Worker','Actions 상태 표시 어댑터 검토'],['검증 요청','QA Worker','Runner 라벨·환경 테스트']],
+ worker:[['지시 받음','CTO A','노드 상세 패널 연결'],['지시 받음','CTO B','GitHub 실행 결과 표시']],
+ qa:[['검증 요청 받음','CTO B','CTO의 TestPlan에 따라 GitHub Runner 검증 실행'],['결과 전달','CTO B','실제 Run/Check 증거 및 실패 로그 보고']]
+};
+function renderAgentWork(){
+ const a=agentMeta[activeAgent]||agentMeta.lead,sel=$('workAgentSelect');if(sel)sel.value=activeAgent;
+ $('workAgentTitle').textContent=a.name+' · 세션 기록';$('workAgentSubtitle').textContent=a.caption+' · '+project().name;
+ $('workRoleBadge').textContent='세션 읽기 전용';
+ const source=(project().chat[activeAgent]||[]);
+ const list=source.length?source:[{from:'lead',body:'Lead로부터 구현 작업을 배정받았습니다. 기존 코드와 오픈소스 재사용 가능성을 먼저 확인해 주세요.',time:'19:04'},{from:'ai',body:'담당 기능의 기존 구현을 분석 중입니다. 작업 범위를 확정하면 변경 내역과 검증 상태를 보고하겠습니다.',time:'19:12'}];
+ $('agentSessionMessages').innerHTML=list.map(m=>{
+  const inbound=['user','lead','cto','worker','qa'].includes(m.from);
+  const who=m.from==='user'?'운영자':m.from==='lead'?'Lead':m.from==='cto'?'담당 CTO':m.from==='worker'?'Worker 1':m.from==='qa'?'QA Worker':a.name;
+  const avatar=m.from==='user'?'ME':m.from==='lead'?'LD':m.from==='cto'?'CTO':m.from==='worker'?'W1':m.from==='qa'?'QA':a.badge;
+  return `<article class="msg ${inbound?'user':''}"><div class="msg-avatar">${html(avatar)}</div><div class="msg-text"><div class="msg-meta">${html(who)} · ${html(m.time)}</div><div class="bubble">${html(m.body)}</div></div></article>`;
+ }).join('');
+ $('agentSessionMessages').scrollTop=$('agentSessionMessages').scrollHeight;
+}
+
+function renderOrdersHistory(){
+ const orders=(agentOrders[activeAgent]||[]);
+ $('ordersList').innerHTML=orders.map(o=>`<div class="info-block"><span class="tag">${html(o[0])}</span><h3 style="margin-top:9px">${html(o[1])}</h3><p>${html(o[2])}</p><small style="color:#718ba3">시연 데이터</small></div>`).join('')||'<div class="info-block"><p>작업 지시 기록이 없습니다.</p></div>';
+ const c=currentChanges();const records=[...c.map(x=>({title:x.title,desc:x.summary,stamp:x.stamp})),...(project().chat[activeAgent]||[]).filter(m=>m.from==='ai').map(m=>({title:'작업 보고',desc:m.body,stamp:m.time}))];
+ $('historyList').innerHTML=records.map(r=>`<div class="info-block"><h3>${html(r.title)}</h3><p>${html(r.desc)}</p><div class="change-meta">${html(r.stamp)} · 시연 데이터</div></div>`).join('')||'<div class="info-block"><p>기록이 없습니다.</p></div>';
+}
+function renderRail(){const changes=currentChanges();if(!changes.some(c=>c.id===selectedChange))selectedChange=changes[0]?.id||null;$('railAgentName').textContent=agentMeta[activeAgent].name;$('changeCount').textContent=changes.length+'건';$('railRevision').textContent='Spec '+project().rev;$('changeList').innerHTML=changes.length?changes.map(c=>`<button class="change-item ${selectedChange===c.id?'active':''}" data-change="${html(c.id)}"><div class="change-top"><span class="change-name">${html(c.title)}</span><span class="tag ${c.state}">${stateNames[c.state]}</span></div><div class="change-desc">${html(c.summary)}</div><div class="change-meta"><span>⌁ ${html(c.file)}</span></div><div class="change-meta">${html(c.stamp)}</div></button>`).join(''):'<div class="info-block"><h3>변경 기록 없음</h3><p>현재 AI가 이 Workspace에서 제안한 변경안이 없습니다.</p></div>';
+ $('changeList').querySelectorAll('[data-change]').forEach(b=>b.addEventListener('click',()=>{selectedChange=b.dataset.change;renderRail()}));if(!changes.some(c=>c.id===selectedChange))selectedChange=changes[0]?.id||null;const c=changes.find(v=>v.id===selectedChange);$('diffCard').style.display=c?'block':'none';if(c)$('diffCard').innerHTML=`<div class="diff-head"><strong>${html(c.file)}</strong><span>${html(c.title)} · 시연용 변경 비교</span></div><div class="diff-code">${c.lines.map(l=>`<div class="${l.startsWith('+')?'plus':l.startsWith('-')?'minus':''}">${html(l)}</div>`).join('')}</div><div class="diff-foot"><button class="mini-btn" data-action="reject" ${c.state==='approved'||c.state==='rejected'?'disabled':''}>보류</button><button class="accent" data-action="approve" ${c.state==='approved'||c.state==='rejected'?'disabled':''}>변경안 승인</button></div>`;
+ $('diffCard').querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>openModal(b.dataset.action,c.id)));$('filesList').innerHTML=changes.length?changes.map(c=>`<div class="file-row"><div><strong>${html(c.file)}</strong><small>${html(c.title)}</small></div><span class="tag ${c.state}">${stateNames[c.state]}</span></div>`).join(''):'<div class="info-block"><p>관련 파일 기록이 없습니다.</p></div>';renderRailPreview();renderOrdersHistory();setRailTab(railTab);}
+function setRailTab(t){railTab=t;document.querySelectorAll('#railTabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));document.querySelectorAll('.rail-panel').forEach(p=>p.classList.toggle('active',p.id==='rail-'+t));}
+function renderRailPreview(){const l=$('railGraphPreview');l.innerHTML=`<div class="info-block"><h3>현재 프로젝트</h3><p><strong>${html(project().name)}</strong><br>승인된 기준: Spec ${html(project().rev)}<br>설계 모드: 기능 · 의존성 · 실행</p></div><div class="info-block"><h3>현재 수정 대상</h3><p>${html((currentChanges().find(x=>x.id===selectedChange)||currentChanges()[0])?.summary||'변경안이 없습니다.')}</p></div>`;}
+function openModal(action,id){pendingAction={action,id,agent:activeAgent,workspace};const c=currentChanges().find(x=>x.id===id);$('modalTitle').textContent=action==='approve'?'변경안 승인 시뮬레이션':'변경안 보류 시뮬레이션';$('modalText').textContent=`${c.title}\n\n이 동작은 HTML 화면의 샘플 상태만 변경합니다. 실제 GitHub 코드, SPS 설계 명세, 승인 기록은 변경되지 않습니다.`;$('modalConfirm').textContent=action==='approve'?'데모 승인':'데모 보류';$('actionModal').classList.add('active');}
+function closeModal(){pendingAction=null;$('actionModal').classList.remove('active')}
+function confirmModal(){if(!pendingAction){closeModal();return;}const a=pendingAction;const c=projects[a.workspace].changes[a.agent].find(x=>x.id===a.id);if(c){c.state=a.action==='approve'?'approved':'rejected';c.stamp=now()+' · UI 시뮬레이션';showToast('변경 상태만 시연용으로 변경했어요. 실제 파일은 수정되지 않았습니다.')}closeModal();renderRail();}
+const graphs={
+ architecture:{nodes:[
+ {id:'spec',name:'요구사항 명세',type:'설계 기준',caption:'승인 Spec · 기능 범위',x:351,y:21,owner:'Lead',desc:'Lead가 고객 상담을 분석해 명세·스택을 확정하고 CTO에게 기능 그룹을 배정.',state:'완료'},
+ {id:'ui',name:'Lead 대화 UI',type:'사용자 기능',caption:'대화 · 현재 AI 활동',x:45,y:201,owner:'CTO A',cto:'cto_a',currentTask:'Lead 대화 화면 수정',desc:'Lead 대화와 에이전트별 활동/수정 사항을 한 화면에 표시.',state:'진행'},
+ {id:'graph',name:'설계 시각화',type:'사용자 기능',caption:'기능 · 의존성 · 담당',x:248,y:201,owner:'CTO A',cto:'cto_a',currentTask:'담당 영역 그래프 연결',desc:'React Flow의 기능·의존성에 담당 CTO와 현재 작업 상태를 표시.',state:'진행'},
+ {id:'planner',name:'Reuse Planner',type:'기술 조사',caption:'기존 코드 · OSS',x:146,y:376,owner:'CTO A',cto:'cto_a',desc:'Lead는 계약용 사용·비사용 스택을 선정하고 CTO는 담당 구현용 코드 재사용을 조사.',state:'검토'},
+ {id:'codex',name:'Codex 연동',type:'외부 실행',caption:'Agent · 코드 변경',x:474,y:201,owner:'CTO B',cto:'cto_b',currentTask:'작업 결과 수집',desc:'기존 Codex 기능을 연결해 CTO·Worker의 개발 작업을 실행.',state:'진행'},
+ {id:'github',name:'GitHub Actions',type:'실행 제어',caption:'PR · Jobs · Checks',x:678,y:201,owner:'CTO B',cto:'cto_b',currentTask:'Runner 작업 상태 조회',desc:'GitHub Actions로 Self-hosted Runner에 빌드·테스트를 배정.',state:'진행'},
+ {id:'runner',name:'Self-hosted Runner',type:'검증 인프라',caption:'Windows · Linux · GPU',x:480,y:376,owner:'QA Worker',cto:'cto_b',desc:'GitHub에 등록된 Runner에서 QA Worker가 검증 실행.',state:'대기'},
+ {id:'qa',name:'전체 검증 · 납품',type:'검증 게이트',caption:'QA · 사용자 인수',x:677,y:376,owner:'Lead / QA',cto:'cto_b',desc:'요구사항에 맞춘 증거를 수집하고 승인 후 납품.',state:'대기'}
+ ],edges:[['spec','ui'],['spec','codex'],['ui','graph'],['graph','planner'],['planner','codex'],['codex','github'],['github','runner'],['runner','qa']]},
+ dependencies:{nodes:[{id:'r1',name:'REQ-01 명세',type:'요구사항',caption:'고객 상담 입력',x:24,y:58,owner:'Lead',desc:'Builder의 상담 파일 가져오기 기능이 원문·출처를 정리해 Lead에 직접 전달하고, Lead가 요구사항·설계를 작성.',state:'완료'},{id:'r2',name:'REQ-02 설계',type:'요구사항',caption:'시각적 관계 확인',x:24,y:274,owner:'Lead',desc:'기능 노드와 연결 관계를 승인된 명세로 관리.',state:'진행'},{id:'f1',name:'Feature: Chat',type:'기능',caption:'Lead 대화',x:244,y:58,owner:'CTO A',desc:'프로젝트별 대화와 대화 중 AI의 수정사항 표시.',state:'진행'},{id:'f2',name:'Feature: Graph',type:'기능',caption:'시각적 설계',x:244,y:274,owner:'CTO A',desc:'기능·의존성·실행 상태를 동일 기준 데이터에서 시각화.',state:'진행'},{id:'comp1',name:'Spec / Revision',type:'컴포넌트',caption:'변경 기록 관리',x:466,y:58,owner:'Lead',desc:'Lead가 설계 Revision을 관리하고 CTO는 실행 상태만 갱신.',state:'검토'},{id:'comp2',name:'GitHub Adapter',type:'컴포넌트',caption:'외부 API 연동',x:466,y:274,owner:'CTO B',desc:'GitHub PR / Actions / Runner 상태 조회. 자체 CI 구현하지 않음.',state:'대기'},{id:'test',name:'Acceptance QA',type:'검증',caption:'테스트 근거',x:689,y:274,owner:'QA Worker',desc:'CTO의 TestPlan을 QA Worker가 실행해 실제 Run/Check 증거를 전달.',state:'대기'}],edges:[['r1','f1'],['r2','f2'],['f1','comp1'],['f2','comp1'],['f2','comp2'],['comp1','test'],['comp2','test']]},
+ workflow:{nodes:[{id:'import',name:'상담 파일 가져오기',type:'Builder 입력 기능',caption:'대화 원문 → Lead',x:25,y:70,owner:'Builder',noAgent:true,desc:'Builder Import/Parser가 상담 파일과 원문·첨부·출처를 보존해 Lead에게 직접 전달. 별도 AI는 생성하지 않음.',state:'완료'},{id:'lead',name:'Lead',type:'총괄 에이전트',caption:'재사용 조사 · 설계',x:236,y:70,owner:'Lead',desc:'작업 분배 전에 기존 코드/OSS를 조사, 기능 그룹과 계약을 확정.',state:'진행'},{id:'cto_a',name:'CTO A',type:'기능 그룹',caption:'UI · 설계',x:469,y:60,owner:'CTO A',desc:'설계/시각화 기능을 개발 Worker에게 배정하고 내부 통합.',state:'진행'},{id:'cto_b',name:'CTO B',type:'기능 그룹',caption:'CI · Adapter',x:469,y:200,owner:'CTO B',desc:'GitHub/Codex 연동을 맡고 Worker 작업 및 내부 검증을 관리.',state:'진행'},{id:'workers',name:'Dev Workers',type:'구현',caption:'기능 개발 · PR',x:691,y:90,owner:'Development Workers',desc:'CTO가 확정한 작은 작업을 독립적으로 구현.',state:'진행'},{id:'qa',name:'QA Worker',type:'검증',caption:'Runner에서 테스트',x:691,y:292,owner:'QA Worker',desc:'CTO가 테스트를 설계하고 QA Worker가 GitHub Runner에서 실행·로그를 보고.',state:'대기'},{id:'merge',name:'Lead 통합',type:'통합',caption:'회귀 · 최종 승인',x:355,y:420,owner:'Lead',desc:'CTO 결과를 지속 통합, 전체 QA 후 사용자 인수.',state:'대기'}],edges:[['import','lead'],['lead','cto_a'],['lead','cto_b'],['cto_a','workers'],['cto_b','workers'],['workers','qa'],['qa','merge']]}
+};
+// Project-scoped demonstration graphs; live Builder uses Workspace-scoped Canonical Graph revisions.
+const betaGraphs=deep(graphs);
+const betaNames={architecture:{spec:['고객 요구사항','Lead · Unity 환경 명세'],ui:['게임 프로젝트 UI','Unity 프로젝트·파일 탐색'],graph:['빌드 구성 시각화','에디터·CI 작업 관계'],planner:['Unity 패키지 조사','CTO 참고 구현·패키지'],codex:['AI 코드 작업','Codex · Unity 파일 변경'],github:['Unity CI 워크플로','GitHub Actions · Windows'],runner:['Windows Build Runner','Unity Editor · 테스트 PC'],qa:['빌드 검증 · 인수','Unity 프로젝트 빌드 테스트']},dependencies:{r1:['REQ-01 게임 작업환경','고객 Unity 프로젝트'],r2:['REQ-02 CI 빌드','Windows 빌드 요구'],f1:['Feature: Unity','게임 프로젝트 화면'],f2:['Feature: CI','자동 빌드 · 테스트'],comp1:['Unity 프로젝트 명세','Lead 설계 Revision'],comp2:['GitHub Build Adapter','Actions · Runner 연동'],test:['Windows 빌드 검증','CTO TestPlan 기준']},workflow:{import:['상담 파일 가져오기','Builder → Lead 직접 인계'],lead:['Lead','Unity 스택 · 계약 분석'],cto_a:['CTO A','게임 UI 기능 그룹'],cto_b:['CTO B','빌드 연동 기능 그룹'],workers:['Dev Workers','Unity 관련 코드 작업'],qa:['QA Worker','CTO가 설계한 테스트'],merge:['Lead 통합','게임 워크스테이션 인수']}};
+Object.entries(betaNames).forEach(([mode,nodes])=>betaGraphs[mode].nodes.forEach(n=>{const name=nodes[n.id];if(name){n.name=name[0];n.caption=name[1];}if(n.currentTask)n.currentTask=mode==='architecture'?'Unity · Runner 연동 조사':n.currentTask;}));
+function projectGraphs(){return workspace==='beta'?betaGraphs:graphs;}
+function ownerAgent(owner){if(/CTO A/.test(owner))return 'cto_a';if(/CTO B/.test(owner))return 'cto_b';if(/QA/.test(owner))return 'qa';if(/Worker/.test(owner))return 'worker';return 'lead'}
+function renderActiveAgents(){
+ const aliases={'Lead':'lead','CTO A':'cto_a','CTO B':'cto_b','Dev Worker':'worker','Development Worker':'worker','QA Worker':'qa'};
+ const seen=new Set();const active=(project().workers||[]).filter(w=>w[2]==='working').map(w=>({id:aliases[w[0]]||null,label:w[0],task:w[1]})).filter(w=>w.id&&w.id!=='lead'&&!seen.has(w.id)&&seen.add(w.id));
+ $('activeAgentCount').textContent=active.length+'명';
+ $('activeAgentList').innerHTML=active.length?active.map(w=>{const m=agentMeta[w.id];const kind=w.id.startsWith('cto_')?'cto':w.id==='worker'?'worker':'';return `<button type="button" class="active-ai-item ${kind}" data-active-agent="${w.id}" title="${html(m.name)}의 현재 작업 보기"><span class="active-ai-icon">${html(m.badge==='LEAD'?'LD':m.badge==='DEV'?'W1':w.id==='cto_a'?'A':w.id==='cto_b'?'B':m.badge)}</span><span class="active-ai-copy"><strong>${html(w.label==='Dev Worker'?'Worker 1':w.label)}</strong><small>${html(w.task)}</small></span><span class="active-ai-live">활성</span></button>`;}).join(''):'<div style="font-size:10px;color:#879bac;padding:8px 6px">현재 작업 중인 AI 없음</div>';
+ $('activeAgentList').querySelectorAll('[data-active-agent]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.activeAgent;if(id==='lead'){setAgent('lead');setView('chat')}else openAgent(id)}));
+}
+
+function renderTerritories(graph){
+ const on=graphMode==='architecture';
+ // SVG partition shapes are illustration of CTO responsibility, not new access-control boundaries.
+ const A=on?'M 22 151 L 58 136 L 419 136 L 438 169 L 424 309 L 443 344 L 427 506 L 35 506 L 14 470 L 28 314 Z':'M 221 30 L 440 30 L 451 226 L 436 480 L 209 480 L 213 268 Z';
+ const B=on?'M 452 151 L 488 136 L 831 136 L 865 162 L 858 472 L 836 506 L 460 506 L 447 464 L 466 328 Z':'M 447 230 L 850 228 L 860 486 L 451 486 Z';
+ if(graphMode!=='architecture'&&graphMode!=='dependencies'){$('graphTerritories').innerHTML='';$('territoryLabels').innerHTML='';return;}
+ $('graphTerritories').innerHTML=`<defs><linearGradient id="terrA" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1c917c" stop-opacity=".27"/><stop offset="1" stop-color="#1a6b6d" stop-opacity=".13"/></linearGradient><linearGradient id="terrB" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#5b83c2" stop-opacity=".28"/><stop offset="1" stop-color="#39619e" stop-opacity=".13"/></linearGradient></defs><path d="${A}" fill="url(#terrA)" stroke="#5fc4af" stroke-opacity=".72" stroke-width="2.1" stroke-linejoin="round" stroke-dasharray="9 5"/><path d="${B}" fill="url(#terrB)" stroke="#7ca7ed" stroke-opacity=".75" stroke-width="2.1" stroke-linejoin="round" stroke-dasharray="9 5"/>`;
+ const labels=on?[['team-a','CTO A · UI · 설계',36,147],['team-b','CTO B · 실행 · QA',469,147]]:[['team-a','CTO A · UI · 설계',236,43],['team-b','CTO B · 연동',464,243]];
+ $('territoryLabels').innerHTML=labels.map(([cls,title,x,y])=>`<div class="territory-label ${cls}" style="left:${x}px;top:${y}px"><span class="team-avatar">${cls==='team-a'?'A':'B'}</span>${html(title)}</div>`).join('');
+}
+function renderGraph(){
+ if(!graphMode)graphMode='architecture';const graph=projectGraphs()[graphMode];if(!selectedGraphNode||!graph.nodes.some(x=>x.id===selectedGraphNode))selectedGraphNode=graph.nodes[0].id;
+ document.querySelectorAll('#graphModes button').forEach(b=>b.classList.toggle('active',b.dataset.mode===graphMode));renderTerritories(graph);
+ const nodes=$('graphNodes');nodes.innerHTML=graph.nodes.map(n=>{
+  const owner=ownerAgent(n.owner),cto=n.cto;const working=!!(cto&&project().workers.some(w=>ownerAgent(w[0])===cto&&w[2]==='working'));const current=working?n.currentTask:null;const float=!!(cto&&current&&n.state==='진행');const link=float?cto:owner;const cls=cto==='cto_a'?'team-a':cto==='cto_b'?'team-b':'';
+  return `<div class="diagram-node ${cls} ${current?'current-function':''} ${n.id===selectedGraphNode?'active':''}" style="left:${n.x}px;top:${n.y}px"><button type="button" class="node-main" data-node="${html(n.id)}"><span class="nd-type">${html(n.type)}</span><strong>${html(n.name)}</strong><small>${html(n.caption)}</small>${current?`<span class="node-current">● ${html(current)}</span>`:''}</button>${n.noAgent?'':`<button type="button" class="node-agent ${float?'floating-cto':''}" data-agent-open="${link}" title="${html(agentMeta[link].name)} 작업 화면 열기" aria-label="${html(agentMeta[link].name)} 작업 화면 열기">${float?(cto==='cto_a'?'CTO A':'CTO B'):html(agentMeta[link].badge)}</button>`}</div>`;
+ }).join('');
+ nodes.querySelectorAll('[data-node]').forEach(b=>b.addEventListener('click',()=>{selectedGraphNode=b.dataset.node;renderGraph()}));
+ nodes.querySelectorAll('[data-agent-open]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();openAgent(b.dataset.agentOpen)}));
+ const byId=Object.fromEntries(graph.nodes.map(n=>[n.id,n]));$('graphEdges').innerHTML=`<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M 0 0 L 7 3 L 0 6 z" fill="#668c9a" /></marker></defs>`+graph.edges.map(([a,b])=>{const x=byId[a],y=byId[b];const sx=x.x+86,sy=x.y+40,ex=y.x+86,ey=y.y+40;let ax,ay,bx,by;if(y.x>x.x+120){ax=x.x+172;ay=x.y+39;bx=y.x-4;by=y.y+39;}else if(y.y>x.y+35){ax=x.x+86;ay=x.y+79;bx=y.x+86;by=y.y-3;}else{ax=sx;ay=sy;bx=ex;by=ey;}const mx=(ax+bx)/2;return `<path d="M ${ax} ${ay} C ${mx} ${ay},${mx} ${by},${bx} ${by}" stroke="#7798a7" stroke-width="1.8" fill="none" opacity=".66" marker-end="url(#arrow)"/>`}).join('');
+ renderGraphDetails();
+}
+function renderGraphDetails(){const g=projectGraphs()[graphMode],n=g.nodes.find(x=>x.id===selectedGraphNode);if(!n)return;$('graphNodeTitle').textContent=n.name;$('graphNodeType').textContent=n.type;$('graphNodeDesc').textContent=n.desc;$('graphNodeOwner').textContent=n.owner;const inactive=n.cto&&!project().workers.some(w=>ownerAgent(w[0])===n.cto&&w[2]==='working');$('graphNodeStatus').textContent=inactive?'대기':n.state;$('graphNodeCurrent').textContent=inactive?'현재 작업 대기 중':(n.currentTask||'현재 진행 중인 작업 없음');$('graphNodeLinks').textContent=g.edges.filter(x=>x.includes(n.id)).length+'개 연결';}
+function setMode(mode){graphMode=mode;selectedGraphNode=null;renderGraph();requestAnimationFrame(fitGraph)}
+function fitGraph(){const vp=$('diagramViewport');if(!vp||vp.clientWidth<10)return;scale=Math.max(.4,Math.min(1,(vp.clientWidth-12)/880,(vp.clientHeight-12)/530));$('diagramWorld').style.transform=`scale(${scale})`;$('zoomReset').textContent=Math.round(scale*100)+'%';vp.scrollLeft=0;vp.scrollTop=0;}
+function setScale(newValue){scale=Math.max(.65,Math.min(1.5,newValue));$('diagramWorld').style.transform=`scale(${scale})`;$('zoomReset').textContent=Math.round(scale*100)+'%';$('diagramViewport').scrollTop=0;}
+function renderDocs(){const pr=project();
+ const tech=workspace==='beta'?[['Unity','required','고객 게임 프로젝트 개발 환경'],['GitHub Actions','allowed','자동 빌드·검증 재사용'],['자체 CI 서버','prohibited','유지보수 비용과 중복 개발 회피'],['Unity 지원 버전','undecided','고객/사용자 결정 필요']]:[['React','required','Lead 대화·프로젝트 UI'],['React Flow','required','설계 그래프 표시'],['GitHub Actions','allowed','CI 및 Runner 기능 재사용'],['자체 CI 서버','prohibited','중복 개발 배제'],['운영환경 배포 방식','undecided','고객과 후속 협의']];
+ const techText='# 기술 선정 명세 · 시연용\n\n'+tech.map(([name,state,why])=>`- ${name} / ${state} / ${why}`).join('\n')+'\n\n선정과 비사용 결정의 주체는 Lead, 세부 OSS 참고 코드는 CTO가 조사합니다.';
+ const history=(pr.decisionHistory||[]).map(x=>`- ${x.revision} · ${x.title}: ${x.answer}`).join('\n')||'- 사용자 결정 기록 없음 (시연)';
+ const docs=[['고객 상담 원본','크몽 일괄 가져오기 또는 수동 입력','고객 상담 기록은 해당 SPS Workspace에만 연결됩니다.\n\nBuilder의 파일 가져오기 기능이 출처·원문·첨부를 Lead에게 직접 전달하며 분석과 설계는 Lead가 담당합니다.\n\n실제 대화 데이터 없음 · 데모'],['Lead 설계·계약 명세','Spec '+pr.rev,'# Lead 설계/계약 명세 '+pr.rev+'\n\n- 고객 상담에 근거한 기능·인수 조건·범위\n- 필요한 CTO 기능 그룹·의존성\n- 계약 확정/대외 발송은 별도 권한·증거 필요\n\n시연용 문서입니다.'],['기술 선정 명세','Lead · 필수/허용/금지/미결정',techText],['아키텍처 · 의존성','Lead가 Graph Revision 편집','설계 시각화는 Lead가 자연어 요청을 받아 편집하며, 사용자는 담당 CTO 영역·의존성·현황을 조회합니다.\n\nCTO는 작업/검증 상태만 갱신합니다.'],['사용자 결정·변경 이력','Spec '+pr.rev,'# 결정 Revision 기록 (시연)\n\n'+history],['CTO 구현 조사 자료','재사용 코드·참고 구현·테스트','Lead가 선정한 기술 범위에서 CTO가 OSS·참고 코드를 조사해 Worker Task Packet에 전달합니다.']];
+ $('documentRows').innerHTML=docs.map((d,i)=>`<div class="doc-item"><div><h3>${html(d[0])}</h3><p>${html(d[1])}</p></div><button data-doc="${i}">미리보기</button></div>`).join('');
+ $('documentRows').querySelectorAll('[data-doc]').forEach(b=>b.addEventListener('click',()=>{$('docPreviewTitle').textContent=docs[+b.dataset.doc][0];$('docPreview').textContent=docs[+b.dataset.doc][2];}));$('docPreviewTitle').textContent=docs[1][0];$('docPreview').textContent=docs[1][2];
+}
+function decisionQueue(){return decisionQueues[workspace]||[];}
+function activeDecision(){const qs=decisionQueue();return qs.find(q=>q.id===selectedDecisionId)||qs[0]||null;}
+function selectDecision(id){selectedDecisionId=id;renderDecisions();}
+function renderDecisions(){
+ const qs=decisionQueue(),q=activeDecision();if(q)selectedDecisionId=q.id;
+ const unanswered=qs.filter(d=>d.status==='답변 필요').length;
+ $('decisionSidebarCount').textContent=unanswered||'';
+ $('decisionCount').textContent=qs.length+'건';
+ $('decisionList').innerHTML=qs.map(x=>`<button type="button" data-question="${html(x.id)}" class="change-item ${q?.id===x.id?'active':''}"><div class="change-top"><span class="change-name">${html(x.title)}</span><span class="tag ${x.status==='답변 필요'?'proposed':'approved'}">${html(x.status)}</span></div><div class="change-desc">${html(x.source)} · ${html(x.owner)}</div><div class="change-meta">${html(x.id)} · ${html(x.created)}</div></button>`).join('');
+ $('decisionList').querySelectorAll('[data-question]').forEach(b=>b.addEventListener('click',()=>selectDecision(b.dataset.question)));
+ if(!q){$('decisionContext').innerHTML='<strong>미결정사항이 없습니다.</strong>';$('decisionMessages').innerHTML='';$('decisionDetail').innerHTML='';$('decisionInput').disabled=true;return;}
+ $('decisionInput').disabled=false;
+ $('decisionContext').innerHTML=`<span class="tag">${html(q.id)}</span><span class="tag ${q.status==='답변 필요'?'proposed':'approved'}">${html(q.status)}</span><strong style="margin-top:7px">${html(q.title)}</strong><small>내부 Lead가 ${html(q.source)}로부터 전달받은 질문을 정리했습니다.</small>`;
+ $('decisionDetail').innerHTML=`<div class="decision-detail"><h3>질문 배경 · ${html(q.source)}</h3><p>${html(q.context)}</p><div class="meta">질문 전용 Lead · 메인 Lead와 분리된 세션</div>${q.options?.length?`<div class="decision-options">${q.options.map((o,i)=>`<button type="button" class="decision-option" data-decision-option="${i}"><strong>${html(o.label)}</strong><small>${html(o.detail)}</small></button>`).join('')}</div>`:''}${q.recommendation?`<div class="decision-recommendation">Lead 추천: ${html(q.recommendation)}</div>`:''}${q.appliedRevision?`<div class="decision-recommendation">시연용 반영 명세: ${html(q.appliedRevision)} · 실제 설계/CTO에 미연결</div>`:''}</div>`;
+  $('decisionDetail').querySelectorAll('[data-decision-option]').forEach(b=>b.addEventListener('click',()=>{const opt=q.options[Number(b.dataset.decisionOption)];$('decisionInput').value=opt.label;$('decisionInput').focus();}));
+ const initial=[{from:'lead',body:q.prompt,time:q.created},...q.messages];
+ $('decisionMessages').innerHTML=initial.map(m=>`<article class="msg ${m.from==='user'?'user':''}"><div class="msg-avatar">${m.from==='user'?'ME':'LD'}</div><div class="msg-text"><div class="msg-meta">${m.from==='user'?'운영자':'질문 전용 Lead'} · ${html(m.time)}</div><div class="bubble">${html(m.body)}</div></div></article>`).join('');
+ $('decisionMessages').scrollTop=$('decisionMessages').scrollHeight;
+}
+function replyDecision(value){const q=activeDecision(),msg=value.trim();if(!q||!msg)return;
+ q.messages.push({from:'user',body:msg,time:now()});
+  // Demo-only: a user decision updates this Workspace's in-memory Spec revision immediately.
+  // Production must validate conflicts, update Canonical Graph and transmit a revised CTO Workstream spec.
+  if(!project().decisionHistory)project().decisionHistory=[];
+  const pr=project(); const revNumber=Number((pr.rev.match(/\d+/)||['0'])[0])+1;pr.rev='r'+String(revNumber).padStart(2,'0');
+  q.appliedRevision=pr.rev;q.status='설계 반영 (데모)';q.answer=msg;
+  pr.decisionHistory.push({id:q.id,title:q.title,answer:msg,revision:pr.rev});
+  q.messages.push({from:'lead',body:`답변을 ${pr.rev} 설계 결정 기록에 반영했어(HTML 시연). 실제 Builder에서는 Lead가 영향받는 CTO의 명세 Revision을 갱신해 전달해. 이 파일은 실제 SPS·Codex·GitHub와 연결되지 않아 실제 코드·설계 파일은 바뀌지 않아.`,time:now()});
+  renderDocs();renderRail();renderDecisions();}
+
+// Host-level Runner inventory demo; in production source of truth is GitHub REST API.
+const demoRunners=[
+ {id:'windows',name:'WINDOWS-BUILD-01',os:'Windows · x64',status:'online',busy:true,labels:['self-hosted','Windows','X64','build'],job:'SPS Core 호환성 테스트 (시뮬레이션)',scope:'GitHub 저장소 연결',updated:'샘플 상태'},
+ {id:'linux',name:'LINUX-CI-01',os:'Linux · x64',status:'online',busy:false,labels:['self-hosted','Linux','X64'],job:'대기 중',scope:'GitHub 저장소 연결',updated:'샘플 상태'},
+ {id:'gpu',name:'GPU-TEST-01',os:'Windows · GPU',status:'offline',busy:false,labels:['self-hosted','Windows','gpu'],job:'실행 불가',scope:'GitHub 저장소 연결',updated:'샘플 상태'}
+];
+let selectedRunner='windows';
+function renderSystem(){
+ $('runnerTotal').textContent=demoRunners.length;
+ $('runnerOnline').textContent=demoRunners.filter(r=>r.status==='online').length;
+ $('runnerBusy').textContent=demoRunners.filter(r=>r.status==='online'&&r.busy).length;
+ $('runnerOffline').textContent=demoRunners.filter(r=>r.status==='offline').length;
+ $('runnerList').innerHTML=demoRunners.map(r=>{let label=r.status==='offline'?'오프라인':r.busy?'작업 중':'대기 중',cls=r.status==='offline'?'offline':r.busy?'busy':'';return `<button type="button" class="runner-item ${r.id===selectedRunner?'selected':''}" data-runner="${html(r.id)}"><div><span class="runner-name">${html(r.name)}</span><span class="runner-sub">${html(r.os)} · GitHub Self-hosted Runner</span></div><span class="runner-status ${cls}">${label}</span></button>`;}).join('');
+ $('runnerList').querySelectorAll('[data-runner]').forEach(b=>b.addEventListener('click',()=>{selectedRunner=b.dataset.runner;renderSystem();}));
+ const r=demoRunners.find(x=>x.id===selectedRunner)||demoRunners[0];$('runnerDetailTitle').textContent=r.name;
+ const fields=[['상태',r.status==='offline'?'오프라인':r.busy?'온라인 · 작업 실행 중':'온라인 · 대기'],['운영체제',r.os],['현재 작업',r.job],['등록 범위',r.scope],['최근 확인',r.updated]];
+ $('runnerDetails').innerHTML=fields.map(([k,v])=>`<div class="runner-detail-row"><span class="key">${html(k)}</span><span class="value">${html(v)}</span></div>`).join('')+`<div class="runner-detail-row"><span class="key">Runner 라벨</span><span class="runner-labels">${r.labels.map(l=>`<span class="tag">${html(l)}</span>`).join('')}</span></div>`;
+}
+
+
+// Standalone Lead HTML preview: sample artifact for this self-contained UI prototype.
+// In the actual Builder, source HTML must come from the selected project's verified
+// Lead output artifact, be versioned, and be rendered in an isolated Core Preview.
+function sampleLeadHtml(){
+ const title=html(project().name);
+ return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lead UI 시안 · ${title}</title><style>
+ :root{font-family:-apple-system,BlinkMacSystemFont,'Pretendard',sans-serif;color:#17253b;background:#f4f7fb}*{box-sizing:border-box}body{margin:0;background:#f4f7fb}header{background:#fff;border-bottom:1px solid #e3e8ef;padding:22px 38px;display:flex;align-items:center;justify-content:space-between;gap:14px}header strong{font-size:19px}header span{font-size:12px;background:#e6f7ed;color:#126846;padding:7px 12px;border-radius:24px;font-weight:700}.app{max-width:1060px;margin:0 auto;padding:44px 32px 70px}h1{font-size:33px;line-height:1.3;letter-spacing:-1.4px;margin:0 0 9px}p{color:#65758c;margin:0 0 28px;line-height:1.7}.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:20px}.card{background:white;border-radius:18px;border:1px solid #e3eaf1;padding:25px;min-height:215px;box-shadow:0 16px 35px #0b23400b}.card h2{margin:0 0 16px;font-size:17px}.pill{display:inline-flex;padding:7px 12px;border-radius:8px;background:#edf4fa;font-size:12px;color:#42627c;margin:0 5px 8px 0}.demo-row{padding:15px;border:1px solid #e3eaf1;border-radius:10px;margin-top:10px;display:flex;justify-content:space-between;font-size:13px;gap:8px}.demo-row em{font-style:normal;color:#1b9670;font-weight:750}.green{background:linear-gradient(125deg,#dbfaed,#effdf8);border-color:#bcdfd0}.notice{margin-top:24px;padding:13px 17px;border-radius:10px;background:#fff6db;color:#6b5623;font-size:12px} @media(max-width:650px){header{padding:16px 20px}.app{padding:26px 18px}h1{font-size:25px}.grid{grid-template-columns:1fr}}
+ </style></head><body><header><strong>UI Draft Studio</strong><span>Lead 작성 · 시연용 HTML</span></header><main class="app"><h1>${title}<br>인터페이스 시안</h1><p>Lead 대화에서 생성한 HTML 산출물을 별도 창에서 확인하는 예시입니다.</p><div class="grid"><section class="card green"><h2>설계 구성</h2><p>요구사항과 화면의 핵심 구성 요소를 확인합니다.</p><span class="pill">대화 중심 화면</span><span class="pill">에이전트 역할 분담</span><span class="pill">설계 시각화</span><span class="pill">작업 기록</span></section><section class="card"><h2>화면 구성 예시</h2><div class="demo-row"><span>Lead 대화</span><em>메인 화면</em></div><div class="demo-row"><span>CTO 작업 영역</span><em>조회 전용</em></div><div class="demo-row"><span>설계 시각화</span><em>담당 영역</em></div></section></div><div class="notice">이 콘텐츠는 HTML 뷰어 작동을 확인하기 위한 샘플입니다. 실제 Codex·Lead 산출물과 연결되지 않았습니다.</div></main></body></html>`;
+}
+function openLeadHtmlViewer(){
+ // Synchronously open during user's click gesture to support iPad pop-up policy.
+ const popup=window.open('about:blank','_blank','popup=yes,width=1100,height=800');
+ if(!popup){window.alert('새 창이 차단됐습니다. Safari 또는 브라우저에서 팝업 허용 여부를 확인해 주세요.');return;}
+ try{
+  // The host wrapper contains only trusted UI. The generated artifact stays
+  // inside an opaque-origin sandboxed iframe, never in the parent DOM.
+  popup.opener=null;
+  const d=popup.document;
+  d.open();
+  d.write('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lead HTML 뷰어 · 시안</title><style>*{box-sizing:border-box}html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0b1420;color:#e6f1fc}.viewer{height:100%;display:flex;flex-direction:column}.head{padding:14px 22px;background:#101d2b;border-bottom:1px solid #304051;display:flex;align-items:center;gap:16px;justify-content:space-between}.head strong{font-size:14px}.head span{color:#a9bccc;font-size:12px}.preview-host{flex:1;min-height:0;padding:12px}.preview-host iframe{width:100%;height:100%;border:0;border-radius:11px;background:#fff}@media(max-width:650px){.head{padding:12px;flex-wrap:wrap}.preview-host{padding:5px}}</style></head><body><div class="viewer"><div class="head"><strong>HTML 뷰어</strong><span>Lead 작성 HTML · 시연용 미리보기</span></div><div class="preview-host" id="previewHost"></div></div></body></html>');
+  d.close();
+  const frame=d.createElement('iframe');
+  frame.title='Lead HTML 산출물 시안';
+  frame.setAttribute('sandbox','allow-scripts'); // no allow-same-origin, forms or navigation
+  frame.referrerPolicy='no-referrer';
+  frame.srcdoc=sampleLeadHtml();
+  d.getElementById('previewHost').appendChild(frame);
+  popup.focus();
+ }catch(e){
+  try{popup.close()}catch(_ignored){}
+  window.alert('HTML 뷰어 창을 열지 못했습니다. 이 브라우저의 파일 미리보기 제한을 확인해 주세요.');
+ }
+}
+
+// bind controls
+document.querySelectorAll('.nav button[data-view]').forEach(b=>b.addEventListener('click',()=>{setView(b.dataset.view);if(b.dataset.quick==='changes')setRailTab('changes');if(b.dataset.quick==='evidence')$('evidence')?.scrollIntoView({block:'start',behavior:'smooth'});}));
+$('workspaceSelect').addEventListener('change',e=>{workspace=e.target.value;activeAgent='lead';selectedDecisionId=null;selectedChange=null;selectedMilestone=0;renderWorkspacePicker();refreshWorkspace();setView('chat')});
+$('leadHtmlViewer').addEventListener('click',openLeadHtmlViewer);$('workAgentSelect').addEventListener('change',e=>setAgent(e.target.value));document.querySelectorAll('[data-mobile-rail]').forEach(b=>b.addEventListener('click',()=>{const k=b.dataset.mobileRail;if(k==='decisions')$('view-decisions').classList.toggle('mobile-rail-open');else if(k==='agents')$('view-agents').classList.toggle('mobile-rail-open');else $('view-chat').classList.toggle('mobile-rail-open');}));$('mobileRailClose').addEventListener('click',()=>{$('view-chat').classList.remove('mobile-rail-open');$('view-agents').classList.remove('mobile-rail-open')});$('railOpenGraph').addEventListener('click',()=>setView('architecture'));$('archChatBtn').addEventListener('click',()=>setView('chat'));
+$('railTabs').querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setRailTab(b.dataset.tab)));
+$('decisionForm').addEventListener('submit',e=>{e.preventDefault();replyDecision($('decisionInput').value);$('decisionInput').value='';});$('decisionInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('decisionForm').requestSubmit()}});$('chatForm').addEventListener('submit',e=>{e.preventDefault();submitChat($('chatInput').value);$('chatInput').value='';$('chatInput').focus()});$('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('chatForm').requestSubmit()}});
+$('graphModes').querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));$('zoomIn').addEventListener('click',()=>setScale(scale+.15));$('zoomOut').addEventListener('click',()=>setScale(scale-.15));$('zoomReset').addEventListener('click',()=>setScale(1));
+$('openNodeAgent').addEventListener('click',()=>{const n=projectGraphs()[graphMode].nodes.find(x=>x.id===selectedGraphNode);if(n)openAgent(ownerAgent(n.owner))});
+$('askAboutNode').addEventListener('click',()=>{const node=projectGraphs()[graphMode].nodes.find(n=>n.id===selectedGraphNode);setAgent('lead');setView('chat');if(node)submitChat(`설계 노드 '${node.name}'의 의존성과 작업 범위를 설명해줘.`)});
+$('modalCancel').addEventListener('click',closeModal);$('modalConfirm').addEventListener('click',confirmModal);$('actionModal').addEventListener('click',e=>{if(e.target===$('actionModal'))closeModal()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+
+document.querySelectorAll('[data-agent-open]').forEach(b=>{if(!b.closest('#graphNodes'))b.addEventListener('click',()=>openAgent(b.dataset.agentOpen))});
+$('profileButton').addEventListener('click',()=>{const m=$('coreMenu');const show=m.hasAttribute('hidden');if(show)m.removeAttribute('hidden');else m.setAttribute('hidden','');$('profileButton').setAttribute('aria-expanded',String(show));});
+$('openCoreSettings').addEventListener('click',()=>{const m=$('coreMenu');m.setAttribute('hidden','');$('profileButton').setAttribute('aria-expanded','false');$('modalTitle').textContent='SPS Core 설정 (SDK 연결 위치)';$('modalText').textContent='실제 SPS 플러그인에서는 Core SDK가 제공하는 설정 열기 기능을 이 메뉴에 연결합니다. 이 HTML 시제품은 SPS Core에 연결되어 있지 않아 실제 설정 창을 열 수 없습니다.';$('modalConfirm').textContent='확인';pendingAction=null;$('actionModal').classList.add('active');});
+window.addEventListener('hashchange',()=>{const n=location.hash.replace('#panel-','');if(['chat','architecture','org','documents','agents','decisions','system'].includes(n)&&n!==activeView)setView(n)});
+function renderWorkspacePicker(){$('workspaceSelect').innerHTML=Object.values(projects).map(p=>`<option value="${p.id}">${html(p.name)}</option>`).join('');$('workspaceSelect').value=workspace;}
+window.addEventListener('resize',()=>{if(activeView==='architecture')fitGraph();});renderWorkspacePicker();refreshWorkspace();setRailTab('changes');const initialRoute=location.hash.replace('#panel-','');setView(['chat','architecture','org','documents','agents','decisions','system'].includes(initialRoute)?initialRoute:'chat',Boolean(initialRoute));
+</script>
+</body>
+</html>
