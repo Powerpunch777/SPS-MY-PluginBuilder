@@ -15,6 +15,7 @@
 
 ## 검토 자료
 
+- [재개 체크포인트](docs/review/RESTART_CHECKPOINT_2026-10-30.md)
 - [개발 재개 전 체크포인트](docs/review/CHECKPOINT_PRESTART_2026-10-29.md)
 - [의존성과 병렬 작업 계획](docs/review/DEPENDENCY_AND_PARALLEL_PLAN_2026-10-29.md)
 - [Core에서 먼저 확인·해결할 사항](docs/review/CORE_PREREQUISITES_2026-10-29.md)
