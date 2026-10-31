@@ -5,6 +5,8 @@ import type { BuilderSnapshot } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
+const MAX_INITIAL_SNAPSHOT_BYTES = 192 * 1024;
 const queues = new Map<string, Promise<unknown>>();
 
 function workspaceId(value: unknown): string {
@@ -34,8 +36,8 @@ export async function importConsultation(companyId: string, params: Record<strin
   workspaceId(companyId);
   if (Object.keys(params).sort().join(",") !== "requestId,text" || typeof params.requestId !== "string"
     || !UUID.test(params.requestId) || typeof params.text !== "string" || !params.text.trim()
-    || Buffer.byteLength(params.text, "utf8") > 64 * 1024) {
-    throw new TypeError("Consultation import requires one request ID and at most 64 KiB of selected text.");
+    || Buffer.byteLength(JSON.stringify(params), "utf8") > MAX_IMPORT_REQUEST_BYTES) {
+    throw new TypeError("Consultation import requires one request ID and selected text within a 48 KiB request.");
   }
   const requestId = params.requestId;
   const text = params.text;
@@ -54,6 +56,11 @@ export async function importConsultation(companyId: string, params: Record<strin
     snapshot.activity.push({ id: randomUUID(), actorId: null, label: "Consultation text imported", createdAt: now, evidenceRef: null });
     snapshot.revision += 1;
     const validated = parseBuilderSnapshot(snapshot, companyId);
+    // Keep this initial record readable through bounded Native UI responses.
+    // Paginated conversations/revisions replace this record before AI execution.
+    if (Buffer.byteLength(JSON.stringify(validated), "utf8") > MAX_INITIAL_SNAPSHOT_BYTES) {
+      throw new TypeError("The initial Builder record is full; existing input has not been changed.");
+    }
     await platform.state.set(key(companyId), validated as unknown as JsonValue);
     return { saved: true, analysisStarted: false, revision: validated.revision };
   });

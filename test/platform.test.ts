@@ -68,3 +68,19 @@ test("the action requires authenticated user context and uses Host scope rather 
     ...platform, companyId: A, actor: { type: "user", companyId: A },
   })));
 });
+
+test("encoded input and aggregate initial-state limits preserve the last readable record", async () => {
+  const { platform, rows, writes } = fakePlatform();
+  for (const text of ["x".repeat(48 * 1024), "한".repeat(17 * 1024), "\n".repeat(25 * 1024)]) {
+    await assert.rejects(importConsultation(A, { requestId, text }, platform), /48 KiB request/);
+  }
+  assert.equal(writes.length, 0);
+  for (let index = 1; index <= 3; index += 1) {
+    await importConsultation(A, { requestId: `${index}3333333-3333-4333-8333-333333333333`, text: "x".repeat(49_000) }, platform);
+  }
+  const before = structuredClone(rows.get(A));
+  await assert.rejects(importConsultation(A, { requestId: "43333333-3333-4333-8333-333333333333", text: "x".repeat(49_000) }, platform), /record is full/);
+  assert.deepEqual(rows.get(A), before);
+  assert.equal((await readBuilderSnapshot(A, platform)).messages.length, 3);
+  assert.equal(writes.length, 3);
+});

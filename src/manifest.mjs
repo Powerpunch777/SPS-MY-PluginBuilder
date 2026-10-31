@@ -22,8 +22,8 @@ export default defineSpsPluginManifest({
     ...surface.ui,
     workspaceShell: {
       id: "my-plugin-builder", displayName: "SPS Builder",
-      defaultRoute: "/plugins/com.sonparkserver.my-plugin-builder/builder",
-      navigation: [{ id: "builder", displayName: "SPS Builder", target: "/plugins/com.sonparkserver.my-plugin-builder/builder", order: 0 }],
+      defaultRoute: "/builder",
+      navigation: [{ id: "builder", displayName: "SPS Builder", target: "/builder", order: 0 }],
     },
   },
   sps: { contractVersion: "2.0", primitives: [] },
