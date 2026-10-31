@@ -1,0 +1,9 @@
+node_modules/
+dist/
+artifacts/
+.ui-test-*
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example

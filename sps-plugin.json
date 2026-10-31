@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "plugin": {
+    "id": "com.sonparkserver.my-plugin-builder",
+    "version": "0.1.0",
+    "apiVersion": "1"
+  },
+  "runtime": {
+    "manifestEntry": "dist/manifest.js",
+    "manifestSha256": "bfb3adfc181b5c19f529fe31ea23fdfa731890611520a14d8af2bb1ea4fd6487"
+  },
+  "capabilities": [
+    "plugin.state.read",
+    "plugin.state.write",
+    "ui.page.register",
+    "ui.workspaceShell.provide"
+  ],
+  "permissionsDigest": "67e19bfd35640238ae8d5d06eea755623e14f08c0815656709c5cfc6547f73bd"
+}
