@@ -39,7 +39,7 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
         },
       }],
     });
-    const { BuilderShell, resolveSelectedGraphEntity } = await import(pathToFileURL(output).href);
+    const { BuilderShell, resolveSelectedGraphEntity, resolveSelectedDocument } = await import(pathToFileURL(output).href);
     const graphEntities = [
       { id: "node-first", kind: "feature" as const, label: "First feature", ownerActorId: null, status: "planned" as const, evidenceRefs: [] },
       { id: "node-second", kind: "component" as const, label: "Second component", ownerActorId: null, status: "verified" as const, evidenceRefs: [] },
@@ -47,6 +47,13 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
     assert.equal(resolveSelectedGraphEntity(graphEntities, "node-second")?.id, "node-second");
     assert.equal(resolveSelectedGraphEntity(graphEntities, "removed-node")?.id, "node-first", "A stale selection falls back to the current snapshot.");
     assert.equal(resolveSelectedGraphEntity([], "removed-node"), null, "An empty refreshed graph has no selected node.");
+    const documents = [
+      { id: "doc-first", title: "First document", revisionId: "r01", text: "First body", createdAt: "2026-11-01T00:00:00.000Z" },
+      { id: "doc-second", title: "Second document", revisionId: "r02", text: "Second body", createdAt: "2026-11-01T01:00:00.000Z" },
+    ];
+    assert.equal(resolveSelectedDocument(documents, "doc-second")?.id, "doc-second");
+    assert.equal(resolveSelectedDocument(documents.slice(1), "doc-first")?.id, "doc-second", "A removed selected document falls back to the current first document.");
+    assert.equal(resolveSelectedDocument([], "doc-first"), null, "An empty refreshed document list clears the selection.");
     const props: BuilderShellProps = {
       workspaceLabel: "Studio",
       snapshot: {

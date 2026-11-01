@@ -19,6 +19,15 @@ function DevelopmentPreview() {
         text: "Fixture CTO read-only record", createdAt: "2026-11-01T00:00:00.000Z", runId: "fixture-run" });
       return initial;
     }
+    if (fixture === "documents") {
+      initial.documents = [
+        { id: "fixture-spec", title: "Lead 설계·계약 명세", revisionId: "spec-r01",
+          text: "# Lead 설계·계약 명세\n\n저장된 Workspace 문서 fixture입니다.\n\n- Lead 관리\n- 현재 Revision: spec-r01", createdAt: "2026-11-01T00:00:00.000Z" },
+        { id: "fixture-technology", title: "기술 선정 명세", revisionId: "tech-r02",
+          text: "# 기술 선정 명세\n\n두 번째 저장 문서 fixture입니다.\n\n- React / required\n- 자체 CI / prohibited", createdAt: "2026-11-01T01:00:00.000Z" },
+      ];
+      return initial;
+    }
     if (fixture !== "decisions" && fixture !== "decisions-no-question") return initial;
     if (fixture === "decisions") initial.questions.push({ id: "question-fixture", title: "Regression question", text: "Selected question details remain visible.",
       status: "open", options: [], recommendation: null, answer: null, revisionId: null });
@@ -37,7 +46,12 @@ function DevelopmentPreview() {
       UI Preview · Core/AI 미연결 · 입력은 이 창의 메모리에만 보관됩니다.
     </div>
     <div style={{ minHeight: 0, flex: 1 }}><BuilderShell snapshot={snapshot} workspaceLabel="Builder Development"
-      onRefresh={() => {}} onImportConsultation={async text => {
+      onRefresh={() => {
+        if (new URLSearchParams(window.location.search).get("fixture") === "documents") {
+          setSnapshot(previous => ({ ...previous, revision: previous.revision + 1,
+            documents: previous.documents.length > 1 ? previous.documents.slice(0, 1) : [] }));
+        }
+      }} onImportConsultation={async text => {
         const now = new Date().toISOString();
         setSnapshot(previous => ({ ...previous, revision: previous.revision + 1,
           messages: [...previous.messages, { id: crypto.randomUUID(), channel: "main", actorId: null,

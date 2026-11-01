@@ -172,13 +172,14 @@
 .builder-empty-card strong { color: var(--builder-text); font-size: 12px; }
 .builder-empty-card p { max-width: 400px; margin: 4px auto 0; font-size: 11px; }
 .builder-doc-layout { display: grid; grid-template-columns: minmax(230px, .82fr) minmax(0, 1.5fr); gap: 12px; align-items: start; }
+.builder-doc-page { width: 100%; }
 .builder-record-list { display: grid; }
 .builder-record-button { width: 100%; border: 0; border-bottom: 1px solid var(--builder-border); padding: 11px 5px; background: transparent; text-align: left; cursor: pointer; }
 .builder-record-button:last-child { border-bottom: 0; }
 .builder-record-button.is-selected { color: #fff; }
 .builder-record-button strong { display: block; font-size: 11px; }
 .builder-record-button small { display: block; margin-top: 3px; color: var(--builder-muted); font-size: 10px; }
-.builder-document-preview { min-height: 150px; margin: 10px 0 0; border: 1px solid var(--builder-border); border-radius: 5px; padding: 13px; background: var(--builder-panel-soft); color: var(--builder-text); font: 12px/1.65 "Segoe UI", "Malgun Gothic", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+.builder-document-preview { min-height: 150px; margin: 10px 0 0; border: 1px solid var(--builder-border); border-radius: 5px; padding: 13px; background: var(--builder-panel-soft); color: var(--builder-text); font: inherit; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .builder-question-layout { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 1.3fr); gap: 12px; }
 .builder-question-list { display: grid; gap: 5px; align-content: start; }
 .builder-question-button { width: 100%; border: 1px solid var(--builder-border); border-radius: 6px; padding: 10px; background: var(--builder-panel); text-align: left; cursor: pointer; }

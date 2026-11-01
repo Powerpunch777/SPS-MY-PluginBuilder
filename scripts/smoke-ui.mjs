@@ -75,8 +75,36 @@ try {
       for (const label of ["설계 시각화", "조직도", "설계 문서", "미결정사항", "시스템", "Lead 대화"]) {
         await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: label, exact: true }).click();
         await page.getByRole("heading", { level: 1, name: label === 'Lead 대화' ? 'Lead와 대화' : label, exact: true }).waitFor();
+        if (label === "설계 문서") {
+          await page.getByRole("heading", { level: 2, name: "프로젝트 파일", exact: true }).waitFor();
+          await page.getByRole("heading", { level: 2, name: "미리보기", exact: true }).waitFor();
+          await page.getByText("저장된 프로젝트 문서가 없습니다.", { exact: true }).waitFor();
+          await page.getByText("문서를 선택하면 저장된 내용이 표시됩니다.", { exact: true }).waitFor();
+          assert.equal(await page.locator(".builder-doc-layout > .builder-card").count(), 2);
+        }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       }
+      await page.goto(`${origin}?fixture=documents`);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "설계 문서", exact: true }).click();
+      await page.getByRole("heading", { level: 2, name: "프로젝트 파일", exact: true }).waitFor();
+      await page.getByRole("heading", { level: 2, name: "미리보기", exact: true }).waitFor();
+      assert.equal(await page.getByRole('complementary', { name: 'AI 작업 기록', exact: true }).count(), 0);
+      const documentPreview = page.locator(".builder-document-preview");
+      await documentPreview.filter({ hasText: "저장된 Workspace 문서 fixture입니다." }).waitFor();
+      await page.getByRole("button", { name: /기술 선정 명세/ }).click();
+      await documentPreview.filter({ hasText: "두 번째 저장 문서 fixture입니다." }).waitFor();
+      assert.equal((await documentPreview.innerText()).includes("저장된 Workspace 문서 fixture입니다."), false);
+      assert.equal(await page.getByRole("button", { name: /다운로드|편집|삭제/ }).count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      if (width <= 790) assert.equal(await page.locator(".builder-doc-layout").evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length), 1);
+      await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-documents-${name}.png`) });
+      await page.getByRole('button', { name: 'Workspace 새로고침', exact: true }).click();
+      await documentPreview.filter({ hasText: "저장된 Workspace 문서 fixture입니다." }).waitFor();
+      assert.equal(await page.getByRole('button', { name: /Lead 설계·계약 명세/ }).getAttribute('aria-pressed'), 'true');
+      await page.getByRole('button', { name: 'Workspace 새로고침', exact: true }).click();
+      await page.getByText("저장된 프로젝트 문서가 없습니다.", { exact: true }).waitFor();
+      await page.getByText("문서를 선택하면 저장된 내용이 표시됩니다.", { exact: true }).waitFor();
+      assert.equal(await documentPreview.count(), 0);
       await page.goto(`${origin}?fixture=graph`);
       await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "설계 시각화", exact: true }).click();
       const detail = page.getByRole('complementary', { name: '선택한 설계 노드 정보', exact: true });
@@ -204,6 +232,7 @@ try {
       assert.deepEqual(errors, []);
       console.log(JSON.stringify({ builderUi: name, views: 6, pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
         selectedGraphDetails: true, graphKeyboardSelection: true, graphMissingOwnerAndRelations: true, graphOwnerReadOnly: true,
+        documentPreviewSelection: true, documentRemovalRefresh: true, emptyDocumentPanes: true,
         decisionsHistoryIgnoresRunId: true, decisionsHistoryExcludesSubordinateActors: true, decisionsHistorySurvivesMissingQuestion: true,
         fileFailurePreservesInput: true, fileSelectionDoesNotSave: true, delayedReadCannotOverwriteEdit: true,
         newerFileWins: true, unmountedReadIgnored: true,

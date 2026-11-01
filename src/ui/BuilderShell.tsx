@@ -330,17 +330,25 @@ function OrganizationView({ props, onActor }: { props: BuilderShellProps; onActo
       : <div className="builder-card builder-empty-card"><Network /><strong>조직 정보가 없습니다</strong><p>이 Workspace의 Actor와 관계가 아직 저장되지 않았습니다.</p></div>}</div>;
 }
 
+export function resolveSelectedDocument(documents: BuilderShellProps["snapshot"]["documents"], selectedId: string | null) {
+  return documents.find(document => document.id === selectedId) ?? documents[0] ?? null;
+}
+
 function DocumentsView({ props }: { props: BuilderShellProps }) {
   const [selectedId, setSelectedId] = useState<string | null>(props.snapshot.documents[0]?.id ?? null);
-  const selected = props.snapshot.documents.find(document => document.id === selectedId) ?? props.snapshot.documents[0];
-  return <div className="builder-page"><div className="builder-page-intro"><h2>설계 문서</h2><p>Lead가 저장한 문서의 현재 Revision을 확인합니다.</p></div>
-    {props.snapshot.documents.length ? <div className="builder-doc-layout">
-      <section className="builder-card"><h2>Workspace 문서</h2><div className="builder-record-list">{props.snapshot.documents.map(document => <button
-        className={`builder-record-button${selected?.id === document.id ? " is-selected" : ""}`} key={document.id} onClick={() => setSelectedId(document.id)} type="button">
+  const selected = resolveSelectedDocument(props.snapshot.documents, selectedId);
+  useEffect(() => {
+    if (selectedId !== (selected?.id ?? null)) setSelectedId(selected?.id ?? null);
+  }, [selectedId, selected?.id]);
+  return <div className="builder-page builder-doc-page"><div className="builder-page-intro"><p>Lead가 관리하는 계약·기술 선정·변경 명세를 조회합니다. 상담 원문은 별도 보관합니다.</p></div>
+    <div className="builder-doc-layout">
+      <section className="builder-card"><h2>프로젝트 파일</h2><p className="builder-card-sub">현재 Workspace에 저장된 문서입니다. 프로젝트별 분류는 아직 연결되지 않았습니다.</p><div className="builder-record-list">{props.snapshot.documents.length ? props.snapshot.documents.map(document => <button
+        aria-pressed={selected?.id === document.id} className={`builder-record-button${selected?.id === document.id ? " is-selected" : ""}`} key={document.id} onClick={() => setSelectedId(document.id)} type="button">
         <strong>{document.title}</strong><small>{document.revisionId} · {displayTime(document.createdAt)}</small>
-      </button>)}</div></section>
-      {selected && <section className="builder-card"><h2>{selected.title}</h2><p className="builder-card-sub">Revision {selected.revisionId} · {displayTime(selected.createdAt)}</p><pre className="builder-document-preview">{selected.text}</pre></section>}
-    </div> : <div className="builder-card builder-empty-card"><FileText /><strong>설계 문서가 없습니다</strong><p>Lead가 이 Workspace에 문서를 저장하면 여기에 표시됩니다.</p></div>}</div>;
+      </button>) : <p className="builder-card-sub">저장된 프로젝트 문서가 없습니다.</p>}</div></section>
+      <section className="builder-card"><h2>미리보기</h2><p className="builder-card-sub">{selected ? `${selected.title} · Revision ${selected.revisionId} · ${displayTime(selected.createdAt)}` : "파일을 선택하세요"}</p>
+        {selected ? <pre className="builder-document-preview">{selected.text}</pre> : <p className="builder-card-sub">문서를 선택하면 저장된 내용이 표시됩니다.</p>}</section>
+    </div></div>;
 }
 
 function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
@@ -507,7 +515,7 @@ export function BuilderShell(props: BuilderShellProps) {
     {view === "lead" && !activeActor && <button aria-label="Lead HTML 뷰어 열기" className="builder-icon-button" disabled={!props.onOpenHtmlPreview}
       onClick={props.onOpenHtmlPreview} title={props.onOpenHtmlPreview ? "Lead HTML 뷰어 열기" : "HTML 뷰어가 아직 연결되지 않았습니다."} type="button"><FileText /><span className="builder-refresh-label">HTML 뷰어</span></button>}
     {view === "architecture" && !activeActor && <button className="builder-quiet-button" onClick={() => selectView("lead")} type="button"><MessageSquare />Lead와 설계 논의</button>}
-    {view !== "lead" && view !== "decisions" && view !== "architecture" && <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={() => setDrawerOpen(value => !value)} type="button"><PanelRight /></button>}
+    {view !== "lead" && view !== "decisions" && view !== "architecture" && view !== "documents" && <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={() => setDrawerOpen(value => !value)} type="button"><PanelRight /></button>}
   </div>;
 
   let content: ReactNode;
@@ -515,7 +523,7 @@ export function BuilderShell(props: BuilderShellProps) {
   else if (view === "lead") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
   else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
   else if (view === "organization") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><OrganizationView onActor={openActor} props={props} /></WithActivityRail>;
-  else if (view === "documents") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><DocumentsView props={props} /></WithActivityRail>;
+  else if (view === "documents") content = <DocumentsView props={props} />;
   else if (view === "decisions") content = <DecisionsView drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} props={props} />;
   else content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><SystemView props={props} /></WithActivityRail>;
 

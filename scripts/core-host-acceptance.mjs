@@ -124,6 +124,24 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.equal((await data(company.id)).messages.length, 1);
   assert.deepEqual((await data(secondCompany.id)).messages, []);
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes(${JSON.stringify(text)})`), Boolean, "saved input rendered");
+  assert.deepEqual((await data(company.id)).documents, []);
+  await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Open stored Workspace document view");
+  await eventually(() => workspace.evaluate(`(() => {
+    const layout=document.querySelector('.builder-doc-layout');
+    return {panes:layout?.querySelectorAll(':scope > .builder-card').length,
+      headings:[...(layout?.querySelectorAll('h2')||[])].map(node=>node.textContent),
+      empty:layout?.textContent.includes('저장된 프로젝트 문서가 없습니다.'),
+      previewEmpty:layout?.textContent.includes('문서를 선택하면 저장된 내용이 표시됩니다.'),
+      duplicatedRail:Boolean(document.querySelector('.builder-activity-rail')),
+      overflow:document.querySelector('.builder-shell').scrollWidth>document.querySelector('.builder-shell').clientWidth};
+  })()`), value => value.panes === 2 && value.empty && value.previewEmpty, "actual empty document panes");
+  const documentView = await workspace.evaluate(`({
+    headings:[...document.querySelectorAll('.builder-doc-layout h2')].map(node=>node.textContent),
+    duplicatedRail:Boolean(document.querySelector('.builder-activity-rail')),
+    overflow:document.querySelector('.builder-shell').scrollWidth>document.querySelector('.builder-shell').clientWidth})`);
+  assert.deepEqual(documentView.headings, ['프로젝트 파일', '미리보기']);
+  assert.equal(documentView.duplicatedRail, false);
+  assert.equal(documentView.overflow, false);
   await click(workspace, '.builder-nav [aria-label="시스템"]', "Open Builder Agent settings");
   await eventually(() => workspace.evaluate(`({disabled:document.querySelector('select[aria-label="Lead Agent"]')?.disabled,
     ids:[...(document.querySelector('select[aria-label="Lead Agent"]')?.options||[])].map(option=>option.value)})`),
@@ -174,6 +192,6 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
-    uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true,
+    uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true,
     cleanupQualificationPending: true }));
 }
