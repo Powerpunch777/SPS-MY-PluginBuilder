@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../src/domain/snapshot.ts";
-import { selectActiveActors, selectSessionTranscript } from "../src/domain/selectors.ts";
+import { selectActiveActors, selectLeadDecisionTranscript, selectSessionTranscript } from "../src/domain/selectors.ts";
 
 function empty() {
   return createEmptyBuilderSnapshot("workspace-a");
@@ -148,4 +148,22 @@ test("selectors expose only active non-Lead actors and immutable session-scoped 
   assert.deepEqual(selectSessionTranscript(snapshot, "worker-session").map(message => message.id), ["m-worker"]);
   assert.deepEqual(selectSessionTranscript(snapshot, "unknown-session"), []);
   assert.ok(Object.isFrozen(selectSessionTranscript(snapshot, "cto-session")));
+});
+
+test("Lead decision history is session-wide and excludes subordinate actor records", () => {
+  const snapshot = empty();
+  snapshot.questions.push({ id: "question-1", title: "Choose a direction", text: "Question details",
+    status: "open", options: [], recommendation: null, answer: null, revisionId: null });
+  snapshot.messages.push(
+    { id: "lead-decision", channel: "decisions", actorId: null, role: "assistant", text: "Lead decision session reply", createdAt: "now", runId: "execution-42" },
+    { id: "subordinate-decision", channel: "decisions", actorId: "cto-1", role: "assistant", text: "Subordinate run output", createdAt: "now", runId: "execution-42" },
+    { id: "lead-other-channel", channel: "main", actorId: null, role: "assistant", text: "Main conversation", createdAt: "now", runId: "execution-42" },
+  );
+  snapshot.actors.push({ id: "cto-1", role: "cto", label: "CTO", parentActorId: null,
+    agentId: null, sessionId: "cto-session", status: "running" });
+
+  const transcript = selectLeadDecisionTranscript(snapshot);
+  assert.deepEqual(transcript.map(message => message.id), ["lead-decision"]);
+  assert.equal(transcript[0]?.runId, "execution-42");
+  assert.equal(snapshot.questions[0]?.title, "Choose a direction");
 });

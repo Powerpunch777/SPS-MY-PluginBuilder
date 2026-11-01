@@ -25,6 +25,10 @@ export function selectSessionTranscript(snapshot: BuilderSnapshot, sessionId: st
   return readonlyTranscript(snapshot.messages.filter(message => message.actorId === actorId));
 }
 
+export function selectLeadDecisionTranscript(snapshot: BuilderSnapshot): readonly Readonly<BuilderMessage>[] {
+  return readonlyTranscript(snapshot.messages.filter(message => message.channel === "decisions" && message.actorId === null));
+}
+
 function readonlyTranscript(messages: readonly BuilderMessage[]): readonly Readonly<BuilderMessage>[] {
   return Object.freeze(messages
     .filter(message => message.role === "user" || message.role === "assistant")

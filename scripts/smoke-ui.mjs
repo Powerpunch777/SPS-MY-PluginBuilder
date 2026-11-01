@@ -53,6 +53,24 @@ try {
         await page.getByRole("heading", { level: 1, name: label, exact: true }).waitFor();
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       }
+      await page.goto(`${origin}?fixture=decisions`);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "미결정사항", exact: true }).click();
+      await page.getByRole("heading", { level: 2, name: "Regression question", exact: true }).waitFor();
+      await page.getByText("Selected question details remain visible.", { exact: true }).waitFor();
+      await page.getByText("Lead decision with unrelated run ID", { exact: true }).waitFor();
+      assert.equal(await page.getByText("SUBORDINATE RECORD MUST NOT APPEAR", { exact: true }).count(), 0);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "설계 문서", exact: true }).click();
+      await page.getByRole("heading", { level: 1, name: "설계 문서", exact: true }).waitFor();
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "미결정사항", exact: true }).click();
+      await page.getByText("Lead decision with unrelated run ID", { exact: true }).waitFor();
+      assert.equal(await page.getByText("SUBORDINATE RECORD MUST NOT APPEAR", { exact: true }).count(), 0);
+      await page.goto(`${origin}?fixture=decisions-no-question`);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "미결정사항", exact: true }).click();
+      await page.getByText("미결정사항이 없습니다", { exact: true }).waitFor();
+      await page.getByText("Lead decision with unrelated run ID", { exact: true }).waitFor();
+      assert.equal(await page.getByText("SUBORDINATE RECORD MUST NOT APPEAR", { exact: true }).count(), 0);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "Lead 대화", exact: true }).click();
+      await page.getByRole("heading", { level: 1, name: "Lead 대화", exact: true }).waitFor();
       await page.getByRole("button", { name: "상담 텍스트 가져오기", exact: true }).click();
       await page.getByRole("textbox", { name: "상담 텍스트", exact: true }).fill("브라우저 검증용 상담 원문");
       await page.getByRole("button", { name: "저장된 입력으로 전달", exact: true }).click();
@@ -126,6 +144,7 @@ try {
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-${name}.png`) });
       assert.deepEqual(errors, []);
       console.log(JSON.stringify({ builderUi: name, views: 6, pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
+        decisionsHistoryIgnoresRunId: true, decisionsHistoryExcludesSubordinateActors: true, decisionsHistorySurvivesMissingQuestion: true,
         fileFailurePreservesInput: true, fileSelectionDoesNotSave: true, delayedReadCannotOverwriteEdit: true,
         newerFileWins: true, unmountedReadIgnored: true,
         composerVisible: true, noOverflow: true, coreHostTested: false, realAi: false }));

@@ -8,6 +8,7 @@ import { Background, Controls, MarkerType, ReactFlow, type Edge, type Node } fro
 import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
+import { selectLeadDecisionTranscript } from "../domain/selectors.ts";
 import { assertConsultationRequestSize, decodeConsultationFile, MAX_CONSULTATION_REQUEST_BYTES } from "../domain/consultation-file.js";
 import type {
   BuilderActor, BuilderMessage, BuilderQuestion, BuilderShellProps, BuilderView, LeadChannel,
@@ -92,7 +93,7 @@ function ActivityRail({
   </aside>;
 }
 
-function MessageList({ messages, actor, actors = [] }: { messages: BuilderMessage[]; actor?: BuilderActor | null; actors?: BuilderActor[] }) {
+function MessageList({ messages, actor, actors = [] }: { messages: readonly BuilderMessage[]; actor?: BuilderActor | null; actors?: BuilderActor[] }) {
   if (!messages.length) return <EmptyState icon={actor ? Bot : MessageSquare}
     title={actor ? "이 세션에 연결된 대화가 없습니다" : "Lead 대화가 아직 없습니다"}
     detail={actor ? "이 Builder 상태에는 해당 세션의 메시지가 기록되지 않았습니다." : "Lead에게 메시지를 보내면 실제 대화 기록이 여기에 표시됩니다."} />;
@@ -248,11 +249,11 @@ function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
   const openQuestions = props.snapshot.questions.filter(question => question.status === "open");
   const [selectedId, setSelectedId] = useState<string | null>(openQuestions[0]?.id ?? props.snapshot.questions[0]?.id ?? null);
   const selected = props.snapshot.questions.find(question => question.id === selectedId) ?? openQuestions[0] ?? props.snapshot.questions[0] ?? null;
-  const messages = selected ? props.snapshot.messages.filter(message => message.channel === "decisions" && (!message.runId || message.runId === selected.id)) : [];
+  const messages = selectLeadDecisionTranscript(props.snapshot);
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
     <button aria-label="질문 목록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section className="builder-message-main">
-      <div className="builder-chat-context"><span>질문 전용 Lead 대화 · 결정은 명세 Revision과 연결됩니다.</span>
+      <div className="builder-chat-context"><span>질문 전용 Lead 대화 · Builder에 저장된 기록</span>
         <button aria-label="미결정사항 목록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">질문 목록</span></button>
       </div>
       {selected ? <><div className="builder-question-detail" style={{ padding: "12px 18px 0" }}>
@@ -260,8 +261,10 @@ function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
         {selected.options.map(option => <div className="builder-option" key={option.id}><strong>{option.label}</strong><small>{option.tradeoff}</small></div>)}
         {selected.recommendation && <div className="builder-recommendation">Lead 추천: {selected.recommendation}</div>}
         {selected.answer && <div className="builder-recommendation"><Check aria-hidden="true" size={14} /> 결정된 답변: {selected.answer}{selected.revisionId ? ` · ${selected.revisionId}` : ""}</div>}
-      </div><MessageList actors={props.snapshot.actors} messages={messages} /><MessageComposer channel="decisions" enabled={Boolean(props.onSendMessage) && props.snapshot.integrations.ai === "ready" && selected.status === "open"} onSend={props.onSendMessage} /></>
-        : <EmptyState icon={CircleHelp} title="미결정사항이 없습니다" detail="Lead가 사용자 결정을 요청하면 질문과 관련 대화가 여기에 표시됩니다." />}
+      </div></>
+        : <EmptyState icon={CircleHelp} title="미결정사항이 없습니다" detail="Lead가 사용자 결정을 요청하면 여기에 표시됩니다." />}
+      {(selected || messages.length > 0) && <MessageList actors={props.snapshot.actors} messages={messages} />}
+      {selected && <MessageComposer channel="decisions" enabled={Boolean(props.onSendMessage) && props.snapshot.integrations.ai === "ready" && selected.status === "open"} onSend={props.onSendMessage} />}
     </section>
     <ActivityRail onClose={onDrawerClose} onSelectQuestion={setSelectedId} props={props} selectedQuestion={selected} view="decisions" />
   </div>;
