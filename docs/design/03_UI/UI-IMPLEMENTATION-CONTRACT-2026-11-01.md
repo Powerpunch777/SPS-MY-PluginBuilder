@@ -87,6 +87,18 @@ Lead가 활성 Worker 목록에 섞이지 않는지와 부모별 배치·넘침�
 브라우저에서 확인한다. 채워진 조직은 개발 fixture이며 실제 AI 실행 증거가 아니다.
 정상 fixture는 기존 snapshot 검증의 끊어진 부모·순환 관계 거부 원칙을 따른다.
 
+조직도 runtime `0a935e38ece5aa7e5f1a7c28d4af6439ab0e8134`의 Node24 검사36/36·
+SDK 검사·desktop/mobile/embedded 브라우저 검사와 CI `41315905793`은 통과했다.
+Source `238c8aa2` / Core `f8ef641e` / SDK `61a929f6`의 source-only 실제 Host에서도
+빈 조직에 Actor를 지어내지 않는 화면과 중복 rail 없음, 기존 저장·격리·재시작을
+확인했다. Main 4개 정상 종료·출력 8개 종료·정확한 임시 데이터 정리 후 exit0이다.
+실제 Host가 로드한 UI index SHA-256은
+`c099f8b77d49656c5117bd5395fd0f44c2752f2759bee30a47a77d9a6bba4ba0`,
+SDK UI 디렉터리 fingerprint는
+`ff85f1babe1ba543bf19a5adcdfbc46d8b2ff86be92e22308dfe55c777d119a6`이다.
+채워진 조직·Worker 기록 전환은 개발 fixture 검증이며 실제 AI 실행·프로젝트별
+CTO 단일 세션·독립 Dev/QA 실행·두 PC·서명 설치본의 검증은 여전히 별개다.
+
 다만 설계 시각화의 나머지 모드·문서/조직도/시스템의 전체 v9 구성은 아직 남아 있다.
 위 결과는 서명 설치본·실제 AI 실행·두 PC 검증이 아니며, 이 문서나 초기 캡처를
 UI 전체 반영 완료 증거로 사용하지 않는다.
