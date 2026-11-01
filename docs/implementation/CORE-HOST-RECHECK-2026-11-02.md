@@ -2,6 +2,26 @@
 
 2026-11-02. Builder 기능 추가가 아닌, Core 변경 후의 실제 source 앱 회귀 기록이다.
 
+## Source 변경 동시 실행 차단 후 재검증
+
+- Builder 문서 HEAD `c97df1e`, runtime `1d5b884e20546af45486e1ad224685a3666fc8f2`.
+- Source `8a5227b0ee2d10592695e81f522b8cb76ad5e914`.
+- Core `d0b99baef5d8422ab0473ea4b1909e55ab6518b8` (runtime4c674b8).
+- 공개 SDK `61a929f6c783f78e5af603682de1543c7e24abc0`, Node24.22.1.
+
+`npm run test:core-host` exit0이었다. 별도 격리된 실제 Electron/Core에서 검정·중립
+UI와 v9 구조 자리, 중복 rail 없는 System·Lead Agent 선택/저장·원래 설정 보존,
+실제 Bridge·TXT 미리보기/명시적 저장·A/B 분리·중복 요청·재시작·Settings 복구를
+확인했다. 로드한 UI index SHA-256은
+`e6f37705ebdfa27f496c5a52641635b399f9dbf4e66ebb29fa25beb39dc23e5a`다.
+Main4개 exit0·출력8개 종료·오류0개·정확한 임시 데이터 정리를 확인했다.
+원시 로그 `artifacts/core-host-source-mutation-20261102.log`는 Git에서 제외한다.
+
+이는 Builder 일반 앱 회귀다. Core의 새 정리 경로는 별도 기술 검사이며 Builder
+UI로 호출하지 않았다. 모의 Identity이고 실제 Google/AI·Main Preview·전체 자손·
+서명 설치본·물리 두 PC나 전체 v15 완성 증거가 아니다. Lead3세션·프로젝트별 CTO
+단일 세션·독립 Dev/QA·공유 기억·GitHub Actions 납품은 계속 남아 있다.
+
 ## Source 대조 연결 후 재검증
 
 - Builder 문서 HEAD `ae1433f`, runtime `1d5b884e20546af45486e1ad224685a3666fc8f2`.
