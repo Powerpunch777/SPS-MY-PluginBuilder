@@ -11,6 +11,8 @@ UI는 [확정된 적용 기준](docs/design/03_UI/UI-IMPLEMENTATION-CONTRACT-202
 
 ## 개발 실행
 
+작업 분담·조사·검수 기준은 [개발 작업 지침](AGENTS.md)을 따릅니다.
+
 Node.js 22.18 이상과 npm이 필요합니다. 공개 SDK는 확인한 Git commit에 고정합니다.
 
 ```sh
