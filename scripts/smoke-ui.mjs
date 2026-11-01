@@ -86,8 +86,8 @@ try {
           const system = page.locator(".builder-system-page");
           await system.getByRole("heading", { level: 2, name: "연결 상태", exact: true }).waitFor();
           await system.getByRole("heading", { level: 2, name: "Runner 정보", exact: true }).waitFor();
-          await system.getByText("Runner 정보를 사용할 수 없습니다", { exact: true }).waitFor();
-          await system.getByText("현재 Workspace snapshot에는 Runner 인벤토리", { exact: false }).waitFor();
+          await system.getByText("Runner 정보가 아직 연결되지 않았습니다", { exact: true }).waitFor();
+          await system.getByText("접속 상태, 운영체제, 라벨, 최근 작업은 현재 화면에서 확인할 수 없습니다.", { exact: true }).waitFor();
           assert.equal(await page.getByRole("complementary", { name: "AI 작업 기록", exact: true }).count(), 0);
           assert.equal(await page.getByRole("button", { name: "작업 기록 열기", exact: true }).count(), 0);
           assert.equal(await page.getByRole("button", { name: "작업 기록 닫기", exact: true }).count(), 0);

@@ -171,10 +171,10 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   })()`);
   assert.ok(systemView.pageClass?.split(/\s+/).includes('builder-system-page'), "Actual System view must use the dedicated System layout.");
   assert.equal(systemView.pageHeading, 'Workspace 상태');
-  assert.match(systemView.scopeDescription, /현재 Workspace snapshot 기준/);
+  assert.equal(systemView.scopeDescription, '이 Workspace의 AI와 GitHub 연결 상태입니다.');
   assert.deepEqual(systemView.headings, ['연결 상태', 'Runner 정보']);
-  assert.equal(systemView.runnerUnavailableMessage, 'Runner 정보를 사용할 수 없습니다');
-  assert.match(systemView.runnerUnavailableDetail, /Workspace snapshot에는 Runner 인벤토리/);
+  assert.equal(systemView.runnerUnavailableMessage, 'Runner 정보가 아직 연결되지 않았습니다');
+  assert.equal(systemView.runnerUnavailableDetail, '접속 상태, 운영체제, 라벨, 최근 작업은 현재 화면에서 확인할 수 없습니다.');
   assert.equal(systemView.activityRailCount, 0, "System view must not render the AI activity rail.");
   assert.equal(systemView.activityOpenToggleCount, 0, "System view must not render the activity rail open toggle.");
   assert.equal(systemView.activityCloseToggleCount, 0, "System view must not render the activity rail close toggle.");

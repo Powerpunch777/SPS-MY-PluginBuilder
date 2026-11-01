@@ -386,14 +386,14 @@ function IntegrationCard({ title, state, detail, icon }: { title: string; state:
 function SystemView({ props }: { props: BuilderShellProps }) {
   const aiLabel = props.snapshot.integrations.ai === "ready" ? "사용 가능" : props.snapshot.integrations.ai === "unavailable" ? "사용 불가" : "설정되지 않음";
   const githubLabel = props.snapshot.integrations.github === "ready" ? "사용 가능" : props.snapshot.integrations.github === "unavailable" ? "사용 불가" : "설정되지 않음";
-  return <div className="builder-page builder-system-page"><div className="builder-page-intro"><h2>Workspace 상태</h2><p>연결 상태는 현재 Workspace snapshot 기준입니다. Runner 정보는 아직 제공되지 않습니다.</p></div>
+  return <div className="builder-page builder-system-page"><div className="builder-page-intro"><h2>Workspace 상태</h2><p>이 Workspace의 AI와 GitHub 연결 상태입니다.</p></div>
     <div className="builder-system-grid"><section className="builder-card"><h2>연결 상태</h2>
       <LeadAgentSettings options={props.leadAgents ?? null} loading={props.leadAgentsLoading ?? false}
         error={props.leadAgentsError ?? null} onSave={props.onSelectLeadAgent} />
       <IntegrationCard detail="메인 Lead 및 질문 대화 연결 상태" icon={Bot} state={aiLabel} title="AI 대화" />
       <IntegrationCard detail="저장소 및 Actions 연동 상태" icon={GitFork} state={githubLabel} title="GitHub" />
     </section><section className="builder-card"><h2>Runner 정보</h2>
-      <div className="builder-empty-card builder-runner-unavailable"><Server /><strong>Runner 정보를 사용할 수 없습니다</strong><p>현재 Workspace snapshot에는 Runner 인벤토리, 온라인 상태, OS, 라벨 또는 최근 작업이 포함되지 않습니다.</p></div>
+      <div className="builder-empty-card builder-runner-unavailable"><Server /><strong>Runner 정보가 아직 연결되지 않았습니다</strong><p>접속 상태, 운영체제, 라벨, 최근 작업은 현재 화면에서 확인할 수 없습니다.</p></div>
     </section></div>
   </div>;
 }
