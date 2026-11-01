@@ -82,6 +82,38 @@ try {
           await page.getByText("문서를 선택하면 저장된 내용이 표시됩니다.", { exact: true }).waitFor();
           assert.equal(await page.locator(".builder-doc-layout > .builder-card").count(), 2);
         }
+        if (label === "시스템") {
+          const system = page.locator(".builder-system-page");
+          await system.getByRole("heading", { level: 2, name: "연결 상태", exact: true }).waitFor();
+          await system.getByRole("heading", { level: 2, name: "Runner 정보", exact: true }).waitFor();
+          await system.getByText("Runner 정보를 사용할 수 없습니다", { exact: true }).waitFor();
+          await system.getByText("현재 Workspace snapshot에는 Runner 인벤토리", { exact: false }).waitFor();
+          assert.equal(await page.getByRole("complementary", { name: "AI 작업 기록", exact: true }).count(), 0);
+          assert.equal(await page.getByRole("button", { name: "작업 기록 열기", exact: true }).count(), 0);
+          assert.equal(await page.getByRole("button", { name: "작업 기록 닫기", exact: true }).count(), 0);
+          const leadAgent = system.getByRole("combobox", { name: "Lead Agent", exact: true });
+          assert.equal(await leadAgent.count(), 1, "The Lead Agent selection control remains present.");
+          assert.equal(await leadAgent.isDisabled(), true, "The development preview has no Agent options, so selection remains unavailable.");
+          assert.equal(await system.getByRole("button", { name: "Lead Agent 저장", exact: true }).isDisabled(), true);
+          const layout = await system.evaluate(element => ({
+            page: element.getBoundingClientRect().toJSON(),
+            main: element.closest(".builder-main").getBoundingClientRect().toJSON(),
+            columns: getComputedStyle(element.querySelector(".builder-system-grid")).gridTemplateColumns.split(" ").length,
+          }));
+          assert.ok(Math.abs(layout.page.x - layout.main.x) < 1, "System panels span the available main view width.");
+          if (name === "desktop") assert.equal(layout.columns, 2, "Desktop keeps the v9 side-by-side panels.");
+          if (name === "mobile") assert.equal(layout.columns, 1, "Mobile stacks the System panels.");
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+          await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-system-${name}.png`), fullPage: true });
+          if (name === "desktop") {
+            await page.locator(".builder-shell").evaluate(element => { element.style.width = "900px"; });
+            assert.equal(await page.getByRole("button", { name: "작업 기록 열기", exact: true }).count(), 0);
+            assert.equal(await system.evaluate(element => element.scrollWidth > element.clientWidth), false);
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+            await page.screenshot({ path: path.resolve("artifacts/screenshots/builder-system-embedded.png"), fullPage: true });
+            await page.locator(".builder-shell").evaluate(element => { element.style.width = ""; });
+          }
+        }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       }
       await page.goto(`${origin}?fixture=documents`);
@@ -295,7 +327,9 @@ try {
         decisionsHistoryIgnoresRunId: true, decisionsHistoryExcludesSubordinateActors: true, decisionsHistorySurvivesMissingQuestion: true,
         fileFailurePreservesInput: true, fileSelectionDoesNotSave: true, delayedReadCannotOverwriteEdit: true,
         newerFileWins: true, unmountedReadIgnored: true,
-        composerVisible: true, noOverflow: true, coreHostTested: false, realAi: false }));
+        composerVisible: true, systemNoDuplicateActivityRail: true, systemRunnerUnavailable: true,
+        systemLeadAgentControlPreserved: true, systemDesktopMobileEmbedded: true,
+        noOverflow: true, coreHostTested: false, realAi: false }));
     } catch (error) {
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-failure-${name}.png`), fullPage: true }).catch(() => {});
       throw error;

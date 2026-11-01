@@ -149,6 +149,40 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.equal(await workspace.evaluate(`Boolean(document.querySelector('.builder-activity-rail'))`), false);
   assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-org-card').length`), 0);
   await click(workspace, '.builder-nav [aria-label="시스템"]', "Open Builder Agent settings");
+  const systemView = await workspace.evaluate(`(() => {
+    const page=document.querySelector('.builder-system-page');
+    const headings=[...(page?.querySelectorAll('.builder-card > h2')||[])].map(node=>node.textContent.trim());
+    const select=page?.querySelector('select[aria-label="Lead Agent"]');
+    const save=page?.querySelector('section[aria-labelledby="lead-agent-settings-title"] button[type="submit"]');
+    return {pageClass:page?.className||null,
+      pageHeading:page?.querySelector('.builder-page-intro h2')?.textContent.trim()||null,
+      scopeDescription:page?.querySelector('.builder-page-intro p')?.textContent.trim()||null,
+      headings,runnerUnavailableMessage:page?.querySelector('.builder-runner-unavailable strong')?.textContent.trim()||null,
+      runnerUnavailableDetail:page?.querySelector('.builder-runner-unavailable p')?.textContent.trim()||null,
+      activityRailCount:document.querySelectorAll('.builder-activity-rail').length,
+      activityOpenToggleCount:document.querySelectorAll('button[aria-label="작업 기록 열기"]').length,
+      activityCloseToggleCount:document.querySelectorAll('button[aria-label="작업 기록 닫기"]').length,
+      leadSelectCount:page?.querySelectorAll('select[aria-label="Lead Agent"]').length||0,
+      leadSelectVisible:Boolean(select?.getClientRects().length),
+      leadSaveCount:page?.querySelectorAll('section[aria-labelledby="lead-agent-settings-title"] button[type="submit"]').length||0,
+      leadSaveText:save?.textContent.trim()||null,
+      leadSaveVisible:Boolean(save?.getClientRects().length),
+      leadSaveDisabled:save?.disabled??null};
+  })()`);
+  assert.ok(systemView.pageClass?.split(/\s+/).includes('builder-system-page'), "Actual System view must use the dedicated System layout.");
+  assert.equal(systemView.pageHeading, 'Workspace 상태');
+  assert.match(systemView.scopeDescription, /현재 Workspace snapshot 기준/);
+  assert.deepEqual(systemView.headings, ['연결 상태', 'Runner 정보']);
+  assert.equal(systemView.runnerUnavailableMessage, 'Runner 정보를 사용할 수 없습니다');
+  assert.match(systemView.runnerUnavailableDetail, /Workspace snapshot에는 Runner 인벤토리/);
+  assert.equal(systemView.activityRailCount, 0, "System view must not render the AI activity rail.");
+  assert.equal(systemView.activityOpenToggleCount, 0, "System view must not render the activity rail open toggle.");
+  assert.equal(systemView.activityCloseToggleCount, 0, "System view must not render the activity rail close toggle.");
+  assert.equal(systemView.leadSelectCount, 1);
+  assert.equal(systemView.leadSelectVisible, true);
+  assert.equal(systemView.leadSaveCount, 1);
+  assert.equal(systemView.leadSaveText, 'Lead Agent 저장');
+  assert.equal(systemView.leadSaveVisible, true);
   await eventually(() => workspace.evaluate(`({disabled:document.querySelector('select[aria-label="Lead Agent"]')?.disabled,
     ids:[...(document.querySelector('select[aria-label="Lead Agent"]')?.options||[])].map(option=>option.value)})`),
     value => value.disabled === false && value.ids.includes(leadAgent.id), "real Workspace Agent options");
@@ -156,6 +190,12 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   await workspace.evaluate(`(() => { const select=document.querySelector('select[aria-label="Lead Agent"]');
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(leadAgent.id)});
     select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  const selectedLeadControl = await eventually(() => workspace.evaluate(`(() => ({
+    value:document.querySelector('.builder-system-page select[aria-label="Lead Agent"]')?.value||null,
+    saveDisabled:document.querySelector('.builder-system-page section[aria-labelledby="lead-agent-settings-title"] button[type="submit"]')?.disabled??null}))()`),
+    value => value.value === leadAgent.id && value.saveDisabled === false, "selected Lead Agent and enabled System save control");
+  assert.equal(selectedLeadControl.value, leadAgent.id);
+  assert.equal(selectedLeadControl.saveDisabled, false);
   await click(workspace, 'section[aria-labelledby="lead-agent-settings-title"] button', "Save Lead binding without executing AI");
   const savedLead = await eventually(() => leadOptions(company.id), value => value.selectedAgentId === leadAgent.id, "saved Lead Agent");
   assert.equal(savedLead.revision, 1);
@@ -187,6 +227,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(await data(company.id), saved, "Host restart lost Builder state.");
   assert.deepEqual((await data(secondCompany.id)).messages, []);
   assert.deepEqual(await leadOptions(company.id), savedLead, "Host restart lost the separate Lead binding.");
+  assert.deepEqual((await request(`/api/agents/${leadAgent.id}`)).adapterConfig, leadAgent.adapterConfig,
+    "Host restart or Lead binding changed the original Agent configuration.");
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes(${JSON.stringify(text)})`), Boolean, "restarted Builder UI");
   await activate(company.id, false);
   await activate(company.id, true);
@@ -199,5 +241,10 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
+    systemView: { pageHeading: systemView.pageHeading, scopeDescription: systemView.scopeDescription,
+      runnerMessage: systemView.runnerUnavailableMessage, activityRailCount: systemView.activityRailCount,
+      activityOpenToggleCount: systemView.activityOpenToggleCount, activityCloseToggleCount: systemView.activityCloseToggleCount,
+      leadSelectCount: systemView.leadSelectCount, leadSaveCount: systemView.leadSaveCount,
+      savedAgentId: savedLead.selectedAgentId },
     cleanupQualificationPending: true }));
 }

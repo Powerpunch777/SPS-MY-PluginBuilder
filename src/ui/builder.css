@@ -161,6 +161,7 @@
 .builder-status-strip.is-error { color: var(--builder-danger); background: #302222; }
 .builder-status-strip svg { width: 15px; height: 15px; }
 .builder-page { max-width: 1180px; margin: 0 auto; padding: 22px; }
+.builder-system-page { width: 100%; max-width: none; }
 .builder-page-intro { margin-bottom: 16px; }
 .builder-page-intro h2 { margin: 0; font-size: 16px; }
 .builder-page-intro p { margin: 4px 0 0; color: var(--builder-muted); font-size: 12px; }
@@ -171,6 +172,7 @@
 .builder-empty-card svg { width: 22px; height: 22px; margin: 0 auto 8px; }
 .builder-empty-card strong { color: var(--builder-text); font-size: 12px; }
 .builder-empty-card p { max-width: 400px; margin: 4px auto 0; font-size: 11px; }
+.builder-runner-unavailable { min-height: 170px; }
 .builder-doc-layout { display: grid; grid-template-columns: minmax(230px, .82fr) minmax(0, 1.5fr); gap: 12px; align-items: start; }
 .builder-doc-page { width: 100%; }
 .builder-record-list { display: grid; }
