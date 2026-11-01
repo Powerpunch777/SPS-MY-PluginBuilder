@@ -28,6 +28,23 @@ function DevelopmentPreview() {
       ];
       return initial;
     }
+    if (fixture === "organization") {
+      initial.actors.push(
+        { id: "org-lead", role: "lead", label: "Fixture Lead", parentActorId: null,
+          agentId: null, sessionId: null, status: "running" },
+        { id: "org-cto-a", role: "cto", label: "Fixture CTO A", parentActorId: "org-lead",
+          agentId: "fixture-agent-cto-a", sessionId: "fixture-session-cto-a", status: "running" },
+        { id: "org-cto-b", role: "cto", label: "Fixture CTO B", parentActorId: "org-lead",
+          agentId: "fixture-agent-cto-b", sessionId: "fixture-session-cto-b", status: "waiting" },
+        { id: "org-dev", role: "development", label: "Fixture Development Worker", parentActorId: "org-cto-a",
+          agentId: "fixture-agent-dev", sessionId: "fixture-session-dev", status: "running" },
+        { id: "org-qa", role: "qa", label: "Fixture QA Worker", parentActorId: "org-cto-a",
+          agentId: "fixture-agent-qa", sessionId: "fixture-session-qa", status: "idle" },
+      );
+      initial.messages.push({ id: "org-dev-record", channel: "main", actorId: "org-dev", role: "assistant",
+        text: "Fixture Development Worker read-only record", createdAt: "2026-11-01T00:00:00.000Z", runId: null });
+      return initial;
+    }
     if (fixture !== "decisions" && fixture !== "decisions-no-question") return initial;
     if (fixture === "decisions") initial.questions.push({ id: "question-fixture", title: "Regression question", text: "Selected question details remain visible.",
       status: "open", options: [], recommendation: null, answer: null, revisionId: null });

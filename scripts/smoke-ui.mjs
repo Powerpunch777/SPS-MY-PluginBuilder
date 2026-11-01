@@ -140,6 +140,64 @@ try {
       await page.getByText('Fixture CTO read-only record', { exact: true }).waitFor();
       await page.getByText('이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.', { exact: true }).waitFor();
       assert.equal(await page.getByRole('textbox', { name: 'Lead에게 메시지', exact: true }).count(), 0);
+      await page.goto(`${origin}?fixture=organization`);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "조직도", exact: true }).click();
+      const organization = page.locator(".builder-org-tree");
+      for (const label of ["Fixture Lead", "Fixture CTO A", "Fixture CTO B", "Fixture Development Worker", "Fixture QA Worker"])
+        await organization.getByRole("button", { name: new RegExp(label), exact: false }).waitFor();
+      assert.equal(await page.getByRole('complementary', { name: 'AI 작업 기록', exact: true }).count(), 0);
+      const hierarchy = await organization.evaluate(root => {
+        const rows = {};
+        for (const card of root.querySelectorAll(".builder-org-card")) {
+          const wrapper = card.parentElement;
+          const childRow = wrapper?.parentElement?.closest(".builder-org-children");
+          const parentCard = childRow?.parentElement?.querySelector(":scope > .builder-org-card");
+          const siblingCards = childRow ? [...childRow.querySelectorAll(":scope > div > .builder-org-card")] : [card];
+          const rect = card.getBoundingClientRect();
+          rows[card.querySelector("strong")?.textContent ?? ""] = {
+            parent: parentCard?.querySelector("strong")?.textContent ?? null,
+            siblings: siblingCards.map(sibling => sibling.querySelector("strong")?.textContent),
+            x: rect.x, y: rect.y,
+          };
+        }
+        return rows;
+      });
+      assert.equal(hierarchy["Fixture CTO A"].parent, "Fixture Lead");
+      assert.equal(hierarchy["Fixture CTO B"].parent, "Fixture Lead");
+      assert.deepEqual(hierarchy["Fixture CTO A"].siblings, ["Fixture CTO A", "Fixture CTO B"]);
+      assert.equal(hierarchy["Fixture Development Worker"].parent, "Fixture CTO A");
+      assert.equal(hierarchy["Fixture QA Worker"].parent, "Fixture CTO A");
+      assert.deepEqual(hierarchy["Fixture Development Worker"].siblings, ["Fixture Development Worker", "Fixture QA Worker"]);
+      assert.ok(hierarchy["Fixture Lead"].y < hierarchy["Fixture CTO A"].y);
+      assert.ok(hierarchy["Fixture Lead"].y < hierarchy["Fixture CTO B"].y);
+      assert.ok(hierarchy["Fixture CTO A"].y < hierarchy["Fixture Development Worker"].y);
+      assert.ok(hierarchy["Fixture CTO A"].y < hierarchy["Fixture QA Worker"].y);
+      if (name === "desktop") {
+        assert.ok(Math.abs(hierarchy["Fixture CTO A"].y - hierarchy["Fixture CTO B"].y) < 1, "Sibling CTOs share the v9 row on desktop.");
+        assert.ok(hierarchy["Fixture Development Worker"].y > hierarchy["Fixture CTO A"].y);
+        assert.ok(hierarchy["Fixture QA Worker"].y > hierarchy["Fixture CTO A"].y);
+        assert.notEqual(hierarchy["Fixture CTO A"].x, hierarchy["Fixture CTO B"].x);
+      }
+      assert.equal(await page.locator(".builder-actor-list").getByText("Fixture Lead", { exact: true }).count(), 0,
+        "Lead is visible in the organization but is not listed as a subordinate active AI.");
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      assert.ok(await organization.evaluate(element => element.scrollWidth <= element.clientWidth), "Organization rows must wrap without horizontal overflow.");
+      assert.equal(await organization.getByRole("button", { name: /실행하기|실행 명령|세션 시작|세션 생성/ }).count(), 0,
+        "Organization cards navigate to records and do not offer execution actions.");
+      await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-organization-${name}.png`), fullPage: true });
+      await organization.getByRole("button", { name: "Fixture Lead", exact: false }).click();
+      await page.getByRole("heading", { level: 1, name: "Lead와 대화", exact: true }).waitFor();
+      assert.equal(await page.getByText("읽기 전용 세션", { exact: false }).count(), 0,
+        "Selecting Lead returns to Lead chat instead of a subordinate read-only session.");
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "조직도", exact: true }).click();
+      await page.locator(".builder-org-tree").getByRole("button", { name: "Fixture Development Worker", exact: false }).click();
+      await page.getByRole("heading", { level: 1, name: "Fixture Development Worker", exact: true }).waitFor();
+      await page.getByText("Fixture Development Worker read-only record", { exact: true }).waitFor();
+      await page.getByText("이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.", { exact: true }).waitFor();
+      assert.equal(await page.getByRole("textbox", { name: "Lead에게 메시지", exact: true }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: /실행하기|실행 명령|세션 시작|세션 생성/ }).count(), 0,
+        "Opening an Actor record must not imply that a session can be executed.");
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       await page.goto(`${origin}?fixture=decisions`);
       await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "미결정사항", exact: true }).click();
       await page.getByRole("heading", { level: 2, name: "Regression question", exact: true }).waitFor();
@@ -232,6 +290,7 @@ try {
       assert.deepEqual(errors, []);
       console.log(JSON.stringify({ builderUi: name, views: 6, pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
         selectedGraphDetails: true, graphKeyboardSelection: true, graphMissingOwnerAndRelations: true, graphOwnerReadOnly: true,
+        organizationParentChildLayout: true, organizationLeadNotListedAsWorker: true, organizationActorReadOnly: true,
         documentPreviewSelection: true, documentRemovalRefresh: true, emptyDocumentPanes: true,
         decisionsHistoryIgnoresRunId: true, decisionsHistoryExcludesSubordinateActors: true, decisionsHistorySurvivesMissingQuestion: true,
         fileFailurePreservesInput: true, fileSelectionDoesNotSave: true, delayedReadCannotOverwriteEdit: true,

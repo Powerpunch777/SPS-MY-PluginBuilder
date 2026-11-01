@@ -323,9 +323,9 @@ function OrganizationView({ props, onActor }: { props: BuilderShellProps; onActo
     <button className={`builder-org-card${actor.role === "lead" ? " is-lead" : ""}`} onClick={() => onActor(actor.id)} type="button">
       <span className="builder-org-avatar">{actorInitial(actor)}</span><span><strong>{actor.label}</strong><small>{ACTOR_STATUS[actor.status]}{actor.agentId ? ` · ${actor.agentId}` : ""}</small></span>
     </button>
-    {(childrenByParent.get(actor.id)?.length ?? 0) > 0 && <div className="builder-org-children">{childrenByParent.get(actor.id)?.map(child => renderActor(child, depth + 1))}</div>}
+    {(childrenByParent.get(actor.id)?.length ?? 0) > 0 && <div className={`builder-org-children${depth === 0 ? " is-top-level" : ""}`}>{childrenByParent.get(actor.id)?.map(child => renderActor(child, depth + 1))}</div>}
   </div>;
-  return <div className="builder-page"><div className="builder-page-intro"><h2>현재 Workspace Actor</h2><p>저장된 부모 관계와 세션 상태를 표시합니다. Lead는 활성 작업 목록에는 포함하지 않습니다.</p></div>
+  return <div className="builder-page builder-org-page"><div className="builder-page-intro"><h2>현재 Workspace Actor</h2><p>저장된 부모 관계와 세션 상태를 표시합니다. Lead는 활성 작업 목록에는 포함하지 않습니다.</p></div>
     {roots.length ? <div className="builder-org-tree">{roots.map(actor => renderActor(actor))}</div>
       : <div className="builder-card builder-empty-card"><Network /><strong>조직 정보가 없습니다</strong><p>이 Workspace의 Actor와 관계가 아직 저장되지 않았습니다.</p></div>}</div>;
 }
@@ -515,14 +515,14 @@ export function BuilderShell(props: BuilderShellProps) {
     {view === "lead" && !activeActor && <button aria-label="Lead HTML 뷰어 열기" className="builder-icon-button" disabled={!props.onOpenHtmlPreview}
       onClick={props.onOpenHtmlPreview} title={props.onOpenHtmlPreview ? "Lead HTML 뷰어 열기" : "HTML 뷰어가 아직 연결되지 않았습니다."} type="button"><FileText /><span className="builder-refresh-label">HTML 뷰어</span></button>}
     {view === "architecture" && !activeActor && <button className="builder-quiet-button" onClick={() => selectView("lead")} type="button"><MessageSquare />Lead와 설계 논의</button>}
-    {view !== "lead" && view !== "decisions" && view !== "architecture" && view !== "documents" && <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={() => setDrawerOpen(value => !value)} type="button"><PanelRight /></button>}
+    {view === "system" && !activeActor && <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={() => setDrawerOpen(value => !value)} type="button"><PanelRight /></button>}
   </div>;
 
   let content: ReactNode;
   if (activeActor) content = <ActorTranscriptView actions={headerActions} actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
   else if (view === "lead") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
   else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
-  else if (view === "organization") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><OrganizationView onActor={openActor} props={props} /></WithActivityRail>;
+  else if (view === "organization") content = <OrganizationView onActor={openActor} props={props} />;
   else if (view === "documents") content = <DocumentsView props={props} />;
   else if (view === "decisions") content = <DecisionsView drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} props={props} />;
   else content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><SystemView props={props} /></WithActivityRail>;

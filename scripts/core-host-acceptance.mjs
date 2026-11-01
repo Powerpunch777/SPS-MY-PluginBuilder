@@ -142,6 +142,12 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(documentView.headings, ['프로젝트 파일', '미리보기']);
   assert.equal(documentView.duplicatedRail, false);
   assert.equal(documentView.overflow, false);
+  assert.deepEqual((await data(company.id)).actors, []);
+  await click(workspace, '.builder-nav [aria-label="조직도"]', "Open saved Builder organization");
+  await eventually(() => workspace.evaluate(`document.querySelector('.builder-empty-card')?.textContent.includes('조직 정보가 없습니다')`),
+    Boolean, "actual empty Builder organization without fabricated Actors");
+  assert.equal(await workspace.evaluate(`Boolean(document.querySelector('.builder-activity-rail'))`), false);
+  assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-org-card').length`), 0);
   await click(workspace, '.builder-nav [aria-label="시스템"]', "Open Builder Agent settings");
   await eventually(() => workspace.evaluate(`({disabled:document.querySelector('select[aria-label="Lead Agent"]')?.disabled,
     ids:[...(document.querySelector('select[aria-label="Lead Agent"]')?.options||[])].map(option=>option.value)})`),
@@ -192,6 +198,6 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
-    uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true,
+    uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
     cleanupQualificationPending: true }));
 }

@@ -193,7 +193,10 @@
 .builder-option strong { display: block; font-size: 11px; }
 .builder-option small { display: block; margin-top: 3px; color: var(--builder-muted); font-size: 10px; }
 .builder-recommendation { margin-top: 10px; border-left: 3px solid var(--builder-accent); padding: 8px 10px; background: var(--builder-accent-soft); font-size: 11px; }
-.builder-org-tree { display: grid; gap: 10px; }
+.builder-org-tree { display: grid; gap: 22px; }
+.builder-org-page { width: 100%; }
+.builder-org-tree > div { min-width: 0; text-align: center; }
+.builder-org-tree > div > .builder-org-card { width: min(100%, 320px); margin: 0 auto; }
 .builder-org-card { width: 100%; display: flex; align-items: center; gap: 10px; border: 1px solid var(--builder-border); border-radius: 6px; padding: 10px; background: var(--builder-panel); text-align: left; cursor: pointer; }
 .builder-org-card:hover { border-color: #555; }
 .builder-org-card.is-lead { border-color: #555; background: #2b2b2b; }
@@ -201,6 +204,8 @@
 .builder-org-card small { display: block; color: var(--builder-muted); font-size: 10px; }
 .builder-org-avatar { display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; border-radius: 6px; background: var(--builder-panel-soft); color: var(--builder-accent); font-size: 10px; font-weight: 750; }
 .builder-org-children { display: grid; gap: 7px; margin-left: 18px; border-left: 1px solid var(--builder-border); padding-left: 13px; }
+.builder-org-children.is-top-level { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 13px; margin: 16px 0 0; border-top: 1px solid var(--builder-border); border-left: 0; padding: 16px 0 0; }
+.builder-org-children.is-top-level > div { flex: 1 1 190px; min-width: 0; max-width: 280px; }
 .builder-system-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
 .builder-integration { display: flex; align-items: flex-start; gap: 10px; border-bottom: 1px solid var(--builder-border); padding: 11px 0; }
 .builder-integration:last-child { border-bottom: 0; }
