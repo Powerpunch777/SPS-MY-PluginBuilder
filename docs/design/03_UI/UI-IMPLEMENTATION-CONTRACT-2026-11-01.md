@@ -100,6 +100,13 @@ SDK UI 디렉터리 fingerprint는
 CTO 단일 세션·독립 Dev/QA 실행·두 PC·서명 설치본의 검증은 여전히 별개다.
 
 다만 설계 시각화의 나머지 모드·문서/조직도/시스템의 전체 v9 구성은 아직 남아 있다.
+시스템 화면의 후속 배치는 대화용 작업 패널과 토글을 제거하고 연결 상태/Runner
+영역을 본문 폭에 맞췄다. Workspace 연결 상태와 미연결 Runner 안내를 구분하며
+기존 Lead Agent 선택·저장을 유지한다. 개발 용어 대신 쉬운 한국어로 안내한다.
+Node24 검사36/36·SDK 검사·desktop/mobile/embedded 브라우저 및 실제 source Host의
+구체적인 DOM·저장·재시작 검증은
+[시스템 화면 검증 기록](../../implementation/SYSTEM-UI-VALIDATION-2026-11-02.md)을 따른다.
+Runner 인벤토리·접속 상태·실행이나 System 전체 v9 기능이 완성된 것은 아니다.
 위 결과는 서명 설치본·실제 AI 실행·두 PC 검증이 아니며, 이 문서나 초기 캡처를
 UI 전체 반영 완료 증거로 사용하지 않는다.
 
