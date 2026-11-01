@@ -57,6 +57,9 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   const leadOptions = companyId => request(`/api/plugins/${plugin.id}/data/builder.lead-agents`, {
     method: "POST", body: { companyId, params: {} },
   }).then(value => value.data);
+  const leadSessions = companyId => request(`/api/plugins/${plugin.id}/data/builder.lead-sessions`, {
+    method: "POST", body: { companyId, params: {} },
+  }).then(value => value.data);
   const initialLeadOptions = await leadOptions(company.id);
   assert.ok(initialLeadOptions.agents.some(agent => agent.id === leadAgent.id), "Existing Workspace Agent is absent from Builder options.");
   assert.deepEqual((await data(company.id)).messages, []);
@@ -207,6 +210,26 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     .then(r=>({status:r.status}))`, true);
   assert.ok(foreignSelection.status >= 400, "An Agent from another Workspace cannot become this Builder Lead.");
   assert.equal((await leadOptions(company.id)).selectedAgentId, leadAgent.id);
+  assert.deepEqual(await request(`/api/agents/${leadAgent.id}/task-sessions`), [], "Agent selection alone must not create sessions.");
+  await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.disabled === false`),
+    Boolean, "explicit Lead session preparation");
+  await click(workspace, 'button[aria-label="Lead 세션 준비 및 확인"]', "Prepare three Lead sessions without executing AI");
+  const preparedSessions = await eventually(() => leadSessions(company.id),
+    value => Object.values(value.sessions).every(id => typeof id === "string"), "three persisted Lead session IDs");
+  assert.equal(new Set(Object.values(preparedSessions.sessions)).size, 3);
+  const storedSessions = await request(`/api/agents/${leadAgent.id}/task-sessions`);
+  assert.equal(storedSessions.length, 3);
+  assert.deepEqual(storedSessions.map(row => row.id).sort(), Object.values(preparedSessions.sessions).sort());
+  assert.ok(storedSessions.every(row => row.lastRunId === null), "Preparing sessions must not start Agent runs.");
+  assert.deepEqual((await leadSessions(secondCompany.id)).sessions, { main: null, "cto-inbox": null, decisions: null });
+  await eventually(() => workspace.evaluate(`({disabled:document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.disabled,
+    text:document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.textContent})`),
+    value => value.disabled === false && value.text === "Lead 세션 확인", "prepared session check button");
+  await click(workspace, 'button[aria-label="Lead 세션 준비 및 확인"]', "Recheck existing session IDs, not duplicate them");
+  await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.disabled === false`),
+    Boolean, "session recheck complete");
+  assert.deepEqual(await leadSessions(company.id), preparedSessions);
+  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
   assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]').disabled`), true);
@@ -227,6 +250,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(await data(company.id), saved, "Host restart lost Builder state.");
   assert.deepEqual((await data(secondCompany.id)).messages, []);
   assert.deepEqual(await leadOptions(company.id), savedLead, "Host restart lost the separate Lead binding.");
+  assert.deepEqual(await leadSessions(company.id), preparedSessions, "Host restart lost Lead sessions.");
+  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
   assert.deepEqual((await request(`/api/agents/${leadAgent.id}`)).adapterConfig, leadAgent.adapterConfig,
     "Host restart or Lead binding changed the original Agent configuration.");
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes(${JSON.stringify(text)})`), Boolean, "restarted Builder UI");
@@ -239,6 +264,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     workspaceIsolation: true, explicitShell: true, idempotentInput: true, hostRestart: true,
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
+    leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
     systemView: { pageHeading: systemView.pageHeading, scopeDescription: systemView.scopeDescription,

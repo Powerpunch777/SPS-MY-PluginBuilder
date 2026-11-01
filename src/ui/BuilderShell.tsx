@@ -389,7 +389,9 @@ function SystemView({ props }: { props: BuilderShellProps }) {
   return <div className="builder-page builder-system-page"><div className="builder-page-intro"><h2>Workspace 상태</h2><p>이 Workspace의 AI와 GitHub 연결 상태입니다.</p></div>
     <div className="builder-system-grid"><section className="builder-card"><h2>연결 상태</h2>
       <LeadAgentSettings options={props.leadAgents ?? null} loading={props.leadAgentsLoading ?? false}
-        error={props.leadAgentsError ?? null} onSave={props.onSelectLeadAgent} />
+        error={props.leadAgentsError ?? null} onSave={props.onSelectLeadAgent}
+        sessions={props.leadSessions} sessionsLoading={props.leadSessionsLoading} sessionsError={props.leadSessionsError}
+        onPrepare={props.onPrepareLeadSessions} />
       <IntegrationCard detail="메인 Lead 및 질문 대화 연결 상태" icon={Bot} state={aiLabel} title="AI 대화" />
       <IntegrationCard detail="저장소 및 Actions 연동 상태" icon={GitFork} state={githubLabel} title="GitHub" />
     </section><section className="builder-card"><h2>Runner 정보</h2>

@@ -7,14 +7,15 @@
   },
   "runtime": {
     "manifestEntry": "dist/manifest.js",
-    "manifestSha256": "05ea0e0ecb5b2dba837ad03156bdf94e39ec84df0b3163f8e3a5cf008a238db9"
+    "manifestSha256": "44bea0eca9778d7a635f1c117ca800f6a31b4583403307656aed946485a2e6d0"
   },
   "capabilities": [
+    "agent.sessions.create",
     "agents.read",
     "plugin.state.read",
     "plugin.state.write",
     "ui.page.register",
     "ui.workspaceShell.provide"
   ],
-  "permissionsDigest": "d96f0455302a0a28908cfc1ac26ece16796c8074bd911fc0a6002914381ff8ac"
+  "permissionsDigest": "b1dc0ed1e1ccdacc4810cc998564df3aed680ed592bb94b7176f12d01dc1f578"
 }

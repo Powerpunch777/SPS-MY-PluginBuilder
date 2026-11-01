@@ -10,6 +10,13 @@ export interface BuilderLeadAgentOptions {
   agents: Array<{ id: string; name: string; status: string }>;
 }
 
+export interface BuilderLeadSessions {
+  workspaceId: string;
+  selectionRevision: number;
+  agentId: string | null;
+  sessions: Record<LeadChannel, string | null>;
+}
+
 export interface BuilderActor {
   id: string;
   role: BuilderRole;
@@ -106,4 +113,8 @@ export interface BuilderShellProps {
   leadAgentsLoading?: boolean;
   leadAgentsError?: string | null;
   onSelectLeadAgent?(agentId: string | null, expectedRevision: number): Promise<void>;
+  leadSessions?: BuilderLeadSessions | null;
+  leadSessionsLoading?: boolean;
+  leadSessionsError?: string | null;
+  onPrepareLeadSessions?(agentId: string, expectedRevision: number): Promise<void>;
 }

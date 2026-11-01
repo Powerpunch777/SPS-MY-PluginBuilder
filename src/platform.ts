@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { defineSpsPlatformContract } from "@sonparkserver/plugin-sdk/platform";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
-import type { BuilderSnapshot } from "./domain/model.ts";
+import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
 import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agent.ts";
+import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -111,6 +112,74 @@ export async function selectLeadAgent(companyId: string, params: Record<string, 
   });
 }
 
+async function leadSessionsFor(companyId: string, binding: Awaited<ReturnType<typeof readLeadAgentBinding>>,
+  platform: SpsPlatformInvocationContext): Promise<BuilderLeadSessions> {
+  const stored = binding.selectedAgentId === null ? null : await platform.state.get({
+    ...key(companyId), stateKey: `lead-sessions.v1.${binding.revision}`,
+  });
+  const value = parseLeadSessions(stored ?? { workspaceId: companyId, selectionRevision: binding.revision,
+    agentId: binding.selectedAgentId, sessions: { main: null, "cto-inbox": null, decisions: null } }, companyId);
+  if (value.selectionRevision !== binding.revision || value.agentId !== binding.selectedAgentId) {
+    throw new Error("Lead session selection does not match the saved Agent.");
+  }
+  return value;
+}
+
+async function assertLeadSelection(companyId: string, binding: Awaited<ReturnType<typeof readLeadAgentBinding>>,
+  platform: SpsPlatformInvocationContext) {
+  const current = await readLeadAgentBinding(companyId, platform);
+  if (current.revision !== binding.revision || current.selectedAgentId !== binding.selectedAgentId) {
+    throw new Error("Lead Agent selection changed. Refresh before preparing sessions.");
+  }
+}
+
+export async function readLeadSessions(companyId: string, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  const binding = await readLeadAgentBinding(companyId, platform);
+  const result = await leadSessionsFor(companyId, binding, platform);
+  await assertLeadSelection(companyId, binding, platform);
+  return result;
+}
+
+export async function prepareLeadSessions(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  if (Object.keys(params).sort().join(",") !== "agentId,expectedRevision"
+    || typeof params.agentId !== "string" || !UUID.test(params.agentId)
+    || !Number.isSafeInteger(params.expectedRevision) || (params.expectedRevision as number) < 0) {
+    throw new TypeError("Lead session preparation requires the displayed Agent selection.");
+  }
+  return serialize(companyId, async () => {
+    const binding = await readLeadAgentBinding(companyId, platform);
+    if (binding.revision !== params.expectedRevision || binding.selectedAgentId !== params.agentId) {
+      throw new Error("Lead Agent selection changed. Refresh before preparing sessions.");
+    }
+    const options = await readLeadAgentOptions(companyId, platform);
+    if (!options.agents.some(agent => agent.id === params.agentId && ["idle", "running"].includes(agent.status))) {
+      throw new Error("Select an available Agent from this Workspace.");
+    }
+    let current = await leadSessionsFor(companyId, binding, platform);
+    const stateKey = { ...key(companyId), stateKey: `lead-sessions.v1.${binding.revision}` };
+    for (const channel of LEAD_CHANNELS) {
+      await assertLeadSelection(companyId, binding, platform);
+      const knownId = current.sessions[channel];
+      // Core owns atomic key recovery; never emulate ensure with create/list or send.
+      const result = await platform.agents.sessions.ensure(params.agentId as string, companyId, {
+        taskKey: `plugin:com.sonparkserver.my-plugin-builder:session:lead:${binding.revision}:${channel}`,
+        ...(knownId === null ? {} : { expectedSessionId: knownId }),
+      });
+      if (!result || Object.keys(result).sort().join(",") !== "created,sessionId" || typeof result.created !== "boolean"
+        || typeof result.sessionId !== "string" || !UUID.test(result.sessionId)
+        || knownId !== null && (result.sessionId !== knownId || result.created !== false)) throw new Error("Invalid Host session ensure result.");
+      await assertLeadSelection(companyId, binding, platform);
+      const updated = parseLeadSessions({ ...current, sessions: { ...current.sessions, [channel]: result.sessionId } }, companyId);
+      if (knownId === null) await platform.state.set(stateKey, updated as unknown as JsonValue);
+      current = updated;
+    }
+    await assertLeadSelection(companyId, binding, platform);
+    return { saved: true, executionStarted: false, sessionsReady: true };
+  });
+}
+
 function userActionInput(params: Record<string, unknown>, context: { companyId: string; actor: { type: string; companyId: string } }) {
   if (context.actor.type !== "user" || context.actor.companyId !== context.companyId) {
     throw new Error("Builder settings and input require an authenticated user action.");
@@ -125,16 +194,20 @@ function userActionInput(params: Record<string, unknown>, context: { companyId: 
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
-    capabilities: ["plugin.state.read", "plugin.state.write", "agents.read"],
+    capabilities: ["plugin.state.read", "plugin.state.write", "agents.read", "agent.sessions.create"],
     data: [{ key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>
-      await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue }],
+      await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.lead-sessions", handler: async (params, platform) =>
+      await readLeadSessions(workspaceId(params.companyId), platform) as unknown as JsonValue }],
     actions: [{ key: "builder.import-consultation", handler: async (params, context) => {
       // Core includes its authorized companyId in action parameters. It is
       // envelope metadata, never a user-selected destination or domain field.
       return importConsultation(context.companyId, userActionInput(params, context), context);
     } }, { key: "builder.select-lead-agent", handler: async (params, context) =>
-      selectLeadAgent(context.companyId, userActionInput(params, context), context) }],
+      selectLeadAgent(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.prepare-lead-sessions", handler: async (params, context) =>
+      prepareLeadSessions(context.companyId, userActionInput(params, context), context) }],
   });
 }
