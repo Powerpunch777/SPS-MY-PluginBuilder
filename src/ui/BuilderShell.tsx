@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity, AlertCircle, Bot, Check, ChevronLeft, ChevronRight, CircleHelp, FileText,
   GitBranch, GitFork, LoaderCircle, MessageSquare, Network, PanelRight, RefreshCw, Send,
@@ -8,6 +8,7 @@ import { Background, Controls, MarkerType, ReactFlow, type Edge, type Node } fro
 import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
+import { assertConsultationRequestSize, decodeConsultationFile, MAX_CONSULTATION_REQUEST_BYTES } from "../domain/consultation-file.js";
 import type {
   BuilderActor, BuilderMessage, BuilderQuestion, BuilderShellProps, BuilderView, LeadChannel,
 } from "../domain/model.js";
@@ -305,19 +306,76 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
   const [text, setText] = useState("");
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const operationVersion = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; operationVersion.current += 1; };
+  }, []);
+  function isCurrent(version: number) {
+    return mounted.current && operationVersion.current === version;
+  }
+  async function chooseFile(file: File | undefined) {
+    if (!file) return;
+    const version = ++operationVersion.current;
+    setStatus("");
+    setReading(false);
+    if (!file.name.toLowerCase().endsWith(".txt")) {
+      setStatus(".txt 파일만 선택할 수 있습니다.");
+      return;
+    }
+    if (file.size > MAX_CONSULTATION_REQUEST_BYTES) {
+      setStatus("파일이 48 KiB를 넘습니다. 더 작은 UTF-8 .txt 파일을 선택해 주세요.");
+      return;
+    }
+    setReading(true);
+    setStatus("파일을 읽는 중입니다.");
+    try {
+      const preview = decodeConsultationFile(new Uint8Array(await file.arrayBuffer()));
+      if (!isCurrent(version)) return;
+      setText(preview);
+      setFileName(file.name);
+      setStatus("파일 내용을 미리보기로 불러왔습니다. 저장하려면 아래 버튼을 누르세요.");
+    } catch (error) {
+      if (!isCurrent(version)) return;
+      setStatus(error instanceof Error ? error.message : "파일을 읽지 못했습니다. UTF-8 .txt 파일을 선택해 주세요.");
+    } finally {
+      if (isCurrent(version)) setReading(false);
+    }
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = text.trim();
-    if (!value || saving) return;
+    if (!value || saving || reading) return;
+    try { assertConsultationRequestSize(value); }
+    catch (error) {
+      setStatus(error instanceof Error ? error.message : "상담 입력이 48 KiB 요청 한도를 넘습니다.");
+      return;
+    }
+    const version = ++operationVersion.current;
+    setReading(false);
     setSaving(true); setStatus("");
-    try { await onImport(value); setText(""); setStatus("상담 입력이 Builder에 저장되었습니다."); }
-    catch { setStatus("상담 입력을 저장하지 못했습니다. 다시 시도해 주세요."); }
-    finally { setSaving(false); }
+    try {
+      await onImport(value);
+      if (!isCurrent(version)) return;
+      setText(""); setFileName(""); setStatus("상담 입력이 Builder에 저장되었습니다.");
+    } catch {
+      if (isCurrent(version)) setStatus("상담 입력을 저장하지 못했습니다. 다시 시도해 주세요.");
+    } finally {
+      if (isCurrent(version)) setSaving(false);
+    }
   }
   return <section aria-label="상담 텍스트 가져오기" className="builder-card builder-import">
     <p className="builder-card-sub">입력은 제공된 Builder 저장 기능에 전달됩니다. Lead 분석은 실제 대화 연동 후 진행됩니다.</p>
-    <form className="builder-import-form" onSubmit={submit}><textarea aria-label="상담 텍스트" onChange={event => setText(event.target.value)} placeholder="고객 상담 원문 붙여넣기" value={text} />
-      <button className="builder-primary-button" disabled={!text.trim() || saving} type="submit"><Upload size={14} /> 저장된 입력으로 전달</button>
+    <form className="builder-import-form" onSubmit={submit}>
+      <div className="builder-import-file-row"><label className={`builder-file-button${saving ? " is-disabled" : ""}`}>UTF-8 .txt 파일 선택<input accept=".txt,text/plain" aria-label="상담 .txt 파일" disabled={saving} onChange={event => {
+        void chooseFile(event.currentTarget.files?.[0]);
+        event.currentTarget.value = "";
+      }} type="file" /></label>{fileName && <span className="builder-file-name">미리보기: {fileName}</span>}</div>
+      <textarea aria-label="상담 텍스트" disabled={saving} onChange={event => { operationVersion.current += 1; setReading(false); setText(event.target.value); setFileName(""); setStatus(""); }} placeholder="고객 상담 원문 붙여넣기 또는 .txt 파일 선택" value={text} />
+      <button className="builder-primary-button" disabled={!text.trim() || saving || reading} type="submit"><Upload size={14} /> {reading ? "파일 읽는 중" : saving ? "저장 중" : "저장된 입력으로 전달"}</button>
     </form>{status && <p className="builder-composer-note" role="status">{status}</p>}</section>;
 }
 

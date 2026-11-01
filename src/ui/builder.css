@@ -173,6 +173,12 @@
 .builder-import summary { color: var(--builder-accent); font-size: 11px; cursor: pointer; }
 .builder-import-form { display: grid; gap: 8px; margin-top: 9px; }
 .builder-import-form textarea { min-height: 95px; }
+.builder-import-file-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.builder-file-button { display: inline-flex; align-items: center; min-height: 32px; border: 1px solid var(--builder-border); border-radius: 5px; padding: 6px 9px; color: var(--builder-text); background: var(--builder-panel-soft); font-size: 11px; cursor: pointer; }
+.builder-file-button:focus-within { outline: 2px solid var(--builder-accent); outline-offset: 2px; }
+.builder-file-button.is-disabled { opacity: .6; cursor: not-allowed; }
+.builder-file-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
+.builder-file-name { color: var(--builder-muted); font-size: 10px; overflow-wrap: anywhere; }
 .builder-loading { display: inline-flex; align-items: center; gap: 7px; color: var(--builder-muted); font-size: 11px; }
 .builder-loading svg { width: 14px; height: 14px; animation: builder-spin 1.2s linear infinite; }
 @keyframes builder-spin { to { transform: rotate(360deg); } }

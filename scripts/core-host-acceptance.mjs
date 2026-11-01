@@ -76,8 +76,21 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   await click(workspace, '[aria-label="상담 텍스트 가져오기"]', "Open Builder consultation import");
   const text = "Isolated actual Host consultation input";
   await workspace.evaluate(`(() => {const field=document.querySelector('textarea[aria-label="상담 텍스트"]');
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,${JSON.stringify(text)});
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'Retained pasted draft');
     field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await workspace.evaluate(`(() => {const input=document.querySelector('input[aria-label="상담 .txt 파일"]');
+    const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array([0xc3,0x28])],'invalid.txt',{type:'text/plain'}));
+    input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await eventually(() => workspace.evaluate(`({text:document.querySelector('textarea[aria-label="상담 텍스트"]').value,
+    status:document.querySelector('.builder-import [role="status"]')?.textContent})`),
+    value => value.text === 'Retained pasted draft' && value.status?.includes('UTF-8'), "invalid file preserves the draft in actual Host");
+  await workspace.evaluate(`(() => {const input=document.querySelector('input[aria-label="상담 .txt 파일"]');
+    const transfer=new DataTransfer();transfer.items.add(new File([${JSON.stringify(text)}],'consultation.txt',{type:'text/plain'}));
+    input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await eventually(() => workspace.evaluate(`({text:document.querySelector('textarea[aria-label="상담 텍스트"]').value,
+    status:document.querySelector('.builder-import [role="status"]')?.textContent})`),
+    value => value.text === text && value.status?.includes('미리보기'), "selected file preview in actual Host");
+  assert.deepEqual((await data(company.id)).messages, [], "File selection must not save or start AI.");
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-import-form button')?.disabled === false`), Boolean, "Builder Save");
   await click(workspace, ".builder-import-form button", "Save Builder consultation through real UI bridge");
   const saved = await eventually(() => data(company.id), value => value.messages.length === 1, "real persisted Builder input");
@@ -146,5 +159,6 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     workspaceIsolation: true, explicitShell: true, idempotentInput: true, hostRestart: true,
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
+    localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     cleanupQualificationPending: true }));
 }

@@ -24,6 +24,25 @@ try {
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     try {
+      await page.addInitScript(() => {
+        const read = File.prototype.arrayBuffer;
+        const pending = new Map();
+        Object.defineProperty(window, "__builderFileReadTest", { value: {
+          pending,
+          async release(name) {
+            const finish = pending.get(name);
+            if (!finish) throw new Error(`No pending test read for ${name}.`);
+            await finish();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          },
+        } });
+        File.prototype.arrayBuffer = function () {
+          if (!this.name.startsWith("pending-")) return read.call(this);
+          return new Promise((resolve, reject) => pending.set(this.name, async () => {
+            try { resolve(await read.call(this)); } catch (error) { reject(error); }
+          }));
+        };
+      });
       await page.goto(origin);
       await page.getByRole("heading", { level: 1, name: "Lead 대화", exact: true }).waitFor();
       assert.equal(await page.getByRole("textbox", { name: "Lead에게 메시지" }).isDisabled(), true);
@@ -38,6 +57,54 @@ try {
       await page.getByRole("textbox", { name: "상담 텍스트", exact: true }).fill("브라우저 검증용 상담 원문");
       await page.getByRole("button", { name: "저장된 입력으로 전달", exact: true }).click();
       await page.getByText("브라우저 검증용 상담 원문", { exact: true }).waitFor();
+      const importBox = page.getByRole("textbox", { name: "상담 텍스트", exact: true });
+      await importBox.fill("붙여넣은 기존 입력 유지");
+      const fileInput = page.getByLabel("상담 .txt 파일");
+      await fileInput.setInputFiles({ name: "bad-utf8.txt", mimeType: "text/plain", buffer: Buffer.from([0xc3, 0x28]) });
+      await page.getByRole("status").filter({ hasText: "UTF-8 텍스트로 읽을 수 없습니다" }).waitFor();
+      assert.equal(await importBox.inputValue(), "붙여넣은 기존 입력 유지");
+      await fileInput.setInputFiles({ name: "utf16.txt", mimeType: "text/plain", buffer: Buffer.from([0xff, 0xfe, 0x61, 0x00]) });
+      await page.getByRole("status").filter({ hasText: "UTF-16" }).waitFor();
+      assert.equal(await importBox.inputValue(), "붙여넣은 기존 입력 유지");
+      await fileInput.setInputFiles({ name: "binary.txt", mimeType: "text/plain", buffer: Buffer.from([0x61, 0x00, 0x62]) });
+      await page.getByRole("status").filter({ hasText: "바이너리" }).waitFor();
+      await fileInput.setInputFiles({ name: "empty.txt", mimeType: "text/plain", buffer: Buffer.from(" \r\n\t", "utf8") });
+      await page.getByRole("status").filter({ hasText: "파일이 비어 있습니다" }).waitFor();
+      await fileInput.setInputFiles({ name: "large.txt", mimeType: "text/plain", buffer: Buffer.alloc(48 * 1024 + 1, 0x61) });
+      await page.getByRole("status").filter({ hasText: "파일이 48 KiB를 넘습니다" }).waitFor();
+      assert.equal(await importBox.inputValue(), "붙여넣은 기존 입력 유지");
+      const savedBeforePreview = await page.locator(".builder-transcript").innerText();
+      await fileInput.setInputFiles({ name: "selected-consultation.txt", mimeType: "text/plain", buffer: Buffer.from("파일에서 읽은 상담 원문", "utf8") });
+      await page.getByText("파일 내용을 미리보기로 불러왔습니다", { exact: false }).waitFor();
+      assert.equal(await importBox.inputValue(), "파일에서 읽은 상담 원문");
+      assert.equal(await page.locator(".builder-transcript").innerText(), savedBeforePreview, "Selecting a file must not save it.");
+      await page.getByRole("button", { name: "저장된 입력으로 전달", exact: true }).click();
+      await page.getByText("파일에서 읽은 상담 원문", { exact: true }).waitFor();
+      await page.getByText("상담 입력이 Builder에 저장되었습니다.", { exact: true }).waitFor();
+
+      await fileInput.setInputFiles({ name: "pending-edit.txt", mimeType: "text/plain", buffer: Buffer.from("늦게 도착한 파일") });
+      await page.waitForFunction(() => window.__builderFileReadTest.pending.has("pending-edit.txt"));
+      assert.equal(await page.getByRole("button", { name: "파일 읽는 중" }).isDisabled(), true);
+      await importBox.fill("읽는 동안 사용자가 편집한 최신 입력");
+      await page.evaluate(() => window.__builderFileReadTest.release("pending-edit.txt"));
+      assert.equal(await importBox.inputValue(), "읽는 동안 사용자가 편집한 최신 입력");
+
+      await fileInput.setInputFiles({ name: "pending-old.txt", mimeType: "text/plain", buffer: Buffer.from("오래된 파일") });
+      await page.waitForFunction(() => window.__builderFileReadTest.pending.has("pending-old.txt"));
+      await fileInput.setInputFiles({ name: "new-current.txt", mimeType: "text/plain", buffer: Buffer.from("나중에 고른 파일") });
+      await page.getByText("파일 내용을 미리보기로 불러왔습니다", { exact: false }).waitFor();
+      await page.evaluate(() => window.__builderFileReadTest.release("pending-old.txt"));
+      assert.equal(await importBox.inputValue(), "나중에 고른 파일");
+      await page.getByText("미리보기: new-current.txt", { exact: true }).waitFor();
+
+      await fileInput.setInputFiles({ name: "pending-unmount.txt", mimeType: "text/plain", buffer: Buffer.from("분리된 입력") });
+      await page.waitForFunction(() => window.__builderFileReadTest.pending.has("pending-unmount.txt"));
+      await page.getByRole("button", { name: "상담 텍스트 가져오기", exact: true }).click();
+      await page.evaluate(() => window.__builderFileReadTest.release("pending-unmount.txt"));
+      await page.getByRole("button", { name: "상담 텍스트 가져오기", exact: true }).click();
+      assert.equal(await page.getByRole("textbox", { name: "상담 텍스트", exact: true }).inputValue(), "");
+      assert.equal(await page.locator(".builder-import [role=status]").count(), 0, "An unmounted read must not restore status on remount.");
+
       await page.getByRole("button", { name: "상담 텍스트 가져오기", exact: true }).click();
       await page.getByRole("button", { name: "작업 기록 열기", exact: true }).click();
       if (name === "mobile") {
@@ -58,7 +125,9 @@ try {
       }
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-${name}.png`) });
       assert.deepEqual(errors, []);
-      console.log(JSON.stringify({ builderUi: name, views: 6, selectedTextImport: true,
+      console.log(JSON.stringify({ builderUi: name, views: 6, pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
+        fileFailurePreservesInput: true, fileSelectionDoesNotSave: true, delayedReadCannotOverwriteEdit: true,
+        newerFileWins: true, unmountedReadIgnored: true,
         composerVisible: true, noOverflow: true, coreHostTested: false, realAi: false }));
     } finally { await page.close(); }
   }
