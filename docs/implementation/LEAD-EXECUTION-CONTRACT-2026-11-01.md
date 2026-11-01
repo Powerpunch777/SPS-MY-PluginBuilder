@@ -9,7 +9,9 @@ Builder가 실제 Lead 채팅을 하려면 새 AI 실행 서버나 Builder 소�
 검토 기준: Builder `28d29ce`, 공개 SDK `61a929f`, 비공개 Core `431e2e67`.
 2026-11-01의 Source 경로 별칭 수정은 이 조사 대상의 세션 구현을 변경하지 않았다.
 
-## 2026-11-02 재대조
+## 이전 재대조 스냅샷 (Historical: Core 719 / SDK 61)
+
+아래 내용은 Core `7192377`과 공개 SDK `61a929f`를 기준으로 한 과거 조사 스냅샷이다. 당시 Workspace Host 경로와 `getRun` 응답에 관해 적은 공백은 아래 최신 구현 상태를 반영하지 않는다. 이 기록과 후속 조사 표는 변경 이력을 위해 보존한다.
 
 재대조 기준: Builder runtime `1d5b884`, Builder 문서 `ae1433f`, Core `7192377`, 공개 SDK `61a929f`.
 - Workspace Host allowlist에 Agent Session 호출 경로가 없어 기존 SDK 메서드를 Worker에서 쓸 수 없다.
@@ -21,6 +23,20 @@ Builder가 실제 Lead 채팅을 하려면 새 AI 실행 서버나 Builder 소�
 - CTO는 단일 세션, Dev/QA는 각각 독립 세션을 유지한다.
 - GitHub Actions와 Self-hosted Runner 범위는 그대로 보존한다.
 - 새 업무 모델, HTTP 우회, legacy issue 경로를 추가하지 않으며 비공개 Core 코드·경로·로그를 복사하지 않는다.
+
+## 2026-11-02 최신 구현 상태
+
+이 절은 위 Core 719 / SDK 61 조사 이후의 상태를 요약하며, 아래 과거 구현 표와 미승인 API 조사보다 우선한다.
+
+- Builder dependency는 공개 SDK source revision `e58138e6e153c31b813f62a88932abf5d4cd495c`에 고정되었다. 이 revision의 [Platform UI Actions and Agent Sessions 계약](https://github.com/Powerpunch777/sps-plugin-sdk/blob/e58138e6e153c31b813f62a88932abf5d4cd495c/docs/platform-actions-and-sessions.md)은 개발 중인 additive source API이며, 공개 SDK 패키지 버전의 release를 뜻하지 않는다.
+- 호환 개발 Host에서 Workspace의 `create`, `list`, `sendMessage`, `getRun`, `cancel` 다섯 session method가 현재 Host 발급 invocation 안에서 정확한 Workspace와 Plugin에 연결된다. Core는 awaited service 작업 전후로 권한을 재검사한다. 이는 새 SDK tuple의 실제 Core Host E2E 완료 증거가 아니며, 해당 E2E는 아직 대기 중이다.
+- `getRun`은 optional `output`을 제공할 수 있다. 성공 run의 저장된 summary만 대상으로 UTF-8 65,536 bytes 한도를 common-pattern redaction 전후에 적용한다. 잘못된 문자열, 제어문자, 누락 또는 초과 크기는 잘라서 답변인 것처럼 내보내지 않고 withheld 처리한다. Raw adapter 결과, stdout/stderr, 설정 및 credential 필드는 공개 output이 아니다. Common-pattern redaction은 DLP나 미지의 Secret 차단을 보장하지 않는다. 구형 Host는 `output`을 생략할 수 있고, 생략은 빈 답변이 아니다.
+- invocation 검사는 호출 시점의 권한 admission 및 재검사이지 provider 실행 전체를 유지하는 lease가 아니며 자동 취소를 뜻하지 않는다. 권한이 취소되면 응답이 거부되어도 이미 queue/start된 run은 되돌아가지 않을 수 있다. 전송 응답이 모호하면 run이 queue되지 않았다고 추정하지 않는다.
+- 세션 ensure 재시도와 send의 durable request dedupe는 아직 구현되지 않았다. 따라서 Builder transmit은 계속 비활성화한다. 모호한 send를 자동 재전송하지 않는다.
+- 부모가 갱신한 SDK dependency 기준으로 `npm run check` 36/36, SDK `validate`, `test`가 통과했다. UI와 Worker 실행 소스는 변경하지 않았다. 이 검사는 실제 Core Host E2E나 AI 실행을 증명하지 않는다.
+- 제품 계약은 유지한다: Lead 3개 세션(`main`, `cto-inbox`, `decisions`)과 공통 Lead 기억, CTO 단일 세션, Dev/QA 독립 세션, GitHub Actions + Self-hosted Runners, v15 범위. Core 전체 완료 또는 실제 AI 연동 완료로 표시하지 않는다.
+
+이후의 `실제 Builder / SDK 계약`, `실제 Core Host 지원 경계`, 미승인 API 제안과 구현 순서는 위 이전 tuple에 대한 조사 기록이다. 최신 상태와 충돌하는 진술은 현재 계약으로 사용하지 않는다.
 
 ## v15 제품 계약 유지
 
