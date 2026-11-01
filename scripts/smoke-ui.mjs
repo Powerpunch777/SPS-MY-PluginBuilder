@@ -77,6 +77,41 @@ try {
         await page.getByRole("heading", { level: 1, name: label === 'Lead 대화' ? 'Lead와 대화' : label, exact: true }).waitFor();
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       }
+      await page.goto(`${origin}?fixture=graph`);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "설계 시각화", exact: true }).click();
+      const detail = page.getByRole('complementary', { name: '선택한 설계 노드 정보', exact: true });
+      assert.equal(await page.getByRole('complementary', { name: 'AI 작업 기록', exact: true }).count(), 0);
+      await detail.getByRole('heading', { name: 'Fixture Feature', exact: true }).waitFor();
+      await detail.getByText('Fixture CTO', { exact: true }).waitFor();
+      await detail.getByText('실행 중', { exact: true }).waitFor();
+      await detail.getByRole('list', { name: '연결된 설계 노드', exact: true }).getByText('Fixture Component', { exact: true }).waitFor();
+      const component = page.locator('.react-flow__node[data-id="fixture-component"]');
+      await component.focus();
+      await component.press('Enter');
+      await detail.getByRole('heading', { name: 'Fixture Component', exact: true }).waitFor();
+      await detail.getByText('차단', { exact: true }).waitFor();
+      await detail.getByText('담당자 없음', { exact: true }).waitFor();
+      const openOwner = detail.getByRole('button', { name: '담당 Actor 세션 열기 · 읽기 전용', exact: true });
+      assert.equal(await openOwner.isDisabled(), true);
+      await page.getByRole('button', { name: 'Fit View', exact: true }).click();
+      await page.locator('.react-flow__node[data-id="fixture-isolated"]').click();
+      await detail.getByRole('heading', { name: 'Fixture Isolated', exact: true }).waitFor();
+      await detail.getByText('연결된 관계 없음', { exact: true }).waitFor();
+      assert.equal(await detail.getByRole('list', { name: '연결된 설계 노드', exact: true }).count(), 0);
+      await page.locator('.react-flow__node[data-id="fixture-feature"]').click();
+      await detail.getByRole('heading', { name: 'Fixture Feature', exact: true }).waitFor();
+      assert.equal(await openOwner.isDisabled(), false);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      if (name === 'desktop') assert.ok((await page.locator('.builder-graph-card').boundingBox()).width >= 600, 'The graph must use the available architecture view, not a duplicated activity rail or shrink-wrapped page.');
+      await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-graph-${name}.png`), fullPage: true });
+      if (name === 'mobile') {
+        await openOwner.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.resolve('artifacts/screenshots/builder-graph-mobile-details.png') });
+      }
+      await openOwner.click();
+      await page.getByText('Fixture CTO read-only record', { exact: true }).waitFor();
+      await page.getByText('이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('textbox', { name: 'Lead에게 메시지', exact: true }).count(), 0);
       await page.goto(`${origin}?fixture=decisions`);
       await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "미결정사항", exact: true }).click();
       await page.getByRole("heading", { level: 2, name: "Regression question", exact: true }).waitFor();
@@ -168,10 +203,14 @@ try {
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-${name}.png`) });
       assert.deepEqual(errors, []);
       console.log(JSON.stringify({ builderUi: name, views: 6, pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
+        selectedGraphDetails: true, graphKeyboardSelection: true, graphMissingOwnerAndRelations: true, graphOwnerReadOnly: true,
         decisionsHistoryIgnoresRunId: true, decisionsHistoryExcludesSubordinateActors: true, decisionsHistorySurvivesMissingQuestion: true,
         fileFailurePreservesInput: true, fileSelectionDoesNotSave: true, delayedReadCannotOverwriteEdit: true,
         newerFileWins: true, unmountedReadIgnored: true,
         composerVisible: true, noOverflow: true, coreHostTested: false, realAi: false }));
+    } catch (error) {
+      await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-failure-${name}.png`), fullPage: true }).catch(() => {});
+      throw error;
     } finally { await page.close(); }
   }
 } finally {

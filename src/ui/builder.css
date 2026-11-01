@@ -224,9 +224,26 @@
 
 .builder-graph-card { display: flex; flex-direction: column; height: min(68vh, 660px); min-height: 360px; overflow: hidden; border: 1px solid var(--builder-border); border-radius: 7px; background: var(--builder-panel); }
 .builder-graph-note { border-top: 1px solid var(--builder-border); padding: 8px 11px; color: var(--builder-muted); font-size: 10px; }
+.builder-architecture-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 305px); gap: 12px; align-items: stretch; }
+.builder-architecture-page { width: 100%; }
+.builder-graph-detail { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 10px; overflow: auto; }
+.builder-graph-detail .builder-card { padding: 16px; }
+.builder-graph-detail h2 { margin: 3px 0 9px; font-size: 15px; overflow-wrap: anywhere; }
+.builder-graph-meta { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; margin: 15px 0 0; font-size: 11px; }
+.builder-graph-meta dt { color: var(--builder-muted); }
+.builder-graph-meta dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.builder-graph-relations { display: grid; max-height: 190px; gap: 7px; overflow: auto; margin: 12px 0 0; padding: 0; list-style: none; }
+.builder-graph-relations li { display: grid; gap: 2px; border-top: 1px solid var(--builder-border); padding-top: 7px; font-size: 10px; }
+.builder-graph-relations li span { color: var(--builder-muted); }
+.builder-graph-relations li strong { overflow-wrap: anywhere; }
+.builder-graph-owner-action { width: 100%; justify-content: flex-start; margin-top: 14px; text-align: left; }
+.builder-graph-callout { border: 1px solid var(--builder-border); border-radius: 7px; padding: 13px; background: var(--builder-panel-soft); font-size: 11px; }
+.builder-graph-callout p { margin: 6px 0 0; color: var(--builder-muted); line-height: 1.65; }
 .builder-shell .react-flow { flex: 1; width: 100%; min-height: 0; background: #181818; }
 .builder-shell .react-flow__background pattern circle { fill: #454545; }
 .builder-shell .react-flow__edge-path { stroke: #858585; stroke-width: 1.5; }
+.builder-shell .react-flow__edge-textbg { fill: var(--builder-panel); }
+.builder-shell .react-flow__edge-text { fill: var(--builder-text); }
 .builder-shell .react-flow__node-default { border: 1px solid #414141; border-radius: 8px; padding: 10px 12px; background: #262626; color: var(--builder-text); font: 11px/1.4 -apple-system, BlinkMacSystemFont, Pretendard, "Noto Sans KR", "Malgun Gothic", sans-serif; box-shadow: 0 2px 8px #0008; }
 .builder-shell .react-flow__node-default.selected { border-color: #ededed; }
 .builder-shell .react-flow__controls { overflow: hidden; border: 1px solid var(--builder-border); border-radius: 5px; box-shadow: none; }
@@ -266,9 +283,15 @@
   .builder-activity-rail { display: none; }
   .builder-drawer-close { display: inline-flex; }
   .builder-doc-layout, .builder-question-layout { grid-template-columns: minmax(0, 1fr); }
+  .builder-architecture-layout { grid-template-columns: minmax(0, 1fr); }
   .builder-system-grid { grid-template-columns: minmax(0, 1fr); }
   .builder-page { padding: 15px; }
   .builder-graph-card { height: 65vh; min-height: 330px; }
+}
+@container sps-builder (min-width: 761px) and (max-width: 900px) {
+  .builder-architecture-layout { grid-template-columns: minmax(0, 1fr); }
+  .builder-graph-card { height: 65vh; min-height: 330px; }
+  .builder-graph-detail { overflow: visible; }
 }
 @container sps-builder (max-width: 480px) {
   .builder-header-actions .builder-refresh-label { display: none; }

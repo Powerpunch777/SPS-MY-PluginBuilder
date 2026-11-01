@@ -223,36 +223,95 @@ function ActorTranscriptView({ props, actor, drawerOpen, onDrawerClose, onDrawer
     onDrawerToggle={onDrawerToggle} onOpenArchitecture={onOpenArchitecture} props={props} />;
 }
 
+export function resolveSelectedGraphEntity(
+  entities: BuilderShellProps["snapshot"]["graph"]["entities"], selectedId: string | null,
+) {
+  return entities.find(entity => entity.id === selectedId) ?? entities[0] ?? null;
+}
+
+const GRAPH_KIND_LABEL: Record<BuilderShellProps["snapshot"]["graph"]["entities"][number]["kind"], string> = {
+  requirement: "요구사항", feature: "기능", component: "구성 요소", agent: "AI",
+  "external-system": "외부 시스템", data: "데이터", workflow: "작업 흐름", test: "테스트",
+  environment: "환경", approval: "승인",
+};
+
+const GRAPH_STATUS_LABEL: Record<BuilderShellProps["snapshot"]["graph"]["entities"][number]["status"], string> = {
+  planned: "계획", running: "실행 중", verified: "검증됨", blocked: "차단",
+};
+
+const GRAPH_ARIA_LABELS = {
+  "node.a11yDescription.default": "Enter 또는 Space 키를 눌러 노드를 선택하세요. 그래프는 조회 전용입니다.",
+  "node.a11yDescription.keyboardDisabled": "Enter 또는 Space 키를 눌러 노드를 선택하세요. 그래프는 조회 전용입니다.",
+};
+
 function ArchitectureView({ props, onActor }: { props: BuilderShellProps; onActor(id: string): void }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const entities = props.snapshot.graph.entities;
+  const selectedEntity = resolveSelectedGraphEntity(entities, selectedId);
+  const selectedOwner = selectedEntity?.ownerActorId
+    ? props.snapshot.actors.find(actor => actor.id === selectedEntity.ownerActorId) ?? null
+    : null;
+  const relatedEntities = selectedEntity ? props.snapshot.graph.relations.flatMap(relation => {
+    const relatedId = relation.sourceId === selectedEntity.id ? relation.targetId
+      : relation.targetId === selectedEntity.id ? relation.sourceId : null;
+    const relatedEntity = relatedId ? entities.find(entity => entity.id === relatedId) : null;
+    return relatedEntity ? [{ id: relation.id, kind: relation.kind.replaceAll("_", " "), label: relatedEntity.label }] : [];
+  }) : [];
   const { nodes, edges } = useMemo(() => {
-    const entities = props.snapshot.graph.entities;
     const positions = new Map(entities.map((entity, index) => [entity.id, { x: (index % 3) * 245 + 35, y: Math.floor(index / 3) * 140 + 35 }]));
     const graphNodes: Node[] = entities.map(entity => ({
       id: entity.id,
       position: positions.get(entity.id) ?? { x: 0, y: 0 },
       data: { label: entity.label },
+      ariaLabel: `${entity.label} 노드 선택`,
+      selected: entity.id === selectedEntity?.id,
       draggable: false,
-      selectable: false,
+      selectable: true,
       connectable: false,
       style: { width: 195, minHeight: 64 },
     }));
     const ids = new Set(entities.map(entity => entity.id));
     const graphEdges: Edge[] = props.snapshot.graph.relations.filter(relation => ids.has(relation.sourceId) && ids.has(relation.targetId))
       .map(relation => ({ id: relation.id, source: relation.sourceId, target: relation.targetId, label: relation.kind.replaceAll("_", " "),
-        markerEnd: { type: MarkerType.ArrowClosed, color: "#8da39a" }, style: { stroke: "#8da39a" } }));
+        selectable: false, focusable: false,
+        markerEnd: { type: MarkerType.ArrowClosed, color: "#858585" }, style: { stroke: "#858585" } }));
     return { nodes: graphNodes, edges: graphEdges };
-  }, [props.snapshot.graph.entities, props.snapshot.graph.relations]);
-  if (!nodes.length) return <div className="builder-page"><div className="builder-page-intro"><h2>Workspace 설계 Graph</h2><p>기록된 요구사항, 기능, 구성 요소와 관계를 조회합니다.</p></div>
+  }, [entities, props.snapshot.graph.relations, selectedEntity?.id]);
+  if (!nodes.length) return <div className="builder-page builder-architecture-page"><div className="builder-page-intro"><h2>Workspace 설계 Graph</h2><p>기록된 요구사항, 기능, 구성 요소와 관계를 조회합니다.</p></div>
     <div className="builder-card builder-empty-card"><GitBranch /><strong>설계 Graph가 없습니다</strong><p>이 Workspace에 저장된 Graph 노드가 없습니다.</p></div></div>;
-  return <div className="builder-page"><div className="builder-page-intro"><h2>Workspace 설계 Graph</h2><p>노드는 조회 전용입니다. 담당 Actor를 선택하면 기록된 세션을 열 수 있습니다.</p></div>
-    <div className="builder-graph-card"><ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.18 }} nodesDraggable={false}
-      nodesConnectable={false} elementsSelectable={false} deleteKeyCode={null} onNodeClick={(_, node) => {
-        const ownerId = props.snapshot.graph.entities.find(entity => entity.id === node.id)?.ownerActorId;
-        if (ownerId && props.snapshot.actors.some(actor => actor.id === ownerId)) onActor(ownerId);
+  return <div className="builder-page builder-architecture-page"><div className="builder-page-intro"><h2>Workspace 설계 Graph</h2><p>노드는 조회 전용입니다. 담당 Actor를 선택하면 기록된 세션을 열 수 있습니다.</p></div>
+    <div className="builder-architecture-layout"><div className="builder-graph-card"><ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.18 }} minZoom={0.1} nodesDraggable={false} nodesFocusable
+      edgesFocusable={false} nodesConnectable={false} elementsSelectable deleteKeyCode={null} ariaLabelConfig={GRAPH_ARIA_LABELS}
+      onNodesChange={changes => {
+        const selection = changes.find(change => change.type === "select" && change.selected);
+        if (selection?.type === "select") setSelectedId(selection.id);
+      }} onNodeClick={(_, node) => {
+        setSelectedId(node.id);
       }}>
       <Background gap={20} size={1} />
       <Controls showInteractive={false} />
-    </ReactFlow><div className="builder-graph-note">조회 전용 · Graph revision {props.snapshot.graph.revisionId ?? "미기록"}</div></div></div>;
+    </ReactFlow><div className="builder-graph-note">조회 전용 · Graph revision {props.snapshot.graph.revisionId ?? "미기록"}</div></div>
+    <aside aria-label="선택한 설계 노드 정보" aria-live="polite" className="builder-graph-detail">
+      <section className="builder-card" aria-labelledby="builder-selected-node-title">
+        <div className="builder-card-sub">SELECTED NODE</div>
+        <h2 id="builder-selected-node-title">{selectedEntity?.label ?? "노드를 선택하세요"}</h2>
+        {selectedEntity ? <>
+          <span className="builder-tag">{GRAPH_KIND_LABEL[selectedEntity.kind]}</span>
+          <dl className="builder-graph-meta">
+            <dt>상태</dt><dd>{GRAPH_STATUS_LABEL[selectedEntity.status]}</dd>
+            <dt>담당</dt><dd>{selectedOwner?.label ?? (selectedEntity.ownerActorId ? "담당 Actor를 찾을 수 없습니다" : "담당자 없음")}</dd>
+            <dt>연결</dt><dd>{relatedEntities.length ? `${relatedEntities.length}개` : "연결된 관계 없음"}</dd>
+          </dl>
+          {relatedEntities.length > 0 && <ul aria-label="연결된 설계 노드" className="builder-graph-relations">
+            {relatedEntities.map(relation => <li key={relation.id}><span>{relation.kind}</span><strong>{relation.label}</strong></li>)}
+          </ul>}
+          {selectedOwner?.role !== "lead" && selectedOwner
+            ? <button className="builder-quiet-button builder-graph-owner-action" onClick={() => onActor(selectedOwner.id)} type="button">담당 Actor 세션 열기 · 읽기 전용</button>
+            : <button className="builder-quiet-button builder-graph-owner-action" disabled title={selectedOwner?.role === "lead" ? "Lead 세션은 이 읽기 전용 작업 화면에서 열 수 없습니다." : "연결된 담당 Actor가 없습니다."} type="button">담당 Actor 세션 열기 · 읽기 전용</button>}
+        </> : <p>선택한 노드가 현재 Workspace Graph에 없습니다.</p>}
+      </section>
+      <div className="builder-graph-callout"><strong>설계 변경은 Lead가 담당합니다</strong><p>이 화면에서는 저장된 설계를 조회합니다. 노드와 관계는 직접 편집할 수 없습니다.</p></div>
+    </aside></div></div>;
 }
 
 function OrganizationView({ props, onActor }: { props: BuilderShellProps; onActor(id: string): void }) {
@@ -447,13 +506,14 @@ export function BuilderShell(props: BuilderShellProps) {
     <button aria-label="Workspace 새로고침" className="builder-icon-button" onClick={props.onRefresh} type="button"><RefreshCw /><span className="builder-refresh-label">새로고침</span></button>
     {view === "lead" && !activeActor && <button aria-label="Lead HTML 뷰어 열기" className="builder-icon-button" disabled={!props.onOpenHtmlPreview}
       onClick={props.onOpenHtmlPreview} title={props.onOpenHtmlPreview ? "Lead HTML 뷰어 열기" : "HTML 뷰어가 아직 연결되지 않았습니다."} type="button"><FileText /><span className="builder-refresh-label">HTML 뷰어</span></button>}
-    {view !== "lead" && view !== "decisions" && <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={() => setDrawerOpen(value => !value)} type="button"><PanelRight /></button>}
+    {view === "architecture" && !activeActor && <button className="builder-quiet-button" onClick={() => selectView("lead")} type="button"><MessageSquare />Lead와 설계 논의</button>}
+    {view !== "lead" && view !== "decisions" && view !== "architecture" && <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={() => setDrawerOpen(value => !value)} type="button"><PanelRight /></button>}
   </div>;
 
   let content: ReactNode;
   if (activeActor) content = <ActorTranscriptView actions={headerActions} actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
   else if (view === "lead") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
-  else if (view === "architecture") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><ArchitectureView onActor={openActor} props={props} /></WithActivityRail>;
+  else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
   else if (view === "organization") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><OrganizationView onActor={openActor} props={props} /></WithActivityRail>;
   else if (view === "documents") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><DocumentsView props={props} /></WithActivityRail>;
   else if (view === "decisions") content = <DecisionsView drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} props={props} />;

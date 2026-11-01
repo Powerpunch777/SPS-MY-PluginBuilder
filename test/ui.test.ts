@@ -39,7 +39,14 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
         },
       }],
     });
-    const { BuilderShell } = await import(pathToFileURL(output).href);
+    const { BuilderShell, resolveSelectedGraphEntity } = await import(pathToFileURL(output).href);
+    const graphEntities = [
+      { id: "node-first", kind: "feature" as const, label: "First feature", ownerActorId: null, status: "planned" as const, evidenceRefs: [] },
+      { id: "node-second", kind: "component" as const, label: "Second component", ownerActorId: null, status: "verified" as const, evidenceRefs: [] },
+    ];
+    assert.equal(resolveSelectedGraphEntity(graphEntities, "node-second")?.id, "node-second");
+    assert.equal(resolveSelectedGraphEntity(graphEntities, "removed-node")?.id, "node-first", "A stale selection falls back to the current snapshot.");
+    assert.equal(resolveSelectedGraphEntity([], "removed-node"), null, "An empty refreshed graph has no selected node.");
     const props: BuilderShellProps = {
       workspaceLabel: "Studio",
       snapshot: {
