@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
-  Activity, AlertCircle, Bot, Check, ChevronLeft, ChevronRight, CircleHelp, FileText,
+  Activity, AlertCircle, ArrowUp, Bot, Check, ChevronLeft, ChevronRight, CircleHelp, FileText,
   GitBranch, GitFork, LoaderCircle, MessageSquare, Network, PanelRight, RefreshCw, Send,
   Server, Settings, Upload, X,
 } from "lucide-react";
@@ -60,14 +60,18 @@ function StatusLabel({ status }: { status: BuilderQuestion["status"] }) {
 }
 
 function ActivityRail({
-  props, view, selectedQuestion, onSelectQuestion, onClose,
+  props, view, selectedQuestion, onSelectQuestion, onClose, actor = null, onOpenArchitecture,
 }: {
   props: BuilderShellProps;
   view: BuilderView;
   selectedQuestion: BuilderQuestion | null;
   onSelectQuestion(id: string): void;
   onClose(): void;
+  actor?: BuilderActor | null;
+  onOpenArchitecture?(): void;
 }) {
+  const [tab, setTab] = useState("history");
+  const panelId = useId();
   if (view === "decisions") {
     return <aside className="builder-activity-rail" aria-label="미결정사항 목록">
       <div className="builder-rail-header"><h2>미결정사항</h2><p>실제 저장된 Lead 질문</p></div>
@@ -81,14 +85,45 @@ function ActivityRail({
       <button aria-label="작업 기록 닫기" className="builder-icon-button builder-drawer-close" onClick={onClose} type="button"><X /></button>
     </aside>;
   }
-  return <aside className="builder-activity-rail" aria-label="최근 작업 기록">
-    <div className="builder-rail-header"><h2>최근 작업 기록</h2><p>Workspace에 저장된 활동</p></div>
-    <div className="builder-rail-content">
-      {props.snapshot.activity.length ? [...props.snapshot.activity].reverse().map(item => <div className="builder-activity-item" key={item.id}>
+  const leadIds = new Set(props.snapshot.actors.filter(value => value.role === "lead").map(value => value.id));
+  const history = props.snapshot.activity.filter(item => actor ? item.actorId === actor.id : item.actorId === null || leadIds.has(item.actorId));
+  const entities = props.snapshot.graph.entities.filter(item => !actor || item.ownerActorId === actor.id);
+  const tabs = [
+    { id: "changes", label: "수정사항", unavailable: "수정안 조회가 아직 연결되지 않았습니다." },
+    { id: "orders", label: "작업 지시", unavailable: "작업 지시 조회가 아직 연결되지 않았습니다." },
+    { id: "history", label: "기록", unavailable: null },
+    { id: "files", label: "작업 파일", unavailable: "작업 파일 조회가 아직 연결되지 않았습니다." },
+    { id: "design", label: "설계", unavailable: null },
+  ];
+  return <aside className="builder-activity-rail" aria-label="AI 작업 기록">
+    <div className="builder-rail-header"><div className="builder-rail-head-top"><h2>AI 작업 기록</h2>
+      {tab === "history" && <span className="builder-tag">{history.length}건</span>}</div>
+      <p><strong>{actor?.label ?? "Lead"}</strong>의 수정사항·지시·작업 기록</p>
+      <div aria-label="AI 작업 기록 종류" className="builder-rail-tabs" role="tablist" onKeyDown={event => {
+        const enabled = tabs.filter(value => !value.unavailable);
+        const index = enabled.findIndex(value => value.id === tab);
+        const next = event.key === "ArrowRight" ? enabled[(index + 1) % enabled.length]
+          : event.key === "ArrowLeft" ? enabled[(index + enabled.length - 1) % enabled.length]
+            : event.key === "Home" ? enabled[0] : event.key === "End" ? enabled.at(-1) : null;
+        if (!next) return;
+        event.preventDefault(); setTab(next.id);
+        event.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${next.id}"]`)?.focus();
+      }}>{tabs.map(value => <button aria-controls={panelId} aria-selected={tab === value.id} className="builder-rail-tab"
+        data-tab={value.id} disabled={Boolean(value.unavailable)} id={`${panelId}-${value.id}`} key={value.id}
+        onClick={() => setTab(value.id)} role="tab" tabIndex={tab === value.id ? 0 : -1}
+        title={value.unavailable ?? value.label} type="button">{value.label}</button>)}</div>
+    </div>
+    <div aria-labelledby={`${panelId}-${tab}`} className="builder-rail-content builder-rail-panel is-active" id={panelId} role="tabpanel" tabIndex={0}>
+      {tab === "history" ? history.length ? [...history].reverse().map(item => <div className="builder-activity-item" key={item.id}>
         <strong>{item.label}</strong>
         <small>{item.actorId ? props.snapshot.actors.find(actor => actor.id === item.actorId)?.label ?? "기록된 작업자" : "Workspace 활동"} · {displayTime(item.createdAt)}</small>
-      </div>) : <EmptyState icon={Activity} title="활동 기록이 없습니다" detail="저장된 작업이 생기면 여기에 표시됩니다." />}
+      </div>) : <EmptyState icon={Activity} title="활동 기록이 없습니다" detail="저장된 작업이 생기면 여기에 표시됩니다." />
+        : <><div className="builder-rail-section-label">설계 흐름 요약</div><div className="builder-card">
+          <h3>{props.snapshot.graph.revisionId ?? "등록된 설계가 없습니다"}</h3><p className="builder-card-sub">현재 범위의 설계 요소 {entities.length}개</p>
+          {onOpenArchitecture && <button className="builder-quiet-button" onClick={onOpenArchitecture} type="button">설계 시각화 열기</button>}
+        </div></>}
     </div>
+    <div className="builder-rail-bottom">{actor?.label ?? "Lead"} 기준 · Builder에 저장된 기록</div>
     <button aria-label="작업 기록 닫기" className="builder-icon-button builder-drawer-close" onClick={onClose} type="button"><X /></button>
   </aside>;
 }
@@ -131,8 +166,8 @@ function MessageComposer({
     <form className="builder-compose-form" onSubmit={submit}>
       <textarea aria-label="Lead에게 메시지" disabled={!enabled || sending} onChange={event => setText(event.target.value)}
         placeholder={enabled ? "Lead에게 메시지 보내기" : "메시지 전송을 사용할 수 없습니다"} value={text} />
-      <button aria-label="메시지 보내기" className="builder-primary-button" disabled={!enabled || sending || !text.trim()} type="submit">
-        <Send aria-hidden="true" /><span>{sending ? "전송 중" : "보내기"}</span>
+      <button aria-label={sending ? "메시지 전송 중" : "메시지 보내기"} className="builder-primary-button builder-send" disabled={!enabled || sending || !text.trim()} title="메시지 보내기" type="submit">
+        {sending ? <LoaderCircle aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
       </button>
     </form>
     <div className="builder-composer-note">{enabled ? "Lead 대화는 현재 Workspace에 저장됩니다." : "AI 메시지 연결을 사용할 수 없어 입력이 비활성화되었습니다."}</div>
@@ -140,13 +175,15 @@ function MessageComposer({
   </div>;
 }
 
-function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerToggle }: {
+function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerToggle, actions, onOpenArchitecture }: {
   props: BuilderShellProps;
   messages: BuilderMessage[];
   actor?: BuilderActor | null;
   drawerOpen: boolean;
   onDrawerClose(): void;
   onDrawerToggle(): void;
+  actions: ReactNode;
+  onOpenArchitecture(): void;
 }) {
   const [importOpen, setImportOpen] = useState(false);
   const readOnly = Boolean(actor);
@@ -156,8 +193,11 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
     <button aria-label="작업 기록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section aria-label={actor ? `${actor.label} 세션` : "Lead 대화"} className="builder-message-main">
       <div className="builder-chat-context">
-        <span>{actor ? `${actor.label} · ${ACTOR_STATUS[actor.status]} · 읽기 전용` : "Lead · 메인 사용자 대화"}</span>
+        <div className="builder-chat-heading"><h1>{actor?.label ?? "Lead와 대화"}</h1>
+          <p>{actor ? `${ACTOR_STATUS[actor.status]} · 읽기 전용 세션` : "전체 설계와 기능 통합을 담당하는 AI"}</p></div>
         <div className="builder-header-actions">
+          {actions}<span className="builder-agent-dot">{actor ? actorInitial(actor) : "LEAD"}</span>
+          <span className={`builder-lead-status${enabled ? " is-ready" : ""}`}>{actor ? "읽기 전용" : enabled ? "대화 가능" : "미연결"}</span>
           {!readOnly && props.onImportConsultation && <button aria-expanded={importOpen} aria-label="상담 텍스트 가져오기" className="builder-icon-button" onClick={() => setImportOpen(open => !open)} type="button"><Upload /><span className="builder-refresh-label">상담 가져오기</span></button>}
           <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">작업 기록</span></button>
         </div>
@@ -170,16 +210,17 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
         <MessageComposer channel={channel} enabled={enabled} onSend={props.onSendMessage} />
       </>}
     </section>
-    <ActivityRail onClose={onDrawerClose} onSelectQuestion={() => {}} props={props} selectedQuestion={null} view="lead" />
+    <ActivityRail actor={actor} onClose={onDrawerClose} onOpenArchitecture={onOpenArchitecture} onSelectQuestion={() => {}} props={props} selectedQuestion={null} view="lead" />
   </div>;
 }
 
-function ActorTranscriptView({ props, actor, drawerOpen, onDrawerClose, onDrawerToggle }: {
+function ActorTranscriptView({ props, actor, drawerOpen, onDrawerClose, onDrawerToggle, actions, onOpenArchitecture }: {
   props: BuilderShellProps; actor: BuilderActor; drawerOpen: boolean; onDrawerClose(): void; onDrawerToggle(): void;
+  actions: ReactNode; onOpenArchitecture(): void;
 }) {
   const messages = props.snapshot.messages.filter(message => message.actorId === actor.id);
-  return <LeadView actor={actor} drawerOpen={drawerOpen} messages={messages} onDrawerClose={onDrawerClose}
-    onDrawerToggle={onDrawerToggle} props={props} />;
+  return <LeadView actions={actions} actor={actor} drawerOpen={drawerOpen} messages={messages} onDrawerClose={onDrawerClose}
+    onDrawerToggle={onDrawerToggle} onOpenArchitecture={onOpenArchitecture} props={props} />;
 }
 
 function ArchitectureView({ props, onActor }: { props: BuilderShellProps; onActor(id: string): void }) {
@@ -253,7 +294,7 @@ function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
     <button aria-label="질문 목록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section className="builder-message-main">
-      <div className="builder-chat-context"><span>질문 전용 Lead 대화 · Builder에 저장된 기록</span>
+      <div className="builder-chat-context"><div className="builder-chat-heading"><h1>미결정사항</h1><p>질문 전용 Lead 대화 · Builder에 저장된 기록</p></div>
         <button aria-label="미결정사항 목록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">질문 목록</span></button>
       </div>
       {selected ? <><div className="builder-question-detail" style={{ padding: "12px 18px 0" }}>
@@ -387,6 +428,7 @@ export function BuilderShell(props: BuilderShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [actorId, setActorId] = useState<string | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
   const activeActors = props.snapshot.actors.filter(actor => actor.role !== "lead" && (actor.status === "running" || actor.status === "waiting"));
   const activeActor = actorId ? props.snapshot.actors.find(actor => actor.id === actorId) ?? null : null;
   const current = VIEW_TITLES[view];
@@ -403,14 +445,14 @@ export function BuilderShell(props: BuilderShellProps) {
   const headerActions = <div className="builder-header-actions">
     {props.loading && <span aria-label="불러오는 중" className="builder-loading"><LoaderCircle /></span>}
     <button aria-label="Workspace 새로고침" className="builder-icon-button" onClick={props.onRefresh} type="button"><RefreshCw /><span className="builder-refresh-label">새로고침</span></button>
-    {props.onOpenCoreSettings && <button aria-label="SPS Core 설정 열기" className="builder-icon-button" onClick={props.onOpenCoreSettings} type="button"><Settings /></button>}
-    {view === "lead" && !activeActor && props.onOpenHtmlPreview && <button aria-label="Lead HTML 뷰어 열기" className="builder-icon-button" onClick={props.onOpenHtmlPreview} type="button"><FileText /><span className="builder-refresh-label">HTML 뷰어</span></button>}
+    {view === "lead" && !activeActor && <button aria-label="Lead HTML 뷰어 열기" className="builder-icon-button" disabled={!props.onOpenHtmlPreview}
+      onClick={props.onOpenHtmlPreview} title={props.onOpenHtmlPreview ? "Lead HTML 뷰어 열기" : "HTML 뷰어가 아직 연결되지 않았습니다."} type="button"><FileText /><span className="builder-refresh-label">HTML 뷰어</span></button>}
     {view !== "lead" && view !== "decisions" && <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={() => setDrawerOpen(value => !value)} type="button"><PanelRight /></button>}
   </div>;
 
   let content: ReactNode;
-  if (activeActor) content = <ActorTranscriptView actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} props={props} />;
-  else if (view === "lead") content = <LeadView drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} props={props} />;
+  if (activeActor) content = <ActorTranscriptView actions={headerActions} actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
+  else if (view === "lead") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
   else if (view === "architecture") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><ArchitectureView onActor={openActor} props={props} /></WithActivityRail>;
   else if (view === "organization") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><OrganizationView onActor={openActor} props={props} /></WithActivityRail>;
   else if (view === "documents") content = <WithActivityRail drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onSelectQuestion={() => {}} props={props} view={view}><DocumentsView props={props} /></WithActivityRail>;
@@ -421,7 +463,7 @@ export function BuilderShell(props: BuilderShellProps) {
     <style>{flowCss}{builderCss}</style>
     <div className={`builder-layout${collapsed ? " is-collapsed" : ""}`}>
       <aside aria-label="SPS Builder 탐색" className="builder-sidebar">
-        <div className="builder-brand"><span className="builder-brand-mark">SPS</span><div className="builder-brand-copy"><strong>SPS Builder</strong><small>Workspace</small></div></div>
+        <div className="builder-brand"><span className="builder-brand-mark">SPS</span><div className="builder-brand-copy"><strong>SPS Builder</strong><small>PRIVATE SOLUTION STUDIO</small></div></div>
         <div className="builder-workspace"><small>SPS CORE WORKSPACE</small><strong title={props.workspaceLabel}>{props.workspaceLabel || props.snapshot.workspaceId}</strong></div>
         <div className="builder-nav-label">작업 공간</div>
         <nav aria-label="주 메뉴" className="builder-nav">
@@ -439,16 +481,23 @@ export function BuilderShell(props: BuilderShellProps) {
           {!activeActors.length && <div className="builder-actor-copy" style={{ padding: "4px 9px", color: "var(--builder-muted)", fontSize: 10 }}>실행 중 또는 응답 대기 중인 AI가 없습니다.</div>}
         </div>
         <div className="builder-sidebar-footer">
-          {props.onOpenCoreSettings && <button className="builder-quiet-button builder-settings" onClick={props.onOpenCoreSettings} title="SPS Core 설정" type="button"><Settings /><span>SPS Core 설정</span></button>}
           <button aria-label={collapsed ? "사이드바 펼치기" : "사이드바 접기"} className="builder-quiet-button builder-collapse" onClick={() => setCollapsed(value => !value)} type="button">
             {collapsed ? <ChevronRight /> : <ChevronLeft />}<span>{collapsed ? "메뉴 펼치기" : "메뉴 접기"}</span>
           </button>
+          <div className="builder-profile">
+            {profileOpen && <div className="builder-profile-menu"><button aria-label="SPS Core 설정 열기" className="builder-quiet-button" disabled={!props.onOpenCoreSettings}
+              onClick={() => { setProfileOpen(false); props.onOpenCoreSettings?.(); }} type="button"><Settings /><span>SPS Core 설정 열기</span></button></div>}
+            <button aria-expanded={profileOpen} aria-label="프로필 메뉴" className="builder-profile-button" onClick={() => setProfileOpen(value => !value)}
+              onKeyDown={event => { if (event.key === "Escape") setProfileOpen(false); }} title="프로필 메뉴" type="button">
+              <span className="builder-profile-avatar"><Settings aria-hidden="true" size={16} /></span><span className="builder-actor-copy"><strong>현재 Workspace</strong><small>Core 설정</small></span>
+            </button>
+          </div>
         </div>
       </aside>
       <main className="builder-main">
-        <header className="builder-view-header"><div className="builder-view-title"><h1>{activeActor ? activeActor.label : current.title}</h1>
-          <p>{activeActor ? `${ACTOR_STATUS[activeActor.status]} · 조회 전용 세션` : current.description}</p></div>{headerActions}</header>
-        <div className="builder-view-body">{content}</div>
+        {view !== "lead" && view !== "decisions" && !activeActor
+          ? <div className="builder-view-body"><div className="builder-page-actions"><h1>{current.title}</h1>{headerActions}</div>{content}</div>
+          : <div className="builder-view-body">{content}</div>}
       </main>
     </div>
   </div>;

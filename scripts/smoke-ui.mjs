@@ -44,13 +44,37 @@ try {
         };
       });
       await page.goto(origin);
-      await page.getByRole("heading", { level: 1, name: "Lead 대화", exact: true }).waitFor();
+      await page.getByRole("heading", { level: 1, name: "Lead와 대화", exact: true }).waitFor();
+      assert.equal(await page.locator('.builder-view-header').count(), 0);
+      const palette = await page.locator('.builder-shell').evaluate(element => ({
+        background: getComputedStyle(element).backgroundColor, colorScheme: getComputedStyle(element).colorScheme,
+        font: getComputedStyle(element).fontFamily,
+      }));
+      assert.equal(palette.background, 'rgb(24, 24, 24)');
+      assert.equal(palette.colorScheme, 'dark');
+      assert.ok(palette.font.includes('Pretendard'));
+      if (width > 790) {
+        assert.equal(Math.round((await page.locator('.builder-sidebar').boundingBox()).width), 240);
+        assert.equal(Math.round((await page.locator('.builder-activity-rail').boundingBox()).width), 384);
+      } else await page.getByRole('button', { name: '작업 기록 열기', exact: true }).click();
+      const rail = page.getByRole('complementary', { name: 'AI 작업 기록', exact: true });
+      for (const label of ['수정사항', '작업 지시', '작업 파일']) assert.equal(await rail.getByRole('tab', {name:label,exact:true}).isDisabled(), true);
+      await rail.getByRole('tab', {name:'기록',exact:true}).focus();
+      await page.keyboard.press('ArrowRight');
+      assert.equal(await rail.getByRole('tab', {name:'설계',exact:true}).getAttribute('aria-selected'), 'true');
+      await page.keyboard.press('Home');
+      assert.equal(await rail.getByRole('tab', {name:'기록',exact:true}).getAttribute('aria-selected'), 'true');
+      if (width <= 790) await rail.getByRole('button', {name:'작업 기록 닫기',exact:true}).click();
+      await page.getByRole('button', { name:'프로필 메뉴',exact:true }).click();
+      assert.equal(await page.getByRole('button', {name:'SPS Core 설정 열기',exact:true}).isDisabled(), true);
+      await page.getByRole('button', {name:'프로필 메뉴',exact:true}).press('Escape');
+      assert.equal(await page.getByRole('button', {name:'프로필 메뉴',exact:true}).getAttribute('aria-expanded'), 'false');
       assert.equal(await page.getByRole("textbox", { name: "Lead에게 메시지" }).isDisabled(), true);
       const bounds = await page.locator(".builder-composer").boundingBox();
       assert.ok(bounds && bounds.y + bounds.height <= height + 1, "Composer must remain inside the viewport.");
       for (const label of ["설계 시각화", "조직도", "설계 문서", "미결정사항", "시스템", "Lead 대화"]) {
         await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: label, exact: true }).click();
-        await page.getByRole("heading", { level: 1, name: label, exact: true }).waitFor();
+        await page.getByRole("heading", { level: 1, name: label === 'Lead 대화' ? 'Lead와 대화' : label, exact: true }).waitFor();
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       }
       await page.goto(`${origin}?fixture=decisions`);
@@ -70,7 +94,7 @@ try {
       await page.getByText("Lead decision with unrelated run ID", { exact: true }).waitFor();
       assert.equal(await page.getByText("SUBORDINATE RECORD MUST NOT APPEAR", { exact: true }).count(), 0);
       await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "Lead 대화", exact: true }).click();
-      await page.getByRole("heading", { level: 1, name: "Lead 대화", exact: true }).waitFor();
+      await page.getByRole("heading", { level: 1, name: "Lead와 대화", exact: true }).waitFor();
       await page.getByRole("button", { name: "상담 텍스트 가져오기", exact: true }).click();
       await page.getByRole("textbox", { name: "상담 텍스트", exact: true }).fill("브라우저 검증용 상담 원문");
       await page.getByRole("button", { name: "저장된 입력으로 전달", exact: true }).click();
@@ -126,7 +150,7 @@ try {
       await page.getByRole("button", { name: "상담 텍스트 가져오기", exact: true }).click();
       await page.getByRole("button", { name: "작업 기록 열기", exact: true }).click();
       if (name === "mobile") {
-        await page.getByRole("complementary", { name: "최근 작업 기록" }).waitFor({ state: "visible" });
+        await page.getByRole("complementary", { name: "AI 작업 기록", exact:true }).waitFor({ state: "visible" });
         await page.getByRole("button", { name: "작업 기록 닫기", exact: true }).last().click();
       } else {
         await page.getByRole("button", { name: "사이드바 접기", exact: true }).click();
@@ -135,9 +159,9 @@ try {
         await page.locator(".builder-shell").evaluate(element => { element.style.width = "900px"; });
         const embedded = await page.locator(".builder-message-main").boundingBox();
         assert.ok(embedded && embedded.width >= 600, "Embedded Builder must retain a readable main column.");
-        assert.equal(await page.getByRole("complementary", { name: "최근 작업 기록" }).isVisible(), false);
+        assert.equal(await page.getByRole("complementary", { name: "AI 작업 기록", exact:true }).isVisible(), false);
         await page.getByRole("button", { name: "작업 기록 열기", exact: true }).click();
-        await page.getByRole("complementary", { name: "최근 작업 기록" }).waitFor({ state: "visible" });
+        await page.getByRole("complementary", { name: "AI 작업 기록", exact:true }).waitFor({ state: "visible" });
         await page.getByRole("button", { name: "작업 기록 닫기", exact: true }).last().click();
         await page.locator(".builder-shell").evaluate(element => { element.style.width = ""; });
       }

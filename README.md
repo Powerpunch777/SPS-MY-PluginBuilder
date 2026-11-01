@@ -4,6 +4,11 @@
 
 현재는 **v15 설계에 따른 초기 구현 단계**입니다. Workspace별 데이터 검증, 상담 텍스트 저장 액션, 공개 SPS SDK Worker와 Lead 중심 UI를 구현하고 있습니다. 실제 AI·GitHub·Runner 연동과 납품 전체 흐름은 아직 완성되지 않았습니다. 설계 HTML과 개발용 UI Preview는 실연동 결과가 아닙니다.
 
+UI는 [확정된 적용 기준](docs/design/03_UI/UI-IMPLEMENTATION-CONTRACT-2026-11-01.md)에
+따라 **UI v9의 구조·배치를 유지하고 Codex식 검정·중립 회색**으로 적용합니다.
+이전 밝은 임시 구현은 최종 기준이 아닙니다. 기능이 연결되지 않은 경우 원래
+위치를 보존하고 사용 불가 상태를 표시하며, 전체 화면 정합성 보정은 진행 중입니다.
+
 ## 개발 실행
 
 Node.js 22.18 이상과 npm이 필요합니다. 공개 SDK는 확인한 Git commit에 고정합니다.

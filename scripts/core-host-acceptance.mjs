@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { cp, mkdir } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { cp, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -26,6 +26,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   for (const file of ["package.json", "sps-plugin.json", "THIRD_PARTY_NOTICES.md", "dist"]) {
     await cp(path.join(root, file), path.join(directory, file), { recursive: true, errorOnExist: true, force: false });
   }
+  const uiSha256 = createHash("sha256").update(await readFile(path.join(directory, "dist/ui-v0.1.0/index.js"))).digest("hex");
   await request("/api/plugins/install", { method: "POST", body: { packageName: directory, isLocalPath: true } });
   const plugin = (await eventually(() => request("/api/plugins"),
     values => values.some(value => value.pluginKey === "com.sonparkserver.my-plugin-builder" && value.status === "ready"),
@@ -72,6 +73,19 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     loading:document.body.innerText.includes('Workspace 상태를 불러오는 중입니다.'),
     failed:Boolean(document.querySelector('.builder-status-strip.is-error'))})`),
   value => value.ready && value.path === `/${company.issuePrefix}/builder` && !value.loading && !value.failed, "actual Builder Shell route");
+  const visual = await workspace.evaluate(`(() => {
+    const shell=document.querySelector('.builder-shell');
+    return {background:getComputedStyle(shell).backgroundColor,scheme:getComputedStyle(shell).colorScheme,
+      duplicateHeader:Boolean(document.querySelector('.builder-view-header')),
+      title:document.querySelector('.builder-chat-heading h1')?.textContent,
+      tabs:[...document.querySelectorAll('.builder-rail-tabs [role="tab"]')].map(item=>({label:item.textContent,disabled:item.disabled}))};
+  })()`);
+  assert.equal(visual.background, 'rgb(24, 24, 24)');
+  assert.equal(visual.scheme, 'dark');
+  assert.equal(visual.duplicateHeader, false);
+  assert.equal(visual.title, 'Lead와 대화');
+  assert.deepEqual(visual.tabs.map(value => value.label), ['수정사항','작업 지시','기록','작업 파일','설계']);
+  assert.deepEqual(visual.tabs.map(value => value.disabled), [true,true,false,true,false]);
   assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]').disabled`), true);
   await click(workspace, '[aria-label="상담 텍스트 가져오기"]', "Open Builder consultation import");
   const text = "Isolated actual Host consultation input";
@@ -160,5 +174,6 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
+    uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true,
     cleanupQualificationPending: true }));
 }

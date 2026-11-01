@@ -3,6 +3,10 @@
 - `01_Design/`: 최신 통합 설계서 v15 (Lead/CTO/Worker/QA 및 기술 선정 반영)
 - `02_Tech_Research/`: 기술 스택 조사·선정 근거
 - `03_UI/`: HTML UI v9 (Document Worker 제외)
+- [UI 적용 기준 (2026-11-01)](03_UI/UI-IMPLEMENTATION-CONTRACT-2026-11-01.md):
+  UI v9의 구조·배치를 유지하고 색상만 사용자 결정에 따라 Codex식 검정·중립
+  회색으로 적용한다. Core 테마와 구분하며, 미구현 기능은 위치를 유지하고
+  사용 불가 상태로 표시한다. 임시 밝은 UI는 최종 기준이 아니다.
 
 ## 사용 안내
 `03_UI/SPS_Builder_Lead_UI_v9.html` 파일을 브라우저에서 열면 UI 시제품을 볼 수 있습니다.

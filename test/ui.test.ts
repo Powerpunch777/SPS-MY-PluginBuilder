@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -69,6 +69,13 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
     assert.match(html, /메시지 전송을 사용할 수 없습니다/);
     assert.match(html, /저장된 작업이 생기면 여기에 표시됩니다/);
     assert.match(html, /class="builder-shell"/);
+    assert.doesNotMatch(html, /class="builder-view-header"/);
+    assert.match(html, /Lead와 대화/);
+    assert.match(html, /role="tablist"/);
+    for (const tab of ["수정사항", "작업 지시", "기록", "작업 파일", "설계"]) assert.ok(html.includes(`>${tab}</button>`));
+    const css = await readFile(path.join(projectRoot, "src/ui/builder.css"), "utf8");
+    assert.match(css, /--builder-bg: #181818/);
+    assert.doesNotMatch(css, /var\(--sps-host-(?:accent|surface|background)/);
     assert.match(html, /aria-label="상담 텍스트 가져오기"/);
     assert.match(html, /aria-expanded="false"/);
     assert.doesNotMatch(html, /aria-label="상담 텍스트"/);
