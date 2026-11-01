@@ -4,10 +4,16 @@ import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { buildPluginWorker } from "@sonparkserver/plugin-sdk/authoring/worker-bundle-v1.mjs";
 import { calculateStaticCapabilitiesDigest, validateStaticPluginManifest } from "@sonparkserver/plugin-sdk/registry/static-package-manifest-v1.mjs";
+import { resolveDeclaredSdkRevision } from "./build-sdk-revision.mjs";
 import manifest from "../src/manifest.mjs";
 import { hostReactCommonJs } from "./host-react-commonjs.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
+const [packageJson, packageLock] = await Promise.all([
+  readFile(path.join(root, "package.json"), "utf8").then(JSON.parse),
+  readFile(path.join(root, "package-lock.json"), "utf8").then(JSON.parse),
+]);
+const sdkRevision = resolveDeclaredSdkRevision(packageJson, packageLock);
 await mkdir(path.join(root, "dist"), { recursive: true });
 await buildPluginWorker({ sourceDirectory: root });
 await build({ absWorkingDir: root, entryPoints: ["src/manifest.mjs"], outfile: "dist/manifest.js", bundle: true,
@@ -45,4 +51,5 @@ const declarative = {
 };
 validateStaticPluginManifest(declarative);
 await writeFile(path.join(root, "sps-plugin.json"), `${JSON.stringify(declarative, null, 2)}\n`);
-console.log(JSON.stringify({ builderBuild: "completed", pluginId: manifest.id, sdkRevision: "61a929f6c783f78e5af603682de1543c7e24abc0", coreHostTested: false }));
+// This reports matching manifest and lockfile pins, not attested installed SDK bytes.
+console.log(JSON.stringify({ builderBuild: "completed", pluginId: manifest.id, sdkRevision, coreHostTested: false }));
