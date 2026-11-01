@@ -5,6 +5,7 @@ import path from "node:path";
 import { buildPluginWorker } from "@sonparkserver/plugin-sdk/authoring/worker-bundle-v1.mjs";
 import { calculateStaticCapabilitiesDigest, validateStaticPluginManifest } from "@sonparkserver/plugin-sdk/registry/static-package-manifest-v1.mjs";
 import manifest from "../src/manifest.mjs";
+import { hostReactCommonJs } from "./host-react-commonjs.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 await mkdir(path.join(root, "dist"), { recursive: true });
@@ -13,7 +14,10 @@ await build({ absWorkingDir: root, entryPoints: ["src/manifest.mjs"], outfile: "
   format: "esm", platform: "node", target: "node22", legalComments: "linked" });
 const ui = await build({ absWorkingDir: root, entryPoints: ["src/ui/index.tsx"], outfile: "dist/ui-v0.1.0/index.js", bundle: true,
   format: "esm", platform: "browser", target: "es2022", loader: { ".css": "text" }, jsx: "automatic",
-  external: ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "@sonparkserver/plugin-sdk/ui/bridge"], legalComments: "linked", metafile: true });
+  external: ["react-dom", "react-dom/client", "react/jsx-runtime", "@sonparkserver/plugin-sdk/ui/bridge"],
+  plugins: [hostReactCommonJs(), { name: "external-host-react", setup(build) {
+    build.onResolve({ filter: /^react$/ }, () => ({ path: "react", external: true }));
+  } }], legalComments: "linked", metafile: true });
 
 // Include full upstream license/notice files, including the SDK bundled in the Worker.
 const bundledPackages = new Set(["@sonparkserver/plugin-sdk"]);

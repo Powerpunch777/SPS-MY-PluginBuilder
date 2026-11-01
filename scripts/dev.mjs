@@ -3,13 +3,18 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
+const rawPort = process.env.SPS_BUILDER_DEV_PORT;
+const port = rawPort === undefined ? 4174 : Number(rawPort);
+if ((rawPort !== undefined && !/^\d+$/.test(rawPort)) || !Number.isInteger(port) || port < 0 || port > 65535) {
+  throw new RangeError("SPS_BUILDER_DEV_PORT must be 0 or an integer from 1 to 65535.");
+}
 const output = path.join(root, "artifacts", "dev");
 await mkdir(output, { recursive: true });
 const build = await context({ absWorkingDir: root, entryPoints: ["src/dev.tsx"], outfile: path.join(output, "ui.js"),
   bundle: true, platform: "browser", format: "esm", target: "es2022", jsx: "automatic", loader: { ".css": "text" },
   legalComments: "linked" });
 try {
-  const server = await build.serve({ host: "127.0.0.1", port: 4174, servedir: output,
+  const server = await build.serve({ host: "127.0.0.1", port, servedir: output,
     fallback: path.join(root, "scripts", "dev-index.html") });
   console.log(`SPS Builder UI Preview: http://127.0.0.1:${server.port}/ (Core/AI not connected)`);
   const stop = async () => { await build.dispose(); process.exit(0); };

@@ -23,9 +23,26 @@ Chrome이 설치된 개발 PC에서는 Preview 실행 중 `npm run test:browser`
 - Workspace가 다른 데이터, 잘못된 참조 및 중복 ID를 거부하는 Builder 상태 계약.
 - 실제 Core가 제공한 Workspace/사용자 범위로 선택한 상담 텍스트를 저장하는 액션. 같은 요청 재시도는 중복 저장하지 않으며 AI 분석을 시작했다고 표시하지 않습니다.
 - Lead 대화, 설계 지도, 조직도, 문서, 미결정사항, 시스템 화면과 읽기 전용 하위 AI 기록 UI.
-- SDK 빌드·정적 매니페스트·Worker 생명주기 검사. Core에 설치해 작동을 검증한 완료본은 아닙니다.
+- SDK 빌드·정적 매니페스트·Worker 생명주기 검사와 source-only 격리 Host의 초기 저장 흐름 검증. 설치본·실제 AI·납품 전체 검증 완료본은 아닙니다.
+- Host 설치만으로 Workspace에 자동 활성화하지 않습니다. Workspace 활성화와 Shell 선택은 명시적으로 수행합니다.
 
 다음 단계와 검증 범위는 [병행 구현 계획](docs/implementation/PLAN-2026-11-01.md)에 기록합니다.
+
+## 실제 SPS Host 검사
+
+Windows 개발 PC에서 준비된 비공개 SPS Source의 `sps-server/desktop` 경로를
+`SPS_BUILDER_CORE_DESKTOP` 환경변수로 지정하고 `npm run test:core-host`를 실행합니다.
+이 경로를 공개 저장소에 기록하거나 Core 소스를 복사하지 않습니다. 이 검사는
+지원되는 source-only 외부 플러그인 시험 도구가 있는 개발 checkout을 요구합니다.
+
+시험은 새 임시 프로필과 모의 Identity를 사용해 실제 Electron/SPS Host를 실행합니다.
+명시적 설치·활성화·Shell 선택, 화면에서 상담 저장, Workspace 간 데이터 분리,
+동일 요청 재시도와 Host 재시작 후 보존을 확인합니다. 사용자의 설치본·로그인·프로젝트는
+사용하지 않습니다. 이 검사는 실제 AI, 서명된 설치본, 두 PC 검증이나 납품 완료가 아닙니다.
+
+`npm run test:browser:ci`는 별도 서버를 수동으로 켜지 않고 독립 Preview 검사를 실행합니다.
+Playwright Chromium이 필요하며, `npx playwright install chromium`으로 준비할 수 있습니다.
+기존 `npm run dev`와 설치된 Chrome을 사용하는 `npm run test:browser`도 유지합니다.
 
 ## 설계 원본
 

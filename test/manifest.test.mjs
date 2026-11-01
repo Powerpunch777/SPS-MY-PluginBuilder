@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import manifest from "../src/manifest.mjs";
 
+test("Host installation does not implicitly enable Builder in every Workspace", () => {
+  assert.equal(manifest.companyActivation?.defaultEnabled, false);
+});
+
 test("Workspace Shell routes match the declared page route rather than a package-key URL", () => {
   const pages = manifest.ui.slots.filter(slot => slot.type === "page");
   assert.equal(pages.length, 1);

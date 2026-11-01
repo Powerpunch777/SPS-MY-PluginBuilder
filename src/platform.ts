@@ -75,7 +75,14 @@ export function createBuilderPlatform() {
       if (context.actor.type !== "user" || context.actor.companyId !== context.companyId) {
         throw new Error("Selected consultation input requires an authenticated user action.");
       }
-      return importConsultation(context.companyId, params, context);
+      // Core includes its authorized companyId in action parameters. It is
+      // envelope metadata, never a user-selected destination or domain field.
+      if (Object.hasOwn(params, "companyId") && params.companyId !== context.companyId) {
+        throw new Error("Action metadata must match the trusted Workspace.");
+      }
+      const input = { ...params };
+      delete input.companyId;
+      return importConsultation(context.companyId, input, context);
     } }],
   });
 }

@@ -18,6 +18,7 @@ export default defineSpsPluginManifest({
   ...surface,
   capabilities: [...surface.capabilities, "ui.workspaceShell.provide", "plugin.state.read", "plugin.state.write"],
   entrypoints: { ...surface.entrypoints, worker: "./dist/worker.js", workspaceWorker: "./dist/worker.js" },
+  companyActivation: { defaultEnabled: false },
   ui: {
     ...surface.ui,
     workspaceShell: {

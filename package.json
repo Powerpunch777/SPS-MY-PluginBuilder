@@ -11,6 +11,8 @@
     "test": "node --experimental-strip-types --test test/*.test.ts test/*.test.mjs",
     "check": "npm run typecheck && npm test && sps-plugin validate . --json && sps-plugin test . --json",
     "test:browser": "node scripts/smoke-ui.mjs",
+    "test:browser:ci": "node scripts/browser-smoke-server.mjs",
+    "test:core-host": "npm run build && node scripts/test-core-host.mjs",
     "dev": "node scripts/dev.mjs"
   },
   "files": ["dist/manifest.js", "dist/worker.js", "dist/ui-v0.1.0", "dist/third-party-notices", "THIRD_PARTY_NOTICES.md"],

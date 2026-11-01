@@ -4,9 +4,20 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 // Development UI only. No SPS account, Host, Runner or AI is connected here.
-const origin = "http://127.0.0.1:4174";
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const origin = process.env.BUILDER_SMOKE_ORIGIN ?? "http://127.0.0.1:4174";
+const launchOptions = { headless: true };
+if (process.env.BUILDER_SMOKE_BROWSER !== "chromium") launchOptions.channel = "chrome";
+let browser;
+let interrupted;
+const closeOnSignal = signal => {
+  interrupted = signal;
+  void browser?.close();
+};
+process.once("SIGINT", closeOnSignal);
+process.once("SIGTERM", closeOnSignal);
 try {
+  browser = await chromium.launch(launchOptions);
+  if (interrupted) throw new Error(`Interrupted by ${interrupted}.`);
   await mkdir(path.resolve("artifacts/screenshots"), { recursive: true });
   for (const [name, width, height] of [["desktop", 1440, 900], ["mobile", 390, 844]]) {
     const page = await browser.newPage({ viewport: { width, height } });
@@ -35,6 +46,15 @@ try {
       } else {
         await page.getByRole("button", { name: "사이드바 접기", exact: true }).click();
         await page.getByRole("button", { name: "사이드바 펼치기", exact: true }).click();
+        await page.getByRole("button", { name: "작업 기록 열기", exact: true }).click();
+        await page.locator(".builder-shell").evaluate(element => { element.style.width = "900px"; });
+        const embedded = await page.locator(".builder-message-main").boundingBox();
+        assert.ok(embedded && embedded.width >= 600, "Embedded Builder must retain a readable main column.");
+        assert.equal(await page.getByRole("complementary", { name: "최근 작업 기록" }).isVisible(), false);
+        await page.getByRole("button", { name: "작업 기록 열기", exact: true }).click();
+        await page.getByRole("complementary", { name: "최근 작업 기록" }).waitFor({ state: "visible" });
+        await page.getByRole("button", { name: "작업 기록 닫기", exact: true }).last().click();
+        await page.locator(".builder-shell").evaluate(element => { element.style.width = ""; });
       }
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-${name}.png`) });
       assert.deepEqual(errors, []);
@@ -42,4 +62,8 @@ try {
         composerVisible: true, noOverflow: true, coreHostTested: false, realAi: false }));
     } finally { await page.close(); }
   }
-} finally { await browser.close(); }
+} finally {
+  process.removeListener("SIGINT", closeOnSignal);
+  process.removeListener("SIGTERM", closeOnSignal);
+  await browser?.close();
+}

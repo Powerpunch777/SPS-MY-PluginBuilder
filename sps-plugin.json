@@ -7,7 +7,7 @@
   },
   "runtime": {
     "manifestEntry": "dist/manifest.js",
-    "manifestSha256": "95e3b899e5f913455bb531737da3c3492468adf567789ee29208365b0f602047"
+    "manifestSha256": "ee8625c20e105caf9bf4a04626ffd22308be4b85f09b01d85136ee12ab066fab"
   },
   "capabilities": [
     "plugin.state.read",

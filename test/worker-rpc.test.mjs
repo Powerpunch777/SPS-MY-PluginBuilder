@@ -119,7 +119,7 @@ test("built Worker JSONL round-trips workspace state and rejects cross-workspace
       paperclipInvocation: { id: "test-invocation-a", scope: { companyId: workspaceA } },
       params: {
         key: "builder.import-consultation",
-        params: { requestId, text: "Selected user-provided consultation text." },
+        params: { requestId, text: "Selected user-provided consultation text.", companyId: workspaceA },
         actorContext: { type: "user", companyId: workspaceA, userId: "test-user" },
       },
     });
@@ -155,7 +155,7 @@ test("built Worker JSONL round-trips workspace state and rejects cross-workspace
     });
     const maliciousResult = await workerResponse(6);
     assert.ok(maliciousResult.error, "company-B action parameters must be rejected in Workspace A");
-    assert.match(maliciousResult.error.message, /request ID|selected text/);
+    assert.match(maliciousResult.error.message, /trusted Workspace/);
     assert.equal(messages.some(message => message.method === "state.get" || message.method === "state.set"), false,
       "malicious action must be rejected before any host state call");
     assert.equal(hostState.has(workspaceB), false);
