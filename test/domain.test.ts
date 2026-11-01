@@ -34,6 +34,41 @@ test("parses to a detached copy and rejects unknown or foreign workspace data", 
   assert.throws(() => parseBuilderSnapshot({ ...input, graph: { ...input.graph, extra: true } }, "workspace-a"), /unknown or missing fields/);
 });
 
+test("accepts empty, partial, and fully assigned Lead sessions while rejecting duplicate IDs", () => {
+  assert.deepEqual(parseBuilderSnapshot(empty(), "workspace-a").leadSessions,
+    { main: null, "cto-inbox": null, decisions: null });
+
+  const partial = empty();
+  partial.leadSessions.main = "lead-main";
+  assert.deepEqual(parseBuilderSnapshot(partial, "workspace-a").leadSessions, partial.leadSessions);
+
+  const assigned = empty();
+  assigned.leadSessions = { main: "lead-main", "cto-inbox": "lead-inbox", decisions: "lead-decisions" };
+  assert.deepEqual(parseBuilderSnapshot(assigned, "workspace-a").leadSessions, assigned.leadSessions);
+
+  assigned.leadSessions.decisions = "lead-main";
+  assert.throws(() => parseBuilderSnapshot(assigned, "workspace-a"), /duplicate ID/);
+  assigned.leadSessions.decisions = "lead-inbox";
+  assert.throws(() => parseBuilderSnapshot(assigned, "workspace-a"), /duplicate ID/);
+});
+
+test("allows unconfirmed null actor sessions but rejects reused session IDs", () => {
+  const snapshot = empty();
+  snapshot.leadSessions.main = "lead-main";
+  const cto = { id: "cto-1", role: "cto" as const, label: "CTO", parentActorId: null,
+    agentId: null, sessionId: null, status: "idle" as const };
+  snapshot.actors.push(cto);
+  assert.doesNotThrow(() => parseBuilderSnapshot(snapshot, "workspace-a"));
+
+  snapshot.actors[0]!.sessionId = "lead-main";
+  assert.throws(() => parseBuilderSnapshot(snapshot, "workspace-a"), /duplicate ID/);
+
+  snapshot.actors[0]!.sessionId = "cto-session";
+  assert.doesNotThrow(() => parseBuilderSnapshot(snapshot, "workspace-a"));
+  snapshot.actors.push({ ...cto, id: "worker-1", role: "development", sessionId: "cto-session" });
+  assert.throws(() => parseBuilderSnapshot(snapshot, "workspace-a"), /duplicate ID/);
+});
+
 test("rejects accessors without evaluating them and rejects sparse or oversized data", () => {
   let getterCalled = false;
   const input = empty() as unknown as Record<string, unknown>;

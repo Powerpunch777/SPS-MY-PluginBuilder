@@ -81,6 +81,10 @@ GitHub Actions/Runner 연결, CTO 생성, Worker/QA 위임, Graph patch, 질문 
 - Node.js [Child process](https://nodejs.org/api/child_process.html): 실제 프로세스가 있는 경우 부모가 자식 lifecycle event를 관찰하는 공식 계약. 이번 제안은 Builder 자체 child process를 추가하지 않는다.
 - Electron [IPC tutorial](https://www.electronjs.org/docs/latest/tutorial/ipc) 및 [Context Isolation](https://www.electronjs.org/docs/latest/tutorial/context-isolation): IPC를 넓게 노출하지 않고 좁은 API를 내놓는 원칙 참고. SPS Plugin Worker 계약은 Electron IPC가 아니므로 이 문서를 SPS API 명세처럼 취급하지 않는다.
 
+## 도메인 회귀 커버리지 메모
+
+`test/domain.test.ts`의 snapshot 검증 회귀 테스트는 Lead 세션 배정이 비어 있거나 일부만 지정된 경우 및 세 채널 모두 지정된 경우를 허용한다. 계획 단계 actor의 `agentId`/`sessionId`는 null일 수 있으며, Lead 채널과 actor 전체에서 null이 아닌 세션 ID의 중복은 거부한다. 이는 저장 데이터의 parser 검증 범위일 뿐, 세션 생성·실제 AI 실행 또는 세 Lead 세션 간 공통 기억 구현의 완료를 뜻하지 않는다.
+
 ## 검증하지 않은 것
 
 이번 작업은 Builder/Core/고정 SDK 소스 계약 조사다. 실제 AI 모델 호출, Codex CLI 로그인/권한, Core 운영 설치본, 응답 내용·품질, 비용, 승인된 Agent의 취소·재시작 동작은 실행하지 않았으며 보증하지 않는다.
