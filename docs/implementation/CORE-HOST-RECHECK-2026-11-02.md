@@ -2,6 +2,30 @@
 
 2026-11-02. Builder 기능 추가가 아닌, Core 변경 후의 실제 source 앱 회귀 기록이다.
 
+## Source 대조 연결 후 재검증
+
+- Builder 문서 HEAD `ae1433f`, runtime `1d5b884e20546af45486e1ad224685a3666fc8f2`.
+- Source `7ae5b7b14bbb5144f70add5aa2b3f4bc737251f2`.
+- Core `7192377577230eb362417406a6579639b25d6d35`.
+- 공개 SDK `61a929f6c783f78e5af603682de1543c7e24abc0`, Node24.22.1.
+
+준비된 비공개 checkout을 환경변수로 지정해 `npm run test:core-host`를 실행했고
+exit0이었다. 검정·중립 회색, 단일 Lead 헤더, v9 작업 패널 자리와 빈 문서/조직
+구조, System의 연결 안내·중복 rail 없음, Lead Agent 선택·원래 설정 보존을
+실제 격리 Electron/Core에서 확인했다. 실제 Bridge 저장·명시적 TXT 저장·A/B 분리·
+동일 요청 재시도·Host 재시작과 별도 Settings 복구도 통과했다.
+
+로드한 UI index SHA-256은
+`e6f37705ebdfa27f496c5a52641635b399f9dbf4e66ebb29fa25beb39dc23e5a`로 이전과 같다.
+Main4개 exit0·출력8개 종료·오류0개·정확한 임시 데이터 정리를 확인했다.
+로컬 원시 로그는 무시된 `artifacts/core-host-source-reconciliation-20261102.log`에
+있으며 공개 저장소에 포함하지 않는다.
+
+모의 Identity를 사용했다. 실제 Google·AI·Main Preview·전체 자손·서명 설치본·
+두 PC나 Core의 새 정리 경로를 UI에서 호출한 증거는 아니다. Core 정리 경로의
+자동 검사와 이 Builder의 일반 앱 회귀는 별개다. Lead3세션·공유 기억·CTO 단일
+세션·독립 Dev/QA·GHA 납품과 나머지 v15 UI 구현은 여전히 남아 있다.
+
 ## Source Inventory 후속 재검증
 
 다음은 아래 초기 검사와 별개의 정확한 후보 검사다.

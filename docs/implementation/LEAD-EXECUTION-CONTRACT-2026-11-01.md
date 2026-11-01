@@ -9,6 +9,19 @@ Builder가 실제 Lead 채팅을 하려면 새 AI 실행 서버나 Builder 소�
 검토 기준: Builder `28d29ce`, 공개 SDK `61a929f`, 비공개 Core `431e2e67`.
 2026-11-01의 Source 경로 별칭 수정은 이 조사 대상의 세션 구현을 변경하지 않았다.
 
+## 2026-11-02 재대조
+
+재대조 기준: Builder runtime `1d5b884`, Builder 문서 `ae1433f`, Core `7192377`, 공개 SDK `61a929f`.
+- Workspace Host allowlist에 Agent Session 호출 경로가 없어 기존 SDK 메서드를 Worker에서 쓸 수 없다.
+- `getRun`에는 크기 제한된 최종 결과와 결과 상태를 반환하는 계약이 없다.
+- 안정적인 세션 재확인과 send 요청의 내구성 중복 제거도 보장되지 않는다.
+- 따라서 계약 공백은 미해결이며, 실제 AI 실행이나 Lead 구현 완료로 표시하지 않는다.
+- 새 실행기 없이 기존 SPS Agent Session 경로를 재사용한다.
+- Lead 세 세션은 프로젝트의 제한된 구조화 기억을 공유하되 각 대화 기록은 구분한다.
+- CTO는 단일 세션, Dev/QA는 각각 독립 세션을 유지한다.
+- GitHub Actions와 Self-hosted Runner 범위는 그대로 보존한다.
+- 새 업무 모델, HTTP 우회, legacy issue 경로를 추가하지 않으며 비공개 Core 코드·경로·로그를 복사하지 않는다.
+
 ## v15 제품 계약 유지
 
 - Lead에는 `main`, `cto-inbox`, `decisions` 세 세션이 있고, 세 세션은 같은 프로젝트 Lead 기억을 공유한다.
