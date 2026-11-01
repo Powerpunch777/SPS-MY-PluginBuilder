@@ -16,7 +16,7 @@ export default defineSpsPluginManifest({
   categories: ["automation"],
   minimumHostVersion: "0.4.137",
   ...surface,
-  capabilities: [...surface.capabilities, "ui.workspaceShell.provide", "plugin.state.read", "plugin.state.write"],
+  capabilities: [...surface.capabilities, "ui.workspaceShell.provide", "plugin.state.read", "plugin.state.write", "agents.read"],
   entrypoints: { ...surface.entrypoints, worker: "./dist/worker.js", workspaceWorker: "./dist/worker.js" },
   companyActivation: { defaultEnabled: false },
   ui: {

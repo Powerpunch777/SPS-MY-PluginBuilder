@@ -47,6 +47,17 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     "Inactive denial must explain the activation boundary, not an unrelated runtime failure.");
   await activate(company.id, true);
   await activate(secondCompany.id, true);
+  const leadAgent = await request(`/api/companies/${company.id}/agents`, {
+    method: "POST", body: { name: "Builder Lead selection fixture", role: "engineer", adapterType: "process", adapterConfig: {} },
+  });
+  const foreignAgent = await request(`/api/companies/${secondCompany.id}/agents`, {
+    method: "POST", body: { name: "Other Workspace selection fixture", role: "engineer", adapterType: "process", adapterConfig: {} },
+  });
+  const leadOptions = companyId => request(`/api/plugins/${plugin.id}/data/builder.lead-agents`, {
+    method: "POST", body: { companyId, params: {} },
+  }).then(value => value.data);
+  const initialLeadOptions = await leadOptions(company.id);
+  assert.ok(initialLeadOptions.agents.some(agent => agent.id === leadAgent.id), "Existing Workspace Agent is absent from Builder options.");
   assert.deepEqual((await data(company.id)).messages, []);
   assert.deepEqual((await data(secondCompany.id)).messages, []);
   const provider = (await eventually(() => request(`/api/companies/${company.id}/workspace-shell/providers`),
@@ -86,6 +97,28 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.equal((await data(company.id)).messages.length, 1);
   assert.deepEqual((await data(secondCompany.id)).messages, []);
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes(${JSON.stringify(text)})`), Boolean, "saved input rendered");
+  await click(workspace, '.builder-nav [aria-label="시스템"]', "Open Builder Agent settings");
+  await eventually(() => workspace.evaluate(`({disabled:document.querySelector('select[aria-label="Lead Agent"]')?.disabled,
+    ids:[...(document.querySelector('select[aria-label="Lead Agent"]')?.options||[])].map(option=>option.value)})`),
+    value => value.disabled === false && value.ids.includes(leadAgent.id), "real Workspace Agent options");
+  assert.equal(await workspace.evaluate(`document.querySelector('select[aria-label="Lead Agent"]').querySelector('option[value="${foreignAgent.id}"]') !== null`), false);
+  await workspace.evaluate(`(() => { const select=document.querySelector('select[aria-label="Lead Agent"]');
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(leadAgent.id)});
+    select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  await click(workspace, 'section[aria-labelledby="lead-agent-settings-title"] button', "Save Lead binding without executing AI");
+  const savedLead = await eventually(() => leadOptions(company.id), value => value.selectedAgentId === leadAgent.id, "saved Lead Agent");
+  assert.equal(savedLead.revision, 1);
+  assert.equal((await leadOptions(secondCompany.id)).selectedAgentId, null);
+  assert.deepEqual((await request(`/api/agents/${leadAgent.id}`)).adapterConfig, leadAgent.adapterConfig);
+  const foreignSelection = await workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.select-lead-agent`)}, {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},
+    body:JSON.stringify({companyId:${JSON.stringify(company.id)},params:{agentId:${JSON.stringify(foreignAgent.id)},expectedRevision:1}})})
+    .then(r=>({status:r.status}))`, true);
+  assert.ok(foreignSelection.status >= 400, "An Agent from another Workspace cannot become this Builder Lead.");
+  assert.equal((await leadOptions(company.id)).selectedAgentId, leadAgent.id);
+  if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
+  await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
+  assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]').disabled`), true);
   const fit = await workspace.evaluate(`(() => {const shell=document.querySelector('.builder-shell');
     const main=document.querySelector('.builder-message-main');const rail=document.querySelector('.builder-activity-rail');
     return {width:shell.clientWidth,mainWidth:main.clientWidth,overflow:shell.scrollWidth>shell.clientWidth,
@@ -102,6 +135,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   workspace = await restart({ companyPrefix: company.issuePrefix, pluginId: plugin.id, readySelector: ".builder-shell" });
   assert.deepEqual(await data(company.id), saved, "Host restart lost Builder state.");
   assert.deepEqual((await data(secondCompany.id)).messages, []);
+  assert.deepEqual(await leadOptions(company.id), savedLead, "Host restart lost the separate Lead binding.");
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes(${JSON.stringify(text)})`), Boolean, "restarted Builder UI");
   await activate(company.id, false);
   await activate(company.id, true);
@@ -111,5 +145,6 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   console.log(JSON.stringify({ builderCoreHost: true, realUiBridge: true, actualWorkspaceState: true,
     workspaceIsolation: true, explicitShell: true, idempotentInput: true, hostRestart: true,
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
+    leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     cleanupQualificationPending: true }));
 }

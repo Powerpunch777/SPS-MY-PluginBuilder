@@ -3,6 +3,7 @@ import { defineSpsPlatformContract } from "@sonparkserver/plugin-sdk/platform";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderSnapshot } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
+import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agent.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -66,23 +67,74 @@ export async function importConsultation(companyId: string, params: Record<strin
   });
 }
 
+function leadAgentKey(companyId: string) {
+  return { ...key(companyId), stateKey: "lead-agent.v1" };
+}
+
+async function readLeadAgentBinding(companyId: string, platform: SpsPlatformInvocationContext) {
+  const value = await platform.state.get(leadAgentKey(companyId));
+  return parseLeadAgentBinding(value === null ? { workspaceId: companyId, revision: 0, selectedAgentId: null } : value, companyId);
+}
+
+export async function readLeadAgentOptions(companyId: string, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  const binding = await readLeadAgentBinding(companyId, platform);
+  const rows = await platform.agents.list({ companyId, limit: 100 });
+  if (!Array.isArray(rows) || rows.length > 100) throw new TypeError("Invalid Host Agent list.");
+  const agents = rows.map(row => {
+    if (!row || row.companyId !== companyId) throw new TypeError("Host Agent belongs to a different Workspace.");
+    // Never return adapter configuration, credentials or filesystem paths to UI.
+    return { id: row.id, name: row.name, status: row.status };
+  });
+  return parseLeadAgentOptions({ ...binding, agents }, companyId);
+}
+
+export async function selectLeadAgent(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  if (Object.keys(params).sort().join(",") !== "agentId,expectedRevision"
+    || params.agentId !== null && (typeof params.agentId !== "string" || !UUID.test(params.agentId))
+    || !Number.isSafeInteger(params.expectedRevision) || (params.expectedRevision as number) < 0) {
+    throw new TypeError("Lead Agent selection requires an Agent ID and the displayed revision.");
+  }
+  return serialize(companyId, async () => {
+    const current = await readLeadAgentBinding(companyId, platform);
+    if (current.revision !== params.expectedRevision) throw new Error("Lead Agent selection changed. Refresh before saving.");
+    if (params.agentId !== null) {
+      const options = await readLeadAgentOptions(companyId, platform);
+      const agent = options.agents.find(agent => agent.id === params.agentId);
+      if (!agent || !["idle", "running"].includes(agent.status)) throw new Error("Select an available Agent from this Workspace.");
+    }
+    if (current.selectedAgentId === params.agentId) return { saved: true, executionStarted: false, revision: current.revision };
+    const updated = parseLeadAgentBinding({ ...current, selectedAgentId: params.agentId, revision: current.revision + 1 }, companyId);
+    await platform.state.set(leadAgentKey(companyId), updated as unknown as JsonValue);
+    return { saved: true, executionStarted: false, revision: updated.revision };
+  });
+}
+
+function userActionInput(params: Record<string, unknown>, context: { companyId: string; actor: { type: string; companyId: string } }) {
+  if (context.actor.type !== "user" || context.actor.companyId !== context.companyId) {
+    throw new Error("Builder settings and input require an authenticated user action.");
+  }
+  if (Object.hasOwn(params, "companyId") && params.companyId !== context.companyId) {
+    throw new Error("Action metadata must match the trusted Workspace.");
+  }
+  const input = { ...params };
+  delete input.companyId;
+  return input;
+}
+
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
-    capabilities: ["plugin.state.read", "plugin.state.write"],
+    capabilities: ["plugin.state.read", "plugin.state.write", "agents.read"],
     data: [{ key: "builder.snapshot", handler: async (params, platform) =>
-      await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue }],
+      await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.lead-agents", handler: async (params, platform) =>
+      await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue }],
     actions: [{ key: "builder.import-consultation", handler: async (params, context) => {
-      if (context.actor.type !== "user" || context.actor.companyId !== context.companyId) {
-        throw new Error("Selected consultation input requires an authenticated user action.");
-      }
       // Core includes its authorized companyId in action parameters. It is
       // envelope metadata, never a user-selected destination or domain field.
-      if (Object.hasOwn(params, "companyId") && params.companyId !== context.companyId) {
-        throw new Error("Action metadata must match the trusted Workspace.");
-      }
-      const input = { ...params };
-      delete input.companyId;
-      return importConsultation(context.companyId, input, context);
-    } }],
+      return importConsultation(context.companyId, userActionInput(params, context), context);
+    } }, { key: "builder.select-lead-agent", handler: async (params, context) =>
+      selectLeadAgent(context.companyId, userActionInput(params, context), context) }],
   });
 }

@@ -7,6 +7,7 @@ import {
 import { Background, Controls, MarkerType, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
+import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
 import type {
   BuilderActor, BuilderMessage, BuilderQuestion, BuilderShellProps, BuilderView, LeadChannel,
 } from "../domain/model.js";
@@ -275,6 +276,8 @@ function SystemView({ props }: { props: BuilderShellProps }) {
   const githubLabel = props.snapshot.integrations.github === "ready" ? "사용 가능" : props.snapshot.integrations.github === "unavailable" ? "사용 불가" : "설정되지 않음";
   return <div className="builder-page"><div className="builder-page-intro"><h2>Host 연동 상태</h2><p>현재 Workspace와 분리된 Host 수준 정보입니다. 제공되지 않은 Runner 상태는 추정하지 않습니다.</p></div>
     <div className="builder-system-grid"><section className="builder-card"><h2>연결 상태</h2>
+      <LeadAgentSettings options={props.leadAgents ?? null} loading={props.leadAgentsLoading ?? false}
+        error={props.leadAgentsError ?? null} onSave={props.onSelectLeadAgent} />
       <IntegrationCard detail="메인 Lead 및 질문 대화 연결 상태" icon={Bot} state={aiLabel} title="AI 대화" />
       <IntegrationCard detail="저장소 및 Actions 연동 상태" icon={GitFork} state={githubLabel} title="GitHub" />
     </section><section className="builder-card"><h2>Runner 정보</h2>

@@ -25,6 +25,7 @@ Chrome이 설치된 개발 PC에서는 Preview 실행 중 `npm run test:browser`
 - Lead 대화, 설계 지도, 조직도, 문서, 미결정사항, 시스템 화면과 읽기 전용 하위 AI 기록 UI.
 - SDK 빌드·정적 매니페스트·Worker 생명주기 검사와 source-only 격리 Host의 초기 저장 흐름 검증. 설치본·실제 AI·납품 전체 검증 완료본은 아닙니다.
 - Host 설치만으로 Workspace에 자동 활성화하지 않습니다. Workspace 활성화와 Shell 선택은 명시적으로 수행합니다.
+- 시스템 화면에서 같은 Workspace의 기존 Agent를 Lead용으로 지정·해제하고 재시작 후 유지할 수 있습니다. 지정은 AI 실행·세션 생성·Agent 설정 변경이 아닙니다. 메시지 전송은 아직 비활성입니다.
 
 다음 단계와 검증 범위는 [병행 구현 계획](docs/implementation/PLAN-2026-11-01.md)에 기록합니다.
 

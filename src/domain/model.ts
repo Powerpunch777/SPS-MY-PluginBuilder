@@ -3,6 +3,13 @@ export type LeadChannel = "main" | "cto-inbox" | "decisions";
 export type BuilderRole = "lead" | "cto" | "development" | "qa";
 export type ActorStatus = "idle" | "running" | "waiting" | "failed" | "archived";
 
+export interface BuilderLeadAgentOptions {
+  workspaceId: string;
+  revision: number;
+  selectedAgentId: string | null;
+  agents: Array<{ id: string; name: string; status: string }>;
+}
+
 export interface BuilderActor {
   id: string;
   role: BuilderRole;
@@ -95,4 +102,8 @@ export interface BuilderShellProps {
   onImportConsultation?(text: string): Promise<void>;
   onOpenCoreSettings?(): void;
   onOpenHtmlPreview?(): void;
+  leadAgents?: BuilderLeadAgentOptions | null;
+  leadAgentsLoading?: boolean;
+  leadAgentsError?: string | null;
+  onSelectLeadAgent?(agentId: string | null, expectedRevision: number): Promise<void>;
 }
