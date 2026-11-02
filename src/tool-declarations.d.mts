@@ -72,3 +72,16 @@ export const READ_DESIGN_BASELINE_TOOL: Readonly<{
   description: string;
   parametersSchema: JsonObject;
 }>;
+
+export const PUBLISH_TECHNOLOGY_DECISIONS_TOOL: Readonly<{
+  name: "builder.publish-technology-decisions";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
+export const READ_TECHNOLOGY_DECISIONS_TOOL: Readonly<{
+  name: "builder.read-technology-decisions";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;

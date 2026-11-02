@@ -143,3 +143,47 @@ export const READ_DESIGN_BASELINE_TOOL = Object.freeze({
   description: "Read the current internal planning baseline with its pinned specification/Graph and user-source interpretation. This is not independent legal approval, delivery evidence or execution permission. Prior revisions remain immutable; a new draft does not silently replace the baseline.",
   parametersSchema: READ_SOLUTION_TOOL.parametersSchema,
 });
+
+const technologyReason = { type: "string", maxLength: 4096 };
+const technologyText = { type: "string", minLength: 1, maxLength: 4096, pattern: "\\S" };
+const technologyId = { type: "string", minLength: 1, maxLength: 160 };
+const researchReferences = { type: "array", maxItems: 32, uniqueItems: true, items: technologyId };
+export const PUBLISH_TECHNOLOGY_DECISIONS_TOOL = Object.freeze({
+  name: "builder.publish-technology-decisions", displayName: "Record the Lead's technology decision register",
+  description: "The prepared Lead records contract-level required/allowed/prohibited/undecided programs or stacks against the exact current baseline/specification/Graph before CTO assignment. Read baseline and prior register first. Give reasons, scope, interoperability, constraints, costs, versions and change owner. Unmentioned technology is unspecified, not prohibited. Separate your research reports from actual verified integration/license evidence; never invent proof, customer approval or execution authority. CTO implementation reuse research is a separate later step. Unknown writes require read reconciliation, not automatic retry.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
+    required: ["projectId", "expectedBaseRevisionId", "register"], properties: {
+      projectId: technologyId, expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 },
+      register: { type: "object", additionalProperties: false,
+        required: ["projectId", "revisionId", "sourceBaselineRevisionId", "sourceSpecRevisionId", "sourceGraphRevisionId", "entries"],
+        properties: { projectId: technologyId, revisionId: technologyId, sourceBaselineRevisionId: technologyId,
+          sourceSpecRevisionId: technologyId, sourceGraphRevisionId: technologyId,
+          entries: { type: "array", maxItems: 128, items: { type: "object", additionalProperties: false,
+            required: ["id", "technology", "disposition", "selectionReason", "nonSelectionReason", "scopeNodeIds", "interoperability", "constraints", "cost", "versionCompatibility", "changeApprovalOwner", "licenseReview", "verification"],
+            anyOf: [{ properties: { selectionReason: { pattern: "\\S" } } }, { properties: { nonSelectionReason: { pattern: "\\S" } } }],
+            properties: { id: technologyId, technology: { type: "string", minLength: 1, maxLength: 512 },
+              disposition: { enum: ["required", "allowed", "prohibited", "undecided"] },
+              selectionReason: technologyReason, nonSelectionReason: technologyReason,
+              scopeNodeIds: { type: "array", maxItems: 128, uniqueItems: true, items: technologyId },
+              interoperability: { type: "array", maxItems: 32, uniqueItems: true, items: technologyText },
+              constraints: { type: "array", maxItems: 32, uniqueItems: true, items: technologyText },
+              cost: technologyText, versionCompatibility: technologyText, changeApprovalOwner: technologyText,
+              licenseReview: { type: "object", additionalProperties: false, required: ["status", "licenseExpression", "evidenceRefs"],
+                oneOf: [{ properties: { status: { const: "unreviewed" }, licenseExpression: { type: "null" } } },
+                  { properties: { status: { const: "reported-reviewed" }, licenseExpression: technologyText, evidenceRefs: { minItems: 1 } } }],
+                properties: { status: { enum: ["unreviewed", "reported-reviewed"] },
+                  licenseExpression: { type: ["string", "null"], maxLength: 4096 }, evidenceRefs: researchReferences } },
+              verification: { type: "object", additionalProperties: false, required: ["level", "evidenceRefs", "limitations", "nextReviewCondition"],
+                oneOf: [{ properties: { level: { const: "not-verified" }, evidenceRefs: { maxItems: 0 } } },
+                  { properties: { level: { enum: ["documentation-only", "reported-integration-test"] }, evidenceRefs: { minItems: 1 } } }],
+                properties: { level: { enum: ["not-verified", "documentation-only", "reported-integration-test"] },
+                  evidenceRefs: researchReferences, limitations: technologyText, nextReviewCondition: technologyText } },
+            } } },
+        } },
+    } }),
+});
+export const READ_TECHNOLOGY_DECISIONS_TOOL = Object.freeze({
+  name: "builder.read-technology-decisions", displayName: "Read the pinned technology decision register",
+  description: "Read the Lead's versioned technology choices and exact source design revisions. Research claims are authored reports, not independent license/security/test verification. A historical register is not automatically current after a baseline change, and omitted technologies are not prohibited. No private CTO transcripts, execution or delivery authority is returned.",
+  parametersSchema: READ_SOLUTION_TOOL.parametersSchema,
+});

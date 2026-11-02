@@ -278,6 +278,34 @@ test("built Worker routes design sources to an unapproved draft and back without
     assert.equal(canonicalGraph.error, undefined, JSON.stringify(canonicalGraph.error));
     assert.deepEqual(canonicalGraph.result.data.solution, { sequence: 1, revision: baseline.graph });
 
+    const technologyRegister = { projectId: workspaceA, revisionId: "technology-rpc-1",
+      sourceBaselineRevisionId: baseline.revisionId, sourceSpecRevisionId: baseline.specification.revisionId,
+      sourceGraphRevisionId: baseline.graph.graphRevisionId,
+      entries: ["required", "allowed", "prohibited", "undecided"].map((disposition, index) => ({
+        id: `tech-${index}`, technology: `Example stack ${index}`, disposition,
+        selectionReason: "Bounded contract-level research fixture, not actual research.", nonSelectionReason: "",
+        scopeNodeIds: [], interoperability: [], constraints: [], cost: "Not measured.",
+        versionCompatibility: "Not verified.", changeApprovalOwner: "Lead; external authority remains separate.",
+        licenseReview: { status: "unreviewed", licenseExpression: null, evidenceRefs: [] },
+        verification: { level: "not-verified", evidenceRefs: [], limitations: "Fake Host fixture only.", nextReviewCondition: "Actual integration evidence." },
+      })) };
+    invoke(18, "builder.publish-technology-decisions", { projectId: workspaceA, expectedBaseRevisionId: null, register: technologyRegister });
+    const technologyReply = await serviceUntil(18);
+    assert.equal(technologyReply.error, undefined, JSON.stringify(technologyReply.error));
+    assert.equal(technologyReply.result.data.status, "published");
+    assert.deepEqual(technologyReply.result.data.revision.register, technologyRegister);
+    assert.match(technologyReply.result.content, /unspecified, not prohibited/);
+    assert.match(technologyReply.result.content, /not independent/);
+    invoke(19, "builder.read-technology-decisions", { projectId: workspaceA });
+    const technologyRead = await serviceUntil(19);
+    assert.equal(technologyRead.error, undefined, JSON.stringify(technologyRead.error));
+    assert.deepEqual(technologyRead.result.data.current.revision, technologyReply.result.data.revision);
+    send({ jsonrpc: "2.0", id: 20, method: "getData", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
+      params: { key: "builder.technology-decisions", companyId: workspaceA, params: { projectId: workspaceA } } });
+    const technologyDto = await serviceUntil(20);
+    assert.equal(technologyDto.error, undefined, JSON.stringify(technologyDto.error));
+    assert.deepEqual(technologyDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 1, record: technologyReply.result.data.revision });
+
     assert.ok(calls.includes("state.compareAndSet"), "proposal publication must use conditional state writes");
     assert.equal(hostState.get(JSON.stringify(stateKey("snapshot.v1"))).revision, 1,
       "design flow must not implicitly write the consultation snapshot");

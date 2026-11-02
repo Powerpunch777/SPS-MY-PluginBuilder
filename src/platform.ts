@@ -10,6 +10,8 @@ import { createLeadConversationStore, readLeadUserSource } from "./lead-conversa
 import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
 import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL } from "./tool-declarations.mjs";
 import { publishDesignBaseline, readLeadDesignBaseline, readDesignBaseline } from "./design-baseline-tools.ts";
+import { PUBLISH_TECHNOLOGY_DECISIONS_TOOL, READ_TECHNOLOGY_DECISIONS_TOOL } from "./tool-declarations.mjs";
+import { publishTechnologyDecisions, readLeadTechnologyDecisions, readTechnologyDecisions } from "./technology-decision-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -465,6 +467,14 @@ export async function readLeadBaseline(params: unknown, runContext: unknown, pla
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => readLeadDesignBaseline(params, context, platform));
 }
+export async function publishLeadTechnologyDecisions(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => publishTechnologyDecisions(params, context, platform));
+}
+export async function readLeadTechnologyRegister(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readLeadTechnologyDecisions(params, context, platform));
+}
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
@@ -502,8 +512,20 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => publishLeadDesignBaseline(params, context, platform) },
     { name: READ_DESIGN_BASELINE_TOOL.name, declaration: { displayName: READ_DESIGN_BASELINE_TOOL.displayName,
       description: READ_DESIGN_BASELINE_TOOL.description, parametersSchema: READ_DESIGN_BASELINE_TOOL.parametersSchema },
-      handler: (params, context, platform) => readLeadBaseline(params, context, platform) }],
-    data: [{ key: "builder.design-baseline", handler: async (params, platform) => {
+      handler: (params, context, platform) => readLeadBaseline(params, context, platform) },
+    { name: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.name, declaration: { displayName: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.displayName,
+      description: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.description, parametersSchema: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.parametersSchema },
+      handler: (params, context, platform) => publishLeadTechnologyDecisions(params, context, platform) },
+    { name: READ_TECHNOLOGY_DECISIONS_TOOL.name, declaration: { displayName: READ_TECHNOLOGY_DECISIONS_TOOL.displayName,
+      description: READ_TECHNOLOGY_DECISIONS_TOOL.description, parametersSchema: READ_TECHNOLOGY_DECISIONS_TOOL.parametersSchema },
+      handler: (params, context, platform) => readLeadTechnologyRegister(params, context, platform) }],
+    data: [{ key: "builder.technology-decisions", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
+      const current = await readTechnologyDecisions(companyId, params.projectId, platform);
+      return current && { workspaceId: companyId, projectId: params.projectId, sequence: current.sequence,
+        record: current.revision } as unknown as JsonValue;
+    } }, { key: "builder.design-baseline", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
       const current = await readDesignBaseline(companyId, params.projectId, platform);

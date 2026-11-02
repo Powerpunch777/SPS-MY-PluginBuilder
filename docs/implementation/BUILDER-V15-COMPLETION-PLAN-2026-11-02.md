@@ -419,3 +419,11 @@ fixture의 처음 끝 위치·과거 기록 독자 위치 보존·직접 최근 
 244개 자동 검사와 no-AI 앱 표시 fixture다. 실제 기준 저장, 기술 선정/Workstream,
 CTO 업무/질문 intake, Worker/QA·Runner·납품은 이 기록으로 완료 처리하지 않는다.
 기존 AC 체크 상태는 유지하며 Marketplace·Preview·자체 LAN도 계속 보류한다.
+
+### 2026-11-02 추가 기록: Lead 기술 선정 명세
+
+[기술 선정 명세](TECHNOLOGY-DECISIONS-2026-11-02.md)의 저장/조회와 읽기 전용 문서를
+연결했다. 현재 설계 기준의 명세/Graph revision과 범위 노드를 검증하며 네 가지 기술
+선택과 조사 주장/실제 검증의 차이를 보존한다. 전체267/267·타입/빌드·SDK CLI가
+통과했다. Graph 자체 기술 참조 개정, CTO Workstream 배정과 실제 AI 조사/Runner
+증거·납품은 남아 있으므로 AC-34/92/93/116 전체 통과로 올리지 않는다.

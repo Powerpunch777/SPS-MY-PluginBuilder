@@ -282,6 +282,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     globalThis.__spsBuilderQuestionDraftFixture=${JSON.stringify(draftFixture)};
     globalThis.__spsBuilderQuestionSends=[];
     globalThis.__spsBuilderBaselineFixture=null;
+    globalThis.__spsBuilderTechnologyFixture=null;
     const original=globalThis.fetch; globalThis.__spsBuilderSavedFetch=original;
     globalThis.fetch=function(input,init){
       const url=new URL(typeof input==='string'?input:input.url,location.href);
@@ -289,6 +290,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderQuestionDraftFixture}),{status:200,headers:{'content-type':'application/json'}}));
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.design-baseline`)})
         return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderBaselineFixture}),{status:200,headers:{'content-type':'application/json'}}));
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.technology-decisions`)})
+        return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderTechnologyFixture}),{status:200,headers:{'content-type':'application/json'}}));
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`)}){
         const body=JSON.parse(init.body);globalThis.__spsBuilderQuestionSends.push(body);
         return Promise.resolve(new Response(JSON.stringify({data:{saved:true,requestId:body.params.requestId}}),{status:200,headers:{'content-type':'application/json'}}));
@@ -358,9 +361,32 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
       value => value?.includes("fixture-baseline-1") && value.includes("외부 계약 체결이나 코드 실행 권한이 아닙니다"), "baseline record is not execution authority");
     assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
     if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-baseline-fixture.png"));
+    const technologyFixture = { workspaceId: company.id, projectId: company.id, sequence: 1,
+      record: { author: baselineFixture.baseline.author, createdAt: draftFixture.createdAt, baselineDigest: "c".repeat(64),
+        register: { projectId: company.id, revisionId: "fixture-technology-1", sourceBaselineRevisionId: "fixture-baseline-1",
+          sourceSpecRevisionId: "fixture-baseline-spec-1", sourceGraphRevisionId: "fixture-baseline-graph-1",
+          entries: ["required", "allowed", "prohibited", "undecided"].map((disposition, index) => ({
+            id: `fixture-tech-${index}`, technology: `Example stack ${index}`, disposition,
+            selectionReason: "Presentation fixture, not completed research.", nonSelectionReason: "",
+            scopeNodeIds: ["REQ-FIXTURE"], interoperability: [], constraints: [], cost: "Not measured.",
+            versionCompatibility: "Not verified.", changeApprovalOwner: "Lead; not external approval.",
+            licenseReview: { status: "unreviewed", licenseExpression: null, evidenceRefs: [] },
+            verification: { level: "not-verified", evidenceRefs: [], limitations: "UI-only fixture.", nextReviewCondition: "Actual evidence." },
+          })) } } };
+    await workspace.evaluate(`globalThis.__spsBuilderTechnologyFixture=${JSON.stringify(technologyFixture)}`);
+    await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Refresh the marked technology presentation fixture");
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Read technology choices without a Host write or AI run");
+    await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Inspect read-only technology record");
+    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('기술 선정 명세 · Lead 기록')))`), Boolean, "technology fixture document");
+    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('기술 선정 명세 · Lead 기록')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+      value => value?.includes("fixture-technology-1") && value.includes("독립 검증이나 실행 승인이 아닙니다")
+        && ["required", "allowed", "prohibited", "undecided"].every(word => value.includes(word)), "technology choices are reports, not verified execution");
+    assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
+    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-technology-fixture.png"));
   } finally {
     await workspace.evaluate(`(() => { if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;}
-      delete globalThis.__spsBuilderQuestionDraftFixture;delete globalThis.__spsBuilderQuestionSends;delete globalThis.__spsBuilderBaselineFixture;})()`);
+      delete globalThis.__spsBuilderQuestionDraftFixture;delete globalThis.__spsBuilderQuestionSends;delete globalThis.__spsBuilderBaselineFixture;delete globalThis.__spsBuilderTechnologyFixture;})()`);
   }
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead before using its refresh control");
   await click(workspace, '[aria-label="Workspace 새로고침"]', "Restore real Host data after UI-only fixture");
@@ -369,6 +395,9 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.equal((await request(`/api/plugins/${plugin.id}/data/builder.design-baseline`, {
     method: "POST", body: { companyId: company.id, params: { projectId: company.id } },
   })).data, null, "The presentation fixture must not persist an internal baseline.");
+  assert.equal((await request(`/api/plugins/${plugin.id}/data/builder.technology-decisions`, {
+    method: "POST", body: { companyId: company.id, params: { projectId: company.id } },
+  })).data, null, "The presentation fixture must not persist actual technology research.");
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
   await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled === false`),
@@ -479,6 +508,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: true, sendReceiptDoesNotResolveQuestion: true, storedAnswerPresentationFixture: true,
     designBaselinePresentationFixture: true, realHostBaselineWritten: false,
+    technologyDecisionsPresentationFixture: true, realHostTechnologyWritten: false,
     transcriptScrollPresentationFixture: true, olderReaderPositionPreserved: true, explicitJumpToLatest: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
