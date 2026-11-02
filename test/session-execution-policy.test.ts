@@ -37,6 +37,10 @@ test("snapshots the declared Lead planning tools and keeps the CTO policy to its
   assert.deepEqual([...CTO_WORKSTREAM_TOOL_NAMES].sort(), [
     "builder.acknowledge-workstream", "builder.read-cto-workstream",
   ]);
+  for (const name of ["builder.dispatch-workstream", "builder.read-workstream-delivery", "builder.cancel-workstream-delivery"] as const) {
+    assert.ok(LEAD_PLANNING_TOOL_NAMES.includes(name), `${name} must be Lead-only`);
+    assert.ok(!ctoToolNames.has(name), `${name} must not be exposed to CTO sessions`);
+  }
   assert.deepEqual(LEAD_PLANNING_TOOL_NAMES, [...LEAD_PLANNING_TOOL_NAMES].sort());
   assert.deepEqual(CTO_WORKSTREAM_TOOL_NAMES, [...CTO_WORKSTREAM_TOOL_NAMES].sort());
   assert.deepEqual(LEAD_SESSION_EXECUTION_POLICY.toolNames, LEAD_PLANNING_TOOL_NAMES);

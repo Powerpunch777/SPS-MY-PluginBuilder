@@ -14,6 +14,8 @@ import { PUBLISH_TECHNOLOGY_DECISIONS_TOOL, READ_TECHNOLOGY_DECISIONS_TOOL } fro
 import { publishTechnologyDecisions, readLeadTechnologyDecisions, readTechnologyDecisions } from "./technology-decision-tools.ts";
 import { PUBLISH_WORKSTREAM_TOOL, READ_WORKSTREAMS_TOOL, READ_CTO_WORKSTREAM_TOOL, ACKNOWLEDGE_WORKSTREAM_TOOL } from "./workstream-tool-declarations.mjs";
 import { publishWorkstream, readLeadWorkstreams, readCtoWorkstream, acknowledgeWorkstream, readWorkstreams } from "./workstream-tools.ts";
+import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL } from "./delivery-tool-declarations.mjs";
+import { dispatchCtoWorkstream, inspectCtoWorkstreamDelivery } from "./cto-workstream-delivery.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -493,6 +495,18 @@ export async function acknowledgeAssignedWorkstream(params: unknown, runContext:
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => acknowledgeWorkstream(params, context, platform));
 }
+export async function dispatchLeadWorkstream(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => dispatchCtoWorkstream(params, runContext, platform));
+}
+export async function readLeadWorkstreamDelivery(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => inspectCtoWorkstreamDelivery(params, runContext, platform));
+}
+export async function cancelLeadWorkstreamDelivery(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => inspectCtoWorkstreamDelivery(params, runContext, platform, true));
+}
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
@@ -548,7 +562,16 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => readAssignedCtoWorkstream(params, context, platform) },
     { name: ACKNOWLEDGE_WORKSTREAM_TOOL.name, declaration: { displayName: ACKNOWLEDGE_WORKSTREAM_TOOL.displayName,
       description: ACKNOWLEDGE_WORKSTREAM_TOOL.description, parametersSchema: ACKNOWLEDGE_WORKSTREAM_TOOL.parametersSchema },
-      handler: (params, context, platform) => acknowledgeAssignedWorkstream(params, context, platform) }],
+      handler: (params, context, platform) => acknowledgeAssignedWorkstream(params, context, platform) },
+    { name: DISPATCH_CTO_WORKSTREAM_TOOL.name, declaration: { displayName: DISPATCH_CTO_WORKSTREAM_TOOL.displayName,
+      description: DISPATCH_CTO_WORKSTREAM_TOOL.description, parametersSchema: DISPATCH_CTO_WORKSTREAM_TOOL.parametersSchema },
+      handler: (params, context, platform) => dispatchLeadWorkstream(params, context, platform) },
+    { name: READ_CTO_WORKSTREAM_DELIVERY_TOOL.name, declaration: { displayName: READ_CTO_WORKSTREAM_DELIVERY_TOOL.displayName,
+      description: READ_CTO_WORKSTREAM_DELIVERY_TOOL.description, parametersSchema: READ_CTO_WORKSTREAM_DELIVERY_TOOL.parametersSchema },
+      handler: (params, context, platform) => readLeadWorkstreamDelivery(params, context, platform) },
+    { name: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.name, declaration: { displayName: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.displayName,
+      description: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.description, parametersSchema: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.parametersSchema },
+      handler: (params, context, platform) => cancelLeadWorkstreamDelivery(params, context, platform) }],
     data: [{ key: "builder.workstreams", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");

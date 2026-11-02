@@ -11,6 +11,9 @@ const liveMemory = process.env.SPS_BUILDER_LIVE_MEMORY;
 const liveQuestion = process.env.SPS_BUILDER_LIVE_QUESTION;
 const liveCtos = process.env.SPS_BUILDER_LIVE_CTOS;
 const liveBaseline = process.env.SPS_BUILDER_LIVE_BASELINE;
+const liveWorkstreams = process.env.SPS_BUILDER_LIVE_WORKSTREAMS;
+assert.deepEqual(process.argv.slice(2), liveWorkstreams === "1" ? ["--live-workstreams"] : [],
+  "Live Workstreams requires its exact operator flag; no extra test-core-host arguments are accepted.");
 assert.ok(liveCodex === undefined || liveCodex === "1", "Live account use must be explicitly enabled with SPS_BUILDER_LIVE_CODEX=1.");
 assert.ok(liveCancel === undefined || liveCancel === "1" && liveCodex === "1",
   "Live cancellation requires explicit live-account and cancellation opt-in.");
@@ -26,6 +29,10 @@ assert.ok(liveCtos === undefined || liveCtos === "1" && liveCodex === "1" && liv
 assert.ok(liveBaseline === undefined || liveBaseline === "1" && liveCodex === "1" && liveCancel === undefined
   && liveDesign === undefined && liveMemory === undefined && liveQuestion === undefined && liveCtos === undefined,
   "Live baseline requires explicit account opt-in and cannot combine cancellation or other scopes.");
+assert.ok(liveWorkstreams === undefined || liveWorkstreams === "1" && liveCodex === "1" && liveCancel === undefined
+  && liveDesign === undefined && liveMemory === undefined && liveQuestion === undefined && liveCtos === undefined && liveBaseline === undefined
+  && !process.env.SPS_DESKTOP_E2E_BINARY,
+  "Live Workstreams requires its explicit account opt-in and isolated default source-host path, without other scopes.");
 assert.ok(liveBaseline !== "1" || !process.env.SPS_DESKTOP_E2E_BINARY,
   "Live baseline cannot use installed binaries.");
 assert.ok(liveCtos === undefined || liveCodex === "1" && process.argv.length === 2,
@@ -41,7 +48,7 @@ const child = spawn(process.execPath, ["scripts/smoke-workspace-surfaces-desktop
   cwd: desktop, windowsHide: true, shell: false, stdio: "inherit",
   env: { ...process.env, SPS_DESKTOP_E2E_SOURCE: "1", SPS_DESKTOP_E2E_BINARY: "",
     SPS_DESKTOP_E2E_KEEP_DATA: "0", SPS_DESKTOP_E2E_PLUGIN_ACCEPTANCE: path.join(import.meta.dirname,
-    liveCtos === "1" ? "live-ctos-acceptance.mjs" : liveBaseline === "1" ? "live-baseline-acceptance.mjs" : liveQuestion === "1" ? "live-question-acceptance.mjs" : liveMemory === "1" ? "live-memory-acceptance.mjs" : liveDesign === "1" ? "live-design-acceptance.mjs" : liveCodex === "1" ? "live-codex-acceptance.mjs" : "core-host-acceptance.mjs") },
+    liveWorkstreams === "1" ? "live-workstreams-acceptance.mjs" : liveCtos === "1" ? "live-ctos-acceptance.mjs" : liveBaseline === "1" ? "live-baseline-acceptance.mjs" : liveQuestion === "1" ? "live-question-acceptance.mjs" : liveMemory === "1" ? "live-memory-acceptance.mjs" : liveDesign === "1" ? "live-design-acceptance.mjs" : liveCodex === "1" ? "live-codex-acceptance.mjs" : "core-host-acceptance.mjs") },
 });
 const result = await new Promise((resolve, reject) => {
   child.once("error", reject);

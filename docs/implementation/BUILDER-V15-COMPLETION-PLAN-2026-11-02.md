@@ -444,3 +444,13 @@ CTO 업무/질문 intake, Worker/QA·Runner·납품은 이 기록으로 완료 �
 하지 않는다. CTO 전용 두 도구 목록은 준비됐지만 실제 CTO 전달/큐와 모델 시험은
 남아 있다. 자동 검사308개와 실제 no-AI 앱의 차단·입력/상태 보존을 확인했다.
 Core/SDK 검사와 이 앱 결과는 실제 AI/OS/납품 증거와 구분한다.
+
+### 2026-11-02 추가 기록: 구조화된 CTO 전달
+
+[CTO Workstream 전달](CTO-WORKSTREAM-DELIVERY-2026-11-02.md)의 안정적 요청 ID,
+불변 CAS intent, 정확한 CTO 세션/명세와 Core receipt 결속, 조회/취소를 구현했다.
+전체330/330·격리 타입/빌드·SDK CLI가 통과했으며 자동 검사와 실제 전달은 구분한다.
+승인된 실제 시험은 첫 Lead의 MCP 설계 조회가 취소 처리돼 exit1이었고, 실제 CTO는
+실행하지 못했다. 자동 승인 정책은 임의로 바꾸지 않았으며 사용자 확인 중이다.
+한 노드/한 CTO 원칙, Core 중립성, DEV/설치본 보존과 보류 범위는 그대로 유지한다.
+CTO 기억/질문 intake·Worker/QA/Task Packet·Runner·납품 및 전체 AC 완료는 남아 있다.

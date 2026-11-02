@@ -8,6 +8,7 @@ import { createTechnologyDecisionStore, readTechnologyDecisions } from "./techno
 import { readProjectCtos } from "./project-cto-tools.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
+import { resolveCtoDeliveryRun, workstreamInstructionDigest } from "./cto-delivery-store.ts";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const asJson = (value: unknown) => value as JsonValue;
@@ -127,7 +128,7 @@ function assigned(record: WorkstreamRecord | undefined, cto: { ctoId: string; ag
   }
   return record;
 }
-async function readPinnedSources(workspaceId: string, projectId: string, record: WorkstreamRecord, platform: SpsPlatformInvocationContext) {
+export async function readPinnedWorkstreamSources(workspaceId: string, projectId: string, record: WorkstreamRecord, platform: SpsPlatformInvocationContext) {
   const baseline = await createDesignBaselineStore(workspaceId, projectId, platform.state).publishedRevision(record.sourceBaselineRevisionId);
   const technology = await createTechnologyDecisionStore(workspaceId, projectId, platform.state).publishedRevision(record.spec.technologyDecisionsRef);
   if (!baseline || !technology || digest(baseline.revision) !== record.baselineDigest || digest(technology.revision) !== record.technologyDigest) {
@@ -147,11 +148,14 @@ export async function readCtoWorkstream(params: unknown, runContext: unknown, pl
   const projectId = id(input.projectId), ctoId = id(input.ctoId), workstreamId = id(input.workstreamId);
   const context = parseLeadToolContext(runContext), authority = await resolveCtoAuthority(projectId, ctoId, context, platform);
   const board = await readWorkstreams(context.companyId, projectId, platform);
-  const record = assigned(board?.revision.workstreams.find(item => item.spec.id === workstreamId), authority.cto);
-  const sources = await readPinnedSources(context.companyId, projectId, record, platform);
+  const latest = assigned(board?.revision.workstreams.find(item => item.spec.id === workstreamId), authority.cto);
+  const delivery = await resolveCtoDeliveryRun(context, projectId, ctoId, workstreamId, platform);
+  const record = delivery?.instruction ?? latest;
+  const sources = await readPinnedWorkstreamSources(context.companyId, projectId, record, platform);
   await authority.check();
   return { content: "Assigned versioned Workstream and published design/technology facts. Historical revisions are not automatically current. No other CTO private memory/transcript or execution permission is included.",
-    data: asJson({ projectId, boardRevisionId: board!.revision.revisionId, workstream: record, sources }) };
+    data: asJson({ projectId, boardRevisionId: board!.revision.revisionId, workstream: record, sources,
+      ...(delivery ? { delivery: { requestId: delivery.requestId, currentInstruction: workstreamInstructionDigest(latest) === workstreamInstructionDigest(record) } } : {}) }) };
 }
 export async function acknowledgeWorkstream(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "specRevision", "readiness", "note"]);
@@ -165,8 +169,10 @@ export async function acknowledgeWorkstream(params: unknown, runContext: unknown
   const current = await readWorkstreams(context.companyId, projectId, platform);
   if (!current || current.revision.revisionId !== expectedBaseRevisionId) return conflict(current?.revision.revisionId ?? null);
   const record = assigned(current.revision.workstreams.find(item => item.spec.id === workstreamId), authority.cto);
+  const delivery = await resolveCtoDeliveryRun(context, projectId, ctoId, workstreamId, platform);
+  if (delivery && workstreamInstructionDigest(record) !== workstreamInstructionDigest(delivery.instruction)) return conflict(current.revision.revisionId);
   if (record.spec.revision !== specRevision) return conflict(current.revision.revisionId);
-  await readPinnedSources(context.companyId, projectId, record, platform);
+  await readPinnedWorkstreamSources(context.companyId, projectId, record, platform);
   if (record.receipt?.readiness === readiness && record.receipt.note === note) {
     await authority.check();
     return { content: "The same CTO readiness report is already recorded. It is not an execution or completion receipt.", data: asJson({ status: "unchanged", executionStarted: false }) };

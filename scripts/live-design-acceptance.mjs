@@ -17,14 +17,14 @@ async function eventually(read, check, label, timeout = 45_000) {
 
 // Explicitly authorized operator only. No arbitrary code, shell, user profile
 // changes or provider substitution; real account usage is never the default.
-export async function runDesignAcceptance(context, questionAnswers = false, ctoRegistrations = false, recordBaseline = false) {
+export async function runDesignAcceptance(context, questionAnswers = false, ctoRegistrations = false, recordBaseline = false, workstreamDelivery = false) {
   assert.equal(process.env.SPS_BUILDER_LIVE_CODEX, "1");
-  assert.ok([questionAnswers, ctoRegistrations, recordBaseline].filter(Boolean).length <= 1);
-  const selectedOptIn = recordBaseline ? "SPS_BUILDER_LIVE_BASELINE" : ctoRegistrations ? "SPS_BUILDER_LIVE_CTOS"
+  assert.ok([questionAnswers, ctoRegistrations, recordBaseline, workstreamDelivery].filter(Boolean).length <= 1);
+  const selectedOptIn = workstreamDelivery ? "SPS_BUILDER_LIVE_WORKSTREAMS" : recordBaseline ? "SPS_BUILDER_LIVE_BASELINE" : ctoRegistrations ? "SPS_BUILDER_LIVE_CTOS"
     : questionAnswers ? "SPS_BUILDER_LIVE_QUESTION" : "SPS_BUILDER_LIVE_DESIGN";
   assert.equal(process.env[selectedOptIn], "1");
   for (const key of ["SPS_BUILDER_LIVE_BASELINE", "SPS_BUILDER_LIVE_CTOS", "SPS_BUILDER_LIVE_QUESTION", "SPS_BUILDER_LIVE_DESIGN",
-    "SPS_BUILDER_LIVE_MEMORY", "SPS_BUILDER_LIVE_CANCEL"]) if (key !== selectedOptIn) assert.ok(!process.env[key]);
+    "SPS_BUILDER_LIVE_MEMORY", "SPS_BUILDER_LIVE_CANCEL", "SPS_BUILDER_LIVE_WORKSTREAMS"]) if (key !== selectedOptIn) assert.ok(!process.env[key]);
   assert.ok(!process.env.OPENAI_API_KEY && !process.env.PAPERCLIP_CODEX_PROVIDERS);
   const baseline = await baselineAcceptance(context);
   let workspace = baseline.workspace;
@@ -48,7 +48,7 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
     name: "Isolated authorized design Lead", role: "engineer", adapterType: "codex_local",
     adapterConfig: { engine: "cli", cwd: workingDirectory, timeoutSec: 180, graceSec: 3,
       dangerouslyBypassApprovalsAndSandbox: false },
-    instructionsBundle: { files: { "AGENTS.md": `Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft, propose-design${questionAnswers ? " and resolve-design-question" : ctoRegistrations ? ", create-cto and list-ctos (logical identity/session registration only, never execution)" : recordBaseline ? ", read-design-baseline, publish-design-baseline and read-solution (internal design decision record only)" : ""} operations. Never run commands, edit/read files, generate code, search the web, create Core Agents or contact other services. Prepare only an unapproved draft from user input unless the user explicitly provides a planning decision to record as an internal baseline. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim external legal approval, implementation or delivery.` } },
+    instructionsBundle: { files: { "AGENTS.md": `Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft, propose-design${questionAnswers ? " and resolve-design-question" : ctoRegistrations ? ", create-cto and list-ctos (logical identity/session registration only, never execution)" : recordBaseline ? ", read-design-baseline, publish-design-baseline and read-solution (internal design decision record only)" : workstreamDelivery ? ", read-design-baseline, publish-design-baseline, read-solution, read-technology-decisions, publish-technology-decisions, create-cto, list-ctos, read-workstreams, publish-workstream and dispatch-workstream (Lead planning only); in the independent registered CTO session, only read-cto-workstream and acknowledge-workstream for the exact Core-bound assignment" : ""} operations. In workstream mode, follow the role in the current run message: Lead only in the prepared Lead session, CTO only in its registered independent session. Core's per-session tool policy is authoritative. Never run commands, edit/read files, generate code, search the web, create Core Agents or contact other services. Prepare only an unapproved draft from user input unless the user explicitly provides a planning decision to record as an internal baseline. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim external legal approval, implementation or delivery.` } },
   } });
   const data = (key, params = {}, companyId = company.id) => request(`/api/plugins/${plugin.id}/data/${key}`, {
     method: "POST", body: { companyId, params },
@@ -154,7 +154,7 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
     restartRetainedDraft: true, otherWorkspaceUnchanged: true, writeCalls: 1,
     commandsOrCodeExecuted: false, installedProfileChanged: false,
     draftSha256: createHash("sha256").update(JSON.stringify(saved.draft)).digest("hex"), cleanupQualificationPending: true }));
-  return { workspace, plugin, agent, prepared, saved, sourceId, beforeOther, workingDirectory, mainConversation: finished };
+  return { workspace, plugin, agent, prepared, saved, draft: saved, sourceId, beforeOther, workingDirectory, mainConversation: finished };
 }
 
 export async function runAcceptance(context) { await runDesignAcceptance(context); }

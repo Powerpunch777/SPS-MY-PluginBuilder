@@ -17,12 +17,14 @@ async function eventually(read, check, label, timeout = 45_000) {
 }
 
 // Explicitly authorized internal planning trial; not a customer signature or execution approval.
-export async function runAcceptance(context) {
+export async function runBaselineAcceptance(context, workstreamDelivery = false) {
   assert.equal(process.env.SPS_BUILDER_LIVE_CODEX, "1");
-  assert.equal(process.env.SPS_BUILDER_LIVE_BASELINE, "1");
+  const selectedOptIn = workstreamDelivery ? "SPS_BUILDER_LIVE_WORKSTREAMS" : "SPS_BUILDER_LIVE_BASELINE";
+  assert.equal(process.env[selectedOptIn], "1");
   for (const name of ["SPS_BUILDER_LIVE_DESIGN", "SPS_BUILDER_LIVE_QUESTION", "SPS_BUILDER_LIVE_MEMORY",
-    "SPS_BUILDER_LIVE_CTOS", "SPS_BUILDER_LIVE_CANCEL", "OPENAI_API_KEY", "PAPERCLIP_CODEX_PROVIDERS"]) assert.ok(!process.env[name]);
-  const before = await runDesignAcceptance(context, false, false, true);
+    "SPS_BUILDER_LIVE_CTOS", "SPS_BUILDER_LIVE_CANCEL", "SPS_BUILDER_LIVE_BASELINE", "SPS_BUILDER_LIVE_WORKSTREAMS",
+    "OPENAI_API_KEY", "PAPERCLIP_CODEX_PROVIDERS"]) if (name !== selectedOptIn) assert.ok(!process.env[name]);
+  const before = await runDesignAcceptance(context, false, false, !workstreamDelivery, workstreamDelivery);
   let { workspace } = before;
   const { plugin, agent, saved, prepared, workingDirectory, beforeOther } = before;
   const { company, secondCompany, api, click, restart, captureScreenshot, screenshotPath } = context;
@@ -106,4 +108,8 @@ export async function runAcceptance(context) {
     restartRetained: true, otherWorkspaceUnchanged: true, legalApprovalVerified: false, executionAuthorized: false,
     commandsOrCodeExecuted: false, actualGoogleOauth: false, installedProfileChanged: false,
     baselineDtoSha256: sha(stored), cleanupQualificationPending: true }));
+  return { workspace, plugin, agent, prepared, draft: saved, baseline: stored, beforeOther, workingDirectory,
+    mainConversation: completed, leadRuns: [before.mainConversation.turns[0], turn] };
 }
+
+export async function runAcceptance(context) { await runBaselineAcceptance(context); }
