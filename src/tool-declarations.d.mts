@@ -46,3 +46,16 @@ export const RESOLVE_DESIGN_QUESTION_TOOL: Readonly<{
   description: string;
   parametersSchema: JsonObject;
 }>;
+
+export const CREATE_CTO_TOOL: Readonly<{
+  name: "builder.create-cto";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
+export const LIST_CTOS_TOOL: Readonly<{
+  name: "builder.list-ctos";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;

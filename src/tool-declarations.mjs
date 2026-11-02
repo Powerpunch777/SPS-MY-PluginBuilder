@@ -107,3 +107,19 @@ export const RESOLVE_DESIGN_QUESTION_TOOL = Object.freeze({
       draft: PROPOSE_DESIGN_TOOL.parametersSchema.properties.draft },
   }),
 });
+
+export const CREATE_CTO_TOOL = Object.freeze({
+  name: "builder.create-cto", displayName: "Register a project CTO and independent session",
+  description: "The current prepared Lead may create a project-local logical CTO using its existing execution Agent/account, with one independent keyed session. No new account/configuration, execution or workstream approval is created. Choose a stable ctoId and keep it on explicit recovery; unknown results require reading identities, not a new ID. Existing/retired IDs cannot be renamed or silently replaced. CLI/backend readiness is not established by registration.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
+    required: ["projectId", "ctoId", "displayName"], properties: {
+      projectId: { type: "string", minLength: 1, maxLength: 160 }, ctoId: { type: "string", minLength: 1, maxLength: 160 },
+      displayName: { type: "string", minLength: 1, maxLength: 512 },
+    } }),
+});
+
+export const LIST_CTOS_TOOL = Object.freeze({
+  name: "builder.list-ctos", displayName: "Read this project's CTO identities",
+  description: "The current prepared Lead can read the project-local CTO identities and session registration state. This does not expose CTO private memory/transcripts, start work, or claim runtime readiness and progress.",
+  parametersSchema: READ_SOLUTION_TOOL.parametersSchema,
+});
