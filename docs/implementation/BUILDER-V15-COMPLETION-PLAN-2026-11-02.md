@@ -383,3 +383,15 @@ Checklist authorship alone is not implementation evidence. Dated implementation 
 fixture의 처음 끝 위치·과거 기록 독자 위치 보존·직접 최근 메시지 이동을 확인했다.
 전체163/163·타입/빌드·SDK CLI가 통과했지만 이 UI 변경에서 실계정 AI를 다시 실행한
 것은 아니다. 일반 Agent의 도구 승인·Lead 공유 기억과 나머지 v15 범위는 계속 미완료다.
+
+### 2026-11-02 추가 기록: Lead 공유 기억
+
+[Lead 공유 기억의 구현과 실제 시험 범위](LEAD-SHARED-MEMORY-2026-11-02.md)를
+추가했다. Builder `53d5c33` / Core `55b5d5b` / SDK `316c56f` 기준으로,
+프로젝트 ID·인용된 사용자 원문 digest·작성자/세션/run/선택 revision/channel을
+기록하는 불변 CAS journal과 읽기 전용 문서 패널을 구현했다. Node 24.22.1에서
+181/181, 타입·빌드·SDK/CLI 검사가 통과했고 Core adapter 대상 16/16 및 타입 검사도
+통과했다. 승인된 실제 시험은 두 채널을 거친 세 번의 run이며, 세 개의 독립 Lead
+세션이나 실제 CTO intake는 아니다. 일반 Agent 기본 도구 정책, 자동 memory-read
+보장, 프로젝트 선택 UI, 질문 답변에서 Spec/Graph/Contract로 이어지는 흐름은 남아
+있다. 이 기록은 AC 상태를 바꾸지 않으며 전체 v15 완료나 납품을 뜻하지 않는다.
