@@ -206,11 +206,21 @@ Unknown writes are never repeated: reconcile only by reading the same record, an
   assert.equal(acknowledgedWorkstream.spec.sourceSpecRevisionId, baseline.baseline.specification.revisionId);
   assert.equal(acknowledgedWorkstream.ctoSessionId, cto.sessionId);
 
-  const ctoAllowed = [pluginPrefix + "builder.read-cto-workstream", pluginPrefix + "builder.acknowledge-workstream"];
+  const ctoAllowed = ["builder.read-cto-workstream", "builder.acknowledge-workstream", "builder.read-cto-memory", "builder.update-cto-memory"]
+    .map(name => pluginPrefix + name);
   const ctoCalls = await inspectScopedRun(request, ctoRunId, ctoAllowed);
   const executedCtoCalls = ctoCalls.filter(call => call.tool === "execute_plugin_tool");
   assert.equal(executedCtoCalls.filter(call => call.arguments?.toolName === pluginPrefix + "builder.read-cto-workstream").length, 1);
   assert.equal(executedCtoCalls.filter(call => call.arguments?.toolName === pluginPrefix + "builder.acknowledge-workstream").length, 1);
+  const memoryReads = executedCtoCalls.filter(call => call.arguments?.toolName === pluginPrefix + "builder.read-cto-memory");
+  const memoryWrites = executedCtoCalls.filter(call => call.arguments?.toolName === pluginPrefix + "builder.update-cto-memory");
+  assert.ok(memoryReads.length >= 1, "The CTO must explicitly restore only its own private planning notes.");
+  assert.ok(memoryWrites.length <= 1, "Unknown memory writes must not be repeated in this bounded trial.");
+  for (const call of [...memoryReads, ...memoryWrites]) {
+    assert.equal(call.arguments?.params?.projectId, projectId);
+    assert.equal(call.arguments?.params?.ctoId, ctoId);
+    assert.equal(call.arguments?.params?.workstreamId, workstreamId);
+  }
   const ctoRead = executedCtoCalls.find(call => call.arguments?.toolName === pluginPrefix + "builder.read-cto-workstream");
   const ctoAck = executedCtoCalls.find(call => call.arguments?.toolName === pluginPrefix + "builder.acknowledge-workstream");
   assert.deepEqual(ctoRead.arguments?.params, { projectId, ctoId, workstreamId });
@@ -247,6 +257,7 @@ Unknown writes are never repeated: reconcile only by reading the same record, an
   console.log(JSON.stringify({ liveWorkstreams: true, aiExecuted: true, actualUiLeadTurns: 3, actualProviderRuns: 4,
     leadRuns: 3, independentCtoRuns: 1, registeredCtoSessions: 1, technologyRegisterWrites: 1,
     workstreamWrites: 1, dispatchCalls: 1, ctoReadCalls: 1, ctoAcknowledgementCalls: 1,
+    ctoPrivateMemoryReadCalls: memoryReads.length, ctoPrivateMemoryWriteCalls: memoryWrites.length,
     exactCoreReceiptObserved: true, terminalCoreRunObserved: true, readinessIsNotImplementation: true,
     sourceRevisionBound: true, sameAgentConfigurationPreserved: true, temporaryWorkingDirectoryEmpty: true,
     restartRetained: true, otherWorkspaceUnchanged: true, codeWorkersQaAndCommands: false,

@@ -100,7 +100,7 @@ export async function publishWorkstream(params: unknown, runContext: unknown, pl
     : "The board changed. Read and reconcile without automatic retry.", data: asJson({ ...result, executionStarted: false }) };
 }
 
-async function resolveCtoAuthority(projectId: string, ctoId: string, context: ReturnType<typeof parseLeadToolContext>, platform: SpsPlatformInvocationContext) {
+export async function resolveCtoAuthority(projectId: string, ctoId: string, context: ReturnType<typeof parseLeadToolContext>, platform: SpsPlatformInvocationContext) {
   const cto = (await readProjectCtos(context.companyId, projectId, platform)).ctos.find(record => record.ctoId === ctoId);
   if (!cto || cto.status === "RETIRED" || cto.sessionId === null || cto.agentId !== context.agentId || cto.sessionId !== context.sessionId) {
     throw new Error("Only this project's registered CTO and its independent session may receive this Workstream.");

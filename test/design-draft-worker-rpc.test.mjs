@@ -7,12 +7,19 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import test from "node:test";
 import { access, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { createCtoDeliveryStore, workstreamInstructionDigest } from "../src/cto-delivery-store.ts";
+import { ctoDeliveryRequestId, parseCtoDelivery } from "../src/domain/cto-deliveries.ts";
+import { CTO_SESSION_EXECUTION_POLICY } from "../src/session-execution-policy.ts";
 
 const workspaceA = "11111111-1111-4111-8111-111111111111";
 const leadId = "33333333-3333-4333-8333-333333333333";
 const sessionId = "66666666-6666-4666-8666-666666666666";
 const decisionsSessionId = "88888888-8888-4888-8888-888888888888";
+const ctoSessionId = "12121212-1212-4212-8212-121212121212";
 const runId = "55555555-5555-4555-8555-555555555555";
+const ctoContext = { companyId: workspaceA, agentId: leadId, sessionId: ctoSessionId,
+  runId: "13131313-1313-4313-8313-131313131313" };
 const answerTurnId = "20202020-2020-4020-8020-202020202020";
 const invocationId = "design-draft-rpc-invocation-a";
 const requestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -117,14 +124,33 @@ test("built Worker routes design sources to an unapproved draft and back without
   };
   const response = id => waitForMessage(`Worker response ${id}`, message => message.id === id);
   const calls = [];
+  let ctoRequestId;
   const answerHostCall = async call => {
     assert.equal(call.jsonrpc, "2.0");
     assert.equal(call.paperclipInvocationId, invocationId, "fake Host only serves the declared invocation");
     assert.ok(typeof call.id === "number" || typeof call.id === "string");
-    assert.ok(call.method === "state.get" || call.method === "state.compareAndSet",
-      `unexpected Host RPC ${call.method}; state.set and Agent send are forbidden`);
     calls.push(call.method);
     assert.ok(call.params && typeof call.params === "object" && !Array.isArray(call.params));
+    if (call.method === "agents.sessions.getRequest") {
+      assert.deepEqual(Object.keys(call.params).sort(), ["companyId", "requestId", "sessionId"]);
+      assert.equal(call.params.companyId, workspaceA);
+      assert.equal(call.params.sessionId, ctoSessionId, "Only the seeded CTO session may reconcile its request.");
+      assert.equal(call.params.requestId, ctoRequestId, "Only the exact seeded Core request may be read.");
+      send({ jsonrpc: "2.0", id: call.id, result: { requestId: ctoRequestId, state: "submitted", runId: ctoContext.runId } });
+      return;
+    }
+    if (call.method === "agents.sessions.getRun") {
+      assert.deepEqual(Object.keys(call.params).sort(), ["companyId", "runId", "sessionId"]);
+      assert.equal(call.params.companyId, workspaceA);
+      assert.equal(call.params.sessionId, ctoSessionId, "Only the registered CTO session may inspect its run.");
+      assert.equal(call.params.runId, ctoContext.runId, "Only the exact Core-bound CTO run may be inspected.");
+      send({ jsonrpc: "2.0", id: call.id, result: { runId: ctoContext.runId, status: "running",
+        cancellationRequested: false, termination: "not_applicable", error: null, errorCode: null,
+        output: { state: "not_ready", text: null } } });
+      return;
+    }
+    assert.ok(call.method === "state.get" || call.method === "state.compareAndSet",
+      `unexpected Host RPC ${call.method}; state.set and Agent send are forbidden`);
     const { scopeKind, scopeId, namespace: requestedNamespace, stateKey: requestedKey } = call.params;
     assert.equal(scopeKind, "company");
     assert.equal(scopeId, workspaceA, "fake Host only permits invocation scope A");
@@ -306,8 +332,6 @@ test("built Worker routes design sources to an unapproved draft and back without
     assert.equal(technologyDto.error, undefined, JSON.stringify(technologyDto.error));
     assert.deepEqual(technologyDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 1, record: technologyReply.result.data.revision });
 
-    const ctoSessionId = "12121212-1212-4212-8212-121212121212";
-    const ctoContext = { ...runContext, sessionId: ctoSessionId, runId: "13131313-1313-4313-8313-131313131313" };
     hostState.set(JSON.stringify(stateKey(`project-ctos.v1.${sha256(workspaceA)}`)), {
       schemaVersion: 1, workspaceId: workspaceA, projectId: workspaceA, revision: 1,
       ctos: [{ ctoId: "rpc-cto", displayName: "Fake Host CTO", agentId: leadId, sessionId: ctoSessionId,
@@ -349,6 +373,72 @@ test("built Worker routes design sources to an unapproved draft and back without
     const workstreamDto = await serviceUntil(25);
     assert.equal(workstreamDto.error, undefined, JSON.stringify(workstreamDto.error));
     assert.deepEqual(workstreamDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 2, board: receiptReply.result.data.revision });
+
+    const instruction = { ...receiptReply.result.data.revision.workstreams[0], receipt: null };
+    ctoRequestId = ctoDeliveryRequestId(workspaceA, workspaceA, "rpc-cto", instruction);
+    const localRevisionState = {
+      async get(key) { return clone(hostState.get(JSON.stringify(key))); },
+      async compareAndSet(key, expected, value) {
+        const keyId = JSON.stringify(key), exists = hostState.has(keyId), current = hostState.get(keyId);
+        const matches = expected.exists
+          ? exists && JSON.stringify(current) === JSON.stringify(expected.value)
+          : !exists;
+        if (matches) hostState.set(keyId, clone(value));
+        return { swapped: matches };
+      },
+    };
+    const delivery = parseCtoDelivery({ schemaVersion: 1, workspaceId: workspaceA, projectId: workspaceA, ctoId: "rpc-cto",
+      revisionId: randomUUID(), requestId: ctoRequestId, boardRevisionId: "board-rpc-2", instruction,
+      requestedBy: { agentId: leadId, sessionId, runId, selectionRevision: 1 },
+      executionPolicy: CTO_SESSION_EXECUTION_POLICY, createdAt: new Date("2026-11-02T00:00:00.000Z").toISOString(),
+      phase: "submitted", runId: ctoContext.runId, cancellationRequested: false, termination: "not_applicable",
+      outputState: "not_ready", answer: null }, workspaceA, workspaceA, "rpc-cto");
+    const deliveryStore = createCtoDeliveryStore(workspaceA, workspaceA, "rpc-cto", localRevisionState);
+    const seededDelivery = await deliveryStore.publish({ expectedBaseRevisionId: null, revision: delivery });
+    assert.equal(seededDelivery.status, "published");
+    assert.equal(seededDelivery.revision.requestId, ctoRequestId);
+    assert.equal(seededDelivery.revision.runId, ctoContext.runId);
+    assert.deepEqual(seededDelivery.revision.executionPolicy, CTO_SESSION_EXECUTION_POLICY);
+    assert.equal(workstreamInstructionDigest(instruction), workstreamInstructionDigest(seededDelivery.revision.instruction));
+
+    const memoryInput = { projectId: workspaceA, ctoId: "rpc-cto", workstreamId: "rpc-workstream" };
+    const ctoCallsBefore = calls.filter(method => method.startsWith("agents.sessions.")).length;
+    invoke(26, "builder.read-cto-memory", memoryInput, ctoContext);
+    const emptyCtoMemory = await serviceUntil(26);
+    assert.equal(emptyCtoMemory.error, undefined, JSON.stringify(emptyCtoMemory.error));
+    assert.equal(emptyCtoMemory.result.data.projectId, workspaceA);
+    assert.equal(emptyCtoMemory.result.data.ctoId, "rpc-cto");
+    assert.equal(emptyCtoMemory.result.data.current, null);
+    assert.equal(emptyCtoMemory.result.data.currentSource.requestId, ctoRequestId);
+    assert.ok(calls.filter(method => method.startsWith("agents.sessions.")).length > ctoCallsBefore,
+      "CTO memory must reconcile its exact Core request and active run through the compiled Worker wire.");
+
+    const ctoMemory = { projectId: workspaceA, ctoId: "rpc-cto", revisionId: "cto-memory-rpc-1",
+      entries: [{ id: "note-1", kind: "context", text: "This exact Workstream was read; no implementation was performed.",
+        sourceRequestIds: [ctoRequestId] }] };
+    invoke(27, "builder.update-cto-memory", { ...memoryInput, expectedBaseRevisionId: null, memory: ctoMemory }, ctoContext);
+    const updatedCtoMemory = await serviceUntil(27);
+    assert.equal(updatedCtoMemory.error, undefined, JSON.stringify(updatedCtoMemory.error));
+    assert.equal(updatedCtoMemory.result.data.status, "published");
+    assert.deepEqual(updatedCtoMemory.result.data.revision.memory, ctoMemory);
+    assert.deepEqual(updatedCtoMemory.result.data.revision.author, { agentId: leadId, sessionId: ctoSessionId, runId: ctoContext.runId });
+    assert.deepEqual(updatedCtoMemory.result.data.revision.sourceDigests, [{ requestId: ctoRequestId,
+      workstreamId: "rpc-workstream", specRevision: 1, sha256: workstreamInstructionDigest(instruction) }]);
+
+    invoke(28, "builder.read-cto-memory", memoryInput, ctoContext);
+    const exactCtoMemory = await serviceUntil(28);
+    assert.equal(exactCtoMemory.error, undefined, JSON.stringify(exactCtoMemory.error));
+    assert.deepEqual(exactCtoMemory.result.data.current.revision, updatedCtoMemory.result.data.revision);
+
+    invoke(29, "builder.read-cto-memory", memoryInput, runContext);
+    const rejectedLeadMemory = await serviceUntil(29);
+    assert.ok(rejectedLeadMemory.error, "A Lead run cannot read private CTO memory.");
+    send({ jsonrpc: "2.0", id: 30, method: "getData", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
+      params: { key: "builder.cto-memory", companyId: workspaceA, params: memoryInput } });
+    const privateMemoryData = await serviceUntil(30);
+    assert.ok(privateMemoryData.error, "CTO memory must not have a generic data/UI provider.");
+    assert.equal(calls.some(method => method === "agents.sessions.sendMessage" || method === "agents.sessions.ensure"
+      || method === "agents.sessions.create"), false, "The compiled Worker test must not send to or create a provider session.");
 
     assert.ok(calls.includes("state.compareAndSet"), "proposal publication must use conditional state writes");
     assert.equal(hostState.get(JSON.stringify(stateKey("snapshot.v1"))).revision, 1,

@@ -11,7 +11,8 @@ const FIELDS = [
   "instruction", "requestedBy", "createdAt", "phase", "runId", "cancellationRequested", "termination",
   "outputState", "answer", "executionPolicy",
 ] as const;
-const POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-workstream"] as const;
+const LEGACY_POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-workstream"] as const;
+const POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.update-cto-memory"] as const;
 const PHASES = ["prepared", "dispatching", "uncertain", "superseded", "submitted", "succeeded", "failed", "cancelled", "interrupted", "timed_out"] as const;
 const EARLY_PHASES = new Set<string>(["prepared", "dispatching", "uncertain", "superseded"]);
 
@@ -99,22 +100,24 @@ function parseExecutionPolicy(value: unknown): CtoDelivery["executionPolicy"] {
     throw new TypeError("executionPolicy.toolNames must be a standard array.");
   }
   const keys = Reflect.ownKeys(row.toolNames);
-  if (keys.length !== 3 || !keys.includes("0") || !keys.includes("1") || !keys.includes("length")
-    || Object.getOwnPropertyDescriptor(row.toolNames, "length")?.value !== 2) {
-    throw new TypeError("executionPolicy.toolNames must contain exactly two dense entries with no extra properties.");
+  const length = Object.getOwnPropertyDescriptor(row.toolNames, "length")?.value;
+  if ((length !== 2 && length !== 4) || keys.length !== length + 1 || !keys.includes("length")) {
+    throw new TypeError("executionPolicy.toolNames must contain exactly two or four dense entries with no extra properties.");
   }
   const names: unknown[] = [];
-  for (let index = 0; index < 2; index += 1) {
+  for (let index = 0; index < length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(row.toolNames, String(index));
     if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
       throw new TypeError("executionPolicy.toolNames must contain enumerable data fields.");
     }
     names.push(descriptor.value);
   }
-  if (names[0] !== POLICY_TOOLS[0] || names[1] !== POLICY_TOOLS[1]) {
-    throw new TypeError("executionPolicy.toolNames must be the canonical sorted tool pair.");
+  const expected = length === 2 ? LEGACY_POLICY_TOOLS : POLICY_TOOLS;
+  if (names.some((name, index) => name !== expected[index])) {
+    throw new TypeError("executionPolicy.toolNames must be a canonical sorted CTO planning profile.");
   }
-  return Object.freeze({ mode: "plugin-tools-only-v1", toolNames: Object.freeze([...POLICY_TOOLS]) });
+  // Historical intents retain their original two-tool policy, never an upgrade.
+  return Object.freeze({ mode: "plugin-tools-only-v1", toolNames: Object.freeze([...expected]) });
 }
 
 function assertSafeStrings(value: unknown, label: string): void {

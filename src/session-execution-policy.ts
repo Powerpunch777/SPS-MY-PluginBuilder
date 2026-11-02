@@ -15,6 +15,7 @@ import {
 } from "./tool-declarations.mjs";
 import { ACKNOWLEDGE_WORKSTREAM_TOOL, PUBLISH_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_TOOL, READ_WORKSTREAMS_TOOL } from "./workstream-tool-declarations.mjs";
 import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL } from "./delivery-tool-declarations.mjs";
+import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
 
 export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
   READ_SOLUTION_TOOL.name,
@@ -40,6 +41,8 @@ export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
 export const CTO_WORKSTREAM_TOOL_NAMES = Object.freeze([
   READ_CTO_WORKSTREAM_TOOL.name,
   ACKNOWLEDGE_WORKSTREAM_TOOL.name,
+  READ_CTO_MEMORY_TOOL.name,
+  UPDATE_CTO_MEMORY_TOOL.name,
 ].sort());
 
 export type SessionExecutionPolicy = Readonly<{

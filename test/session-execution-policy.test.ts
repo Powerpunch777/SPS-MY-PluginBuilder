@@ -29,18 +29,19 @@ function platform(result: unknown = supported) {
   return { agents: { sessions: { describePolicySupport } } };
 }
 
-test("snapshots the declared Lead planning tools and keeps the CTO policy to its two tools", () => {
+test("snapshots the declared Lead and private CTO planning tools without cross-role memory sharing", () => {
   const manifestNames = manifestTools.map(tool => tool.name);
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name)).sort());
   assert.deepEqual([...CTO_WORKSTREAM_TOOL_NAMES].sort(), [
-    "builder.acknowledge-workstream", "builder.read-cto-workstream",
+    "builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.update-cto-memory",
   ]);
   for (const name of ["builder.dispatch-workstream", "builder.read-workstream-delivery", "builder.cancel-workstream-delivery"] as const) {
     assert.ok(LEAD_PLANNING_TOOL_NAMES.includes(name), `${name} must be Lead-only`);
     assert.ok(!ctoToolNames.has(name), `${name} must not be exposed to CTO sessions`);
   }
+  for (const name of ["builder.read-cto-memory", "builder.update-cto-memory"]) assert.ok(!new Set<string>(LEAD_PLANNING_TOOL_NAMES).has(name));
   assert.deepEqual(LEAD_PLANNING_TOOL_NAMES, [...LEAD_PLANNING_TOOL_NAMES].sort());
   assert.deepEqual(CTO_WORKSTREAM_TOOL_NAMES, [...CTO_WORKSTREAM_TOOL_NAMES].sort());
   assert.deepEqual(LEAD_SESSION_EXECUTION_POLICY.toolNames, LEAD_PLANNING_TOOL_NAMES);

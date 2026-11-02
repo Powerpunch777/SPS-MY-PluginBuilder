@@ -93,6 +93,17 @@ test("requires exact scope, canonical request identity and a receipt-free assign
   assert.throws(() => ctoDeliveryRequestId("not-a-uuid", projectId, ctoId, instruction()), /workspaceId must be a canonical UUID/);
 });
 
+test("new memory-capable policies do not silently expand a historical two-tool intent", () => {
+  const legacy = parseCtoDelivery(delivery(), workspaceId, projectId, ctoId);
+  assert.deepEqual(legacy.executionPolicy.toolNames, ["builder.acknowledge-workstream", "builder.read-cto-workstream"]);
+  const names = ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.update-cto-memory"];
+  const current = parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: names } }), workspaceId, projectId, ctoId);
+  assert.deepEqual(current.executionPolicy.toolNames, names);
+  assert.equal(current.requestId, legacy.requestId);
+  assert.equal(legacy.executionPolicy.toolNames.includes("builder.read-cto-memory"), false);
+  assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: [...names.slice(0, 3), "builder.propose-design"] } }), workspaceId, projectId, ctoId));
+});
+
 test("rejects unknown keys, accessors, symbols, custom prototypes and malformed arrays", () => {
   assert.throws(() => parseCtoDelivery({ ...delivery(), extra: true }, workspaceId, projectId, ctoId), /unknown or missing fields/);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v2", toolNames: ["builder.acknowledge-workstream", "builder.read-cto-workstream"] } }), workspaceId, projectId, ctoId), /mode is unsupported/);

@@ -454,3 +454,13 @@ Core/SDK 검사와 이 앱 결과는 실제 AI/OS/납품 증거와 구분한다.
 실행하지 못했다. 자동 승인 정책은 임의로 바꾸지 않았으며 사용자 확인 중이다.
 한 노드/한 CTO 원칙, Core 중립성, DEV/설치본 보존과 보류 범위는 그대로 유지한다.
 CTO 기억/질문 intake·Worker/QA/Task Packet·Runner·납품 및 전체 AC 완료는 남아 있다.
+
+### 2026-11-02 추가 기록: CTO별 독립 기억
+
+[CTO별 독립 기억](CTO-PRIVATE-MEMORY-2026-11-02.md)의 저장·조회 도구를 연결했다.
+Workspace/project/CTO별 불변 기록, 정확한 Core 요청/활성 run/세션 권한과 근거를
+검사한다. 같은 Agent를 쓰더라도 Lead나 다른 CTO에게 자동 공유하지 않는다. 기존 두
+도구 실행 기록은 그대로 두고 새 전달에만 네 가지 CTO 계획 도구를 고정한다.
+전체357/357·격리 타입/빌드·SDK CLI 및 compiled Worker JSONL fake Host 왕복은
+통과했다. 실제 CTO가 기억을 사용한 증거나 OS 격리, 질문 intake/Worker/QA/Task
+Packet/Runner/납품까지 완료한 것은 아니다. 전체 AC 상태는 근거 없이 올리지 않는다.

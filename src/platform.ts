@@ -16,6 +16,8 @@ import { PUBLISH_WORKSTREAM_TOOL, READ_WORKSTREAMS_TOOL, READ_CTO_WORKSTREAM_TOO
 import { publishWorkstream, readLeadWorkstreams, readCtoWorkstream, acknowledgeWorkstream, readWorkstreams } from "./workstream-tools.ts";
 import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL } from "./delivery-tool-declarations.mjs";
 import { dispatchCtoWorkstream, inspectCtoWorkstreamDelivery } from "./cto-workstream-delivery.ts";
+import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
+import { readCtoMemory, updateCtoMemory } from "./cto-memory-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -507,6 +509,14 @@ export async function cancelLeadWorkstreamDelivery(params: unknown, runContext: 
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => inspectCtoWorkstreamDelivery(params, runContext, platform, true));
 }
+export async function readAssignedCtoMemory(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readCtoMemory(params, context, platform));
+}
+export async function updateAssignedCtoMemory(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => updateCtoMemory(params, context, platform));
+}
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
@@ -571,7 +581,13 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => readLeadWorkstreamDelivery(params, context, platform) },
     { name: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.name, declaration: { displayName: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.displayName,
       description: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.description, parametersSchema: CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.parametersSchema },
-      handler: (params, context, platform) => cancelLeadWorkstreamDelivery(params, context, platform) }],
+      handler: (params, context, platform) => cancelLeadWorkstreamDelivery(params, context, platform) },
+    { name: READ_CTO_MEMORY_TOOL.name, declaration: { displayName: READ_CTO_MEMORY_TOOL.displayName,
+      description: READ_CTO_MEMORY_TOOL.description, parametersSchema: READ_CTO_MEMORY_TOOL.parametersSchema },
+      handler: (params, context, platform) => readAssignedCtoMemory(params, context, platform) },
+    { name: UPDATE_CTO_MEMORY_TOOL.name, declaration: { displayName: UPDATE_CTO_MEMORY_TOOL.displayName,
+      description: UPDATE_CTO_MEMORY_TOOL.description, parametersSchema: UPDATE_CTO_MEMORY_TOOL.parametersSchema },
+      handler: (params, context, platform) => updateAssignedCtoMemory(params, context, platform) }],
     data: [{ key: "builder.workstreams", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
