@@ -261,7 +261,8 @@ Unknown writes are never repeated: reconcile only by reading the same record, an
     exactCoreReceiptObserved: true, terminalCoreRunObserved: true, readinessIsNotImplementation: true,
     sourceRevisionBound: true, sameAgentConfigurationPreserved: true, temporaryWorkingDirectoryEmpty: true,
     restartRetained: true, otherWorkspaceUnchanged: true, codeWorkersQaAndCommands: false,
-    installedProfileChanged: false, mcpApprovalPolicyOverridden: false, cleanupQualificationPending: true }));
+    installedProfileChanged: false, mcpPlanningBridgeToolsPreapproved: true,
+    userGlobalMcpApprovalChanged: false, cleanupQualificationPending: true }));
 }
 
 export async function runAcceptance(context) {

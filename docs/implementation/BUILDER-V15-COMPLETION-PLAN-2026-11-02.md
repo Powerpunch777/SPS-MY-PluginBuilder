@@ -502,3 +502,8 @@ fake Host이고 화면 질문은 명시적 DTO fixture다. 실제 모델 판단/
 명령·파일 작업 차단은 유지한다. 그 설정 연결과 실제 AI 검증은 후속이다. 사용자 답변의
 기억/설계/Workstream 연결, Worker/QA/Task Packet/Runner/납품은 계속 남고 전체 AC를
 자동으로 PASS로 바꾸지 않는다. DEV·설치본·계정·데이터와 보류 범위도 그대로 유지한다.
+
+후속으로 사용자 확정 범위의 Core MCP bridge 개별 승인 설정을 연결하고55개 회귀 및
+adapter 타입 검사를 통과했다. 실제 Workstream 시험은 첫 Lead가 `provider_quota`로
+실패해 CTO 단계에 도달하지 못했다. 새 계정/요청으로 대체하지 않았으며 실제 승인 동작이나
+CTO 수신을 통과로 세지 않는다. 자세한 시점·식별·정리는 위 회신 기록에 남겼다.
