@@ -59,3 +59,16 @@ export const LIST_CTOS_TOOL: Readonly<{
   description: string;
   parametersSchema: JsonObject;
 }>;
+
+export const PUBLISH_DESIGN_BASELINE_TOOL: Readonly<{
+  name: "builder.publish-design-baseline";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
+export const READ_DESIGN_BASELINE_TOOL: Readonly<{
+  name: "builder.read-design-baseline";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;

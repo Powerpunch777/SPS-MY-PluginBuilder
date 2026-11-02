@@ -250,6 +250,34 @@ test("built Worker routes design sources to an unapproved draft and back without
     assert.equal(calls.filter(method => method === "state.compareAndSet").length, writesBeforeDuplicate,
       "stale duplicate must not perform another CAS write");
 
+    // Explicit fake user/run association, not a real provider or legal approval.
+    const turnKey = JSON.stringify(stateKey(`lead-chat.turn.v1.${answerTurnId}`));
+    hostState.set(turnKey, { ...hostState.get(turnKey), state: "submitted", runId });
+    const baselineInput = { projectId: workspaceA, expectedBaseRevisionId: null, sourceDraftRevisionId: resolvedDraft.revisionId,
+      revisionId: "baseline-rpc-1", userSourceId: answerSourceId, interpretation: "The user selected the desktop design." };
+    invoke(14, "builder.publish-design-baseline", baselineInput, runContext);
+    assert.ok((await serviceUntil(14)).error, "main cannot reuse a decisions user/run as its own");
+    invoke(15, "builder.publish-design-baseline", baselineInput, decisionsRunContext);
+    const baselineReply = await serviceUntil(15);
+    assert.equal(baselineReply.error, undefined, JSON.stringify(baselineReply.error));
+    assert.equal(baselineReply.result.data.status, "published");
+    const baseline = baselineReply.result.data.revision;
+    assert.deepEqual(baseline.specification.requirements, resolvedDraft.specification.requirements);
+    assert.deepEqual(baseline.graph.entities, resolvedDraft.graph.entities);
+    assert.equal(baseline.specification.approvalEvidenceRef, answerSourceId);
+    assert.equal(baseline.graph.approvedSpecRevisionId, baseline.specification.revisionId);
+    assert.equal(baseline.userDecision.sourceSha256, sha256("Use the desktop target."));
+    assert.match(baselineReply.result.content, /not independently verified legal approval/);
+    send({ jsonrpc: "2.0", id: 16, method: "getData", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
+      params: { key: "builder.design-baseline", companyId: workspaceA, params: { projectId: workspaceA } } });
+    const baselineDto = await serviceUntil(16);
+    assert.equal(baselineDto.error, undefined, JSON.stringify(baselineDto.error));
+    assert.deepEqual(baselineDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 1, baseline });
+    invoke(17, "builder.read-solution", { projectId: workspaceA });
+    const canonicalGraph = await serviceUntil(17);
+    assert.equal(canonicalGraph.error, undefined, JSON.stringify(canonicalGraph.error));
+    assert.deepEqual(canonicalGraph.result.data.solution, { sequence: 1, revision: baseline.graph });
+
     assert.ok(calls.includes("state.compareAndSet"), "proposal publication must use conditional state writes");
     assert.equal(hostState.get(JSON.stringify(stateKey("snapshot.v1"))).revision, 1,
       "design flow must not implicitly write the consultation snapshot");

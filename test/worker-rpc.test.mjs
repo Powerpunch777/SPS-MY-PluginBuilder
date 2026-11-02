@@ -168,7 +168,8 @@ test("built Worker JSONL round-trips workspace state and rejects cross-workspace
       paperclipInvocation: { id: `tool-invocation-${id}`, scope: { companyId: workspaceA } },
       params: { toolName: "builder.read-solution", parameters: { projectId: "project-one" }, runContext: context } });
     readTool(8, runContext);
-    for (let index = 0; index < 7; index += 1) {
+    const observedReadHeads = [];
+    for (let index = 0; index < 8; index += 1) {
       const call = await waitForMessage("Lead read tool state call", message => typeof message.method === "string");
       assert.equal(call.method, "state.get", "The read tool cannot write state or invoke an Agent");
       assert.equal(call.paperclipInvocationId, "tool-invocation-8");
@@ -181,12 +182,14 @@ test("built Worker JSONL round-trips workspace state and rejects cross-workspace
       else if (key === "lead-sessions.v1.1") value = { workspaceId: workspaceA, selectionRevision: 1, agentId,
         sessions: { main: sessionId, "cto-inbox": null, decisions: null } };
       else {
-        assert.match(key, /^solution-head\.v1\.[a-f0-9]{64}$/);
+        assert.match(key, /^(?:design-baseline|solution)-head\.v1\.[a-f0-9]{64}$/);
+        observedReadHeads.push(key.split("-head.v1.")[0]);
         value = null;
       }
       send({ jsonrpc: "2.0", id: call.id, result: value });
     }
     const solution = await workerResponse(8);
+    assert.deepEqual(observedReadHeads, ["design-baseline", "solution"], "Read the canonical baseline first; use only the legacy empty-state fallback when absent.");
     assert.equal(solution.error, undefined);
     assert.deepEqual(solution.result.data, { projectId: "project-one", solution: null });
     assert.match(solution.result.content, /No stored solution revision/);

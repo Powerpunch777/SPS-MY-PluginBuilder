@@ -116,8 +116,8 @@ async function loadTurn(platform: SpsPlatformInvocationContext, scope: Scope, re
   return turn;
 }
 
-/** User input only; assistant answers never become customer approval evidence. */
-export async function readLeadUserSource(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
+/** Internal source identity for tools that must bind a decision to its current run. */
+export async function readLeadUserTurn(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
   const raw = await platform.state.get({ scopeKind: "company", scopeId: sessions.workspaceId,
     namespace: "sonpark.my-builder", stateKey: `lead-chat.turn.v1.${id(requestId)}` });
   const row = record(raw, TURN_KEYS, ["questionContext"]);
@@ -125,6 +125,12 @@ export async function readLeadUserSource(requestId: string, sessions: BuilderLea
   const scope = scopeFor(sessions, row.channel);
   const turn = parseTurn(raw, scope);
   if (turn.requestId !== requestId) throw error();
+  return Object.freeze(turn);
+}
+
+/** User input only; assistant answers never become customer approval evidence. */
+export async function readLeadUserSource(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
+  const turn = await readLeadUserTurn(requestId, sessions, platform);
   return Object.freeze({ id: `lead-turn:${requestId}`, text: turn.text,
     ...(turn.questionContext ? { questionContext: turn.questionContext } : {}) });
 }

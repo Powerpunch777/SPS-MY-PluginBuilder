@@ -268,15 +268,27 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
       graph: { graphRevisionId: "fixture-graph-1", entities: [{ id: "REQ-FIXTURE", kind: "requirement", specRef: "REQ-FIXTURE" }],
         relations: [], viewLayoutRef: "fixture-layout-1" }, questions: [{ id: "Q-FIXTURE", title: "Fixture question",
         text: "This UI fixture is not a customer decision.", options: [{ id: "A", label: "Fixture option", tradeoff: "Not executed" }], recommendation: "A" }] } };
+  const baselineFixtureSourceId = `lead-turn:${randomUUID()}`;
+  const baselineFixture = { workspaceId: company.id, projectId: company.id, sequence: 1,
+    baseline: { projectId: company.id, revisionId: "fixture-baseline-1", sourceDraftRevisionId: draftFixture.draft.revisionId,
+      draftDigest: "a".repeat(64), createdAt: draftFixture.createdAt,
+      author: { agentId: leadAgent.id, sessionId: preparedSessions.sessions.main,
+        runId: "55555555-5555-4555-8555-555555555555", selectionRevision: 1 },
+      userDecision: { sourceId: baselineFixtureSourceId, sourceSha256: "b".repeat(64), interpretation: "Baseline display fixture only, not an actual user decision." },
+      specification: { ...draftFixture.draft.specification, projectId: company.id, revisionId: "fixture-baseline-spec-1", approvalEvidenceRef: baselineFixtureSourceId },
+      graph: { ...draftFixture.draft.graph, graphRevisionId: "fixture-baseline-graph-1", approvedSpecRevisionId: "fixture-baseline-spec-1" } } };
   await workspace.evaluate(`(() => {
     if(globalThis.__spsBuilderSavedFetch) throw new Error('Unexpected existing fixture interceptor');
     globalThis.__spsBuilderQuestionDraftFixture=${JSON.stringify(draftFixture)};
     globalThis.__spsBuilderQuestionSends=[];
+    globalThis.__spsBuilderBaselineFixture=null;
     const original=globalThis.fetch; globalThis.__spsBuilderSavedFetch=original;
     globalThis.fetch=function(input,init){
       const url=new URL(typeof input==='string'?input:input.url,location.href);
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.design-draft`)})
         return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderQuestionDraftFixture}),{status:200,headers:{'content-type':'application/json'}}));
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.design-baseline`)})
+        return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderBaselineFixture}),{status:200,headers:{'content-type':'application/json'}}));
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`)}){
         const body=JSON.parse(init.body);globalThis.__spsBuilderQuestionSends.push(body);
         return Promise.resolve(new Response(JSON.stringify({data:{saved:true,requestId:body.params.requestId}}),{status:200,headers:{'content-type':'application/json'}}));
@@ -336,14 +348,27 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
       nodeEditable:document.querySelectorAll('.react-flow__node.draggable').length})`);
     assert.equal(layout.overflow, false);
     assert.equal(layout.nodeEditable, 0);
+    await workspace.evaluate(`globalThis.__spsBuilderBaselineFixture=${JSON.stringify(baselineFixture)}`);
+    await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to refresh the explicitly marked baseline DTO");
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Load internal-baseline presentation fixture without a Host write");
+    await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Inspect the read-only baseline presentation");
+    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('설계 기준 · Lead 해석 기록')))`), Boolean, "baseline fixture document");
+    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('설계 기준 · Lead 해석 기록')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+      value => value?.includes("fixture-baseline-1") && value.includes("외부 계약 체결이나 코드 실행 권한이 아닙니다"), "baseline record is not execution authority");
+    assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
+    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-baseline-fixture.png"));
   } finally {
     await workspace.evaluate(`(() => { if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;}
-      delete globalThis.__spsBuilderQuestionDraftFixture;delete globalThis.__spsBuilderQuestionSends;})()`);
+      delete globalThis.__spsBuilderQuestionDraftFixture;delete globalThis.__spsBuilderQuestionSends;delete globalThis.__spsBuilderBaselineFixture;})()`);
   }
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead before using its refresh control");
   await click(workspace, '[aria-label="Workspace 새로고침"]', "Restore real Host data after UI-only fixture");
   await eventually(() => workspace.evaluate(`document.querySelector('[aria-label="Lead 설계 초안"]') === null`), Boolean, "draft fixture removed");
   assert.deepEqual(await data(company.id), saved, "Presentation fixture must not persist a design or alter consultation state.");
+  assert.equal((await request(`/api/plugins/${plugin.id}/data/builder.design-baseline`, {
+    method: "POST", body: { companyId: company.id, params: { projectId: company.id } },
+  })).data, null, "The presentation fixture must not persist an internal baseline.");
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
   await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled === false`),
@@ -453,6 +478,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: true, sendReceiptDoesNotResolveQuestion: true, storedAnswerPresentationFixture: true,
+    designBaselinePresentationFixture: true, realHostBaselineWritten: false,
     transcriptScrollPresentationFixture: true, olderReaderPositionPreserved: true, explicitJumpToLatest: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,

@@ -8,7 +8,8 @@ import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
 import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
 import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
-import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL } from "./tool-declarations.mjs";
+import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL } from "./tool-declarations.mjs";
+import { publishDesignBaseline, readLeadDesignBaseline, readDesignBaseline } from "./design-baseline-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -309,7 +310,9 @@ export async function readLeadSolution(params: unknown, runContext: unknown, pla
   return serialize(companyId, async () => {
     const { check } = await resolveLeadToolAuthority(context, platform);
     await check();
-    const solution = await createSolutionRevisionStore(companyId, projectId, platform.state).current();
+    const baseline = await readDesignBaseline(companyId, projectId, platform);
+    const solution = baseline ? { sequence: baseline.sequence, revision: baseline.revision.graph }
+      : await createSolutionRevisionStore(companyId, projectId, platform.state).current();
     await check();
     return { content: solution === null ? "No stored solution revision exists for this Builder project."
       : "Stored solution revision. Customer approval and delivery have not been verified by this read.",
@@ -454,6 +457,14 @@ export async function readLeadCtos(params: unknown, runContext: unknown, platfor
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => listProjectCtos(params, context, platform));
 }
+export async function publishLeadDesignBaseline(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => publishDesignBaseline(params, context, platform));
+}
+export async function readLeadBaseline(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readLeadDesignBaseline(params, context, platform));
+}
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
@@ -485,8 +496,20 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => createLeadCto(params, context, platform) },
     { name: LIST_CTOS_TOOL.name, declaration: { displayName: LIST_CTOS_TOOL.displayName,
       description: LIST_CTOS_TOOL.description, parametersSchema: LIST_CTOS_TOOL.parametersSchema },
-      handler: (params, context, platform) => readLeadCtos(params, context, platform) }],
-    data: [{ key: "builder.project-ctos", handler: async (params, platform) => {
+      handler: (params, context, platform) => readLeadCtos(params, context, platform) },
+    { name: PUBLISH_DESIGN_BASELINE_TOOL.name, declaration: { displayName: PUBLISH_DESIGN_BASELINE_TOOL.displayName,
+      description: PUBLISH_DESIGN_BASELINE_TOOL.description, parametersSchema: PUBLISH_DESIGN_BASELINE_TOOL.parametersSchema },
+      handler: (params, context, platform) => publishLeadDesignBaseline(params, context, platform) },
+    { name: READ_DESIGN_BASELINE_TOOL.name, declaration: { displayName: READ_DESIGN_BASELINE_TOOL.displayName,
+      description: READ_DESIGN_BASELINE_TOOL.description, parametersSchema: READ_DESIGN_BASELINE_TOOL.parametersSchema },
+      handler: (params, context, platform) => readLeadBaseline(params, context, platform) }],
+    data: [{ key: "builder.design-baseline", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
+      const current = await readDesignBaseline(companyId, params.projectId, platform);
+      return current && { workspaceId: companyId, projectId: params.projectId, sequence: current.sequence,
+        baseline: current.revision } as unknown as JsonValue;
+    } }, { key: "builder.project-ctos", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
       return await readProjectCtos(companyId, params.projectId, platform) as unknown as JsonValue;

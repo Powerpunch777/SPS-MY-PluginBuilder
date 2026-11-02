@@ -409,3 +409,13 @@ fixture의 처음 끝 위치·과거 기록 독자 위치 보존·직접 최근 
 세션이나 실제 CTO intake는 아니다. 일반 Agent 기본 도구 정책, 자동 memory-read
 보장, 프로젝트 선택 UI, 질문 답변에서 Spec/Graph/Contract로 이어지는 흐름은 남아
 있다. 이 기록은 AC 상태를 바꾸지 않으며 전체 v15 완료나 납품을 뜻하지 않는다.
+
+### 2026-11-02 추가 기록: 질문·CTO 정체성·내부 설계 기준
+
+[질문 답변과 새 설계 버전](LEAD-QUESTION-REVISION-2026-11-02.md),
+[프로젝트 CTO 등록](PROJECT-CTO-REGISTRATION-2026-11-02.md),
+[내부 설계 기준](DESIGN-BASELINE-2026-11-02.md)의 구현/검증 범위를 기록했다.
+질문과 CTO는 동의받은 실제 Lead 시험을 포함하지만, 내부 기준의 현재 근거는
+244개 자동 검사와 no-AI 앱 표시 fixture다. 실제 기준 저장, 기술 선정/Workstream,
+CTO 업무/질문 intake, Worker/QA·Runner·납품은 이 기록으로 완료 처리하지 않는다.
+기존 AC 체크 상태는 유지하며 Marketplace·Preview·자체 LAN도 계속 보류한다.

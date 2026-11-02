@@ -8,6 +8,7 @@ import type { LeadChannel } from "../domain/model.ts";
 import { parseQuestionContext, type QuestionContext } from "../domain/question-context.ts";
 import { parseLeadConversationPage } from "../lead-conversations.ts";
 import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
+import { projectDesignBaseline } from "../domain/design-baseline-view.ts";
 import { projectLeadMemory } from "../domain/lead-memory-view.ts";
 import { projectProjectCtos } from "../domain/project-ctos-view.ts";
 
@@ -17,6 +18,7 @@ export function BuilderPage() {
   const lead = usePluginData<unknown>("builder.lead-agents");
   const sessions = usePluginData<unknown>("builder.lead-sessions");
   const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
+  const designBaseline = usePluginData<unknown>("builder.design-baseline", { projectId: context.companyId ?? "" });
   const memory = usePluginData<unknown>("builder.lead-memory", { projectId: context.companyId ?? "" });
   const projectCtos = usePluginData<unknown>("builder.project-ctos", { projectId: context.companyId ?? "" });
   const [channel, setChannel] = useState<LeadChannel>("main");
@@ -73,6 +75,15 @@ export function BuilderPage() {
     try { return { snapshot: projectLeadMemory(projected, memory.data), error: null }; }
     catch { return { snapshot: projected, error: "Lead 공유 기억을 확인하지 못했습니다. 새로고침해 주세요." }; }
   }, [current, projectCtos.data, projectCtos.loading, projectCtos.error, memory.data, memory.loading, memory.error]);
+  const baselineView = useMemo(() => {
+    if (!memoryView.snapshot) return { snapshot: null, error: null };
+    if (designBaseline.error) return { snapshot: memoryView.snapshot, error: "설계 기준을 불러오지 못했습니다. 새로고침해 주세요." };
+    if (designBaseline.loading || designBaseline.data === null) {
+      return { snapshot: memoryView.snapshot, error: null };
+    }
+    try { return { snapshot: projectDesignBaseline(memoryView.snapshot, designBaseline.data), error: null }; }
+    catch { return { snapshot: memoryView.snapshot, error: "설계 기준을 확인하지 못했습니다. 새로고침해 주세요." }; }
+  }, [memoryView, designBaseline.data, designBaseline.loading, designBaseline.error]);
   const scope = JSON.stringify([context.companyId, leadOptions?.revision ?? null, channel]);
   liveScope.current = scope;
   useEffect(() => { setCursor(null); pendingMessage.current = null; }, [context.companyId, leadOptions?.revision]);
@@ -87,7 +98,7 @@ export function BuilderPage() {
       if (document.visibilityState === "hidden") { timer = setTimeout(() => void poll(), 2_000); return; }
       try {
         await refreshConversation({ channel });
-        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); memory.refresh(); projectCtos.refresh(); }
+        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); memory.refresh(); projectCtos.refresh(); }
       } catch {
         // Polling only observes the exact saved request. Stop on error; the
         // explicit button remains available and no send is retried here.
@@ -98,10 +109,10 @@ export function BuilderPage() {
     timer = setTimeout(() => void poll(), 2_000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [conversationPage?.active?.requestId, conversationPage?.active?.runId, conversationPage?.active?.state,
-    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, memory.refresh, projectCtos.refresh]);
+    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, memory.refresh, projectCtos.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
-  const presented = memoryView.snapshot ?? current.snapshot;
+  const presented = baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
     designDraft={draftView.view?.draft ?? null} designDraftLoading={design.loading}
     designDraftError={draftView.error ?? (design.error ? "설계 초안을 불러오지 못했습니다." : null)}
@@ -116,7 +127,7 @@ export function BuilderPage() {
       try {
         const result = await refreshConversation({ channel });
         if (result.refreshed !== true) throw new Error("Unexpected refresh result.");
-      } finally { conversation.refresh(); lead.refresh(); design.refresh(); memory.refresh(); projectCtos.refresh(); }
+      } finally { conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); memory.refresh(); projectCtos.refresh(); }
     } : undefined}
     onCancelLeadMessage={conversationPage?.active?.runId ? async () => {
       try { await cancelMessage({ channel }); } finally { conversation.refresh(); }
@@ -147,7 +158,7 @@ export function BuilderPage() {
         if (result.saved !== true || result.requestId !== request.requestId) throw new Error("Unexpected send result.");
         pendingMessage.current = null;
         setCursor(null);
-      } finally { conversation.refresh(); lead.refresh(); }
+      } finally { conversation.refresh(); lead.refresh(); designBaseline.refresh(); }
     } : undefined}
     leadAgents={leadOptions} leadAgentsLoading={lead.loading}
     leadAgentsError={!lead.loading && !leadOptions ? "Agent 목록을 불러오지 못했습니다. 새로고침해 주세요." : null}
@@ -159,6 +170,7 @@ export function BuilderPage() {
       if (result.saved !== true || result.executionStarted !== false) throw new Error("Unexpected Lead Agent selection result.");
       lead.refresh();
       design.refresh();
+      designBaseline.refresh();
       memory.refresh();
       projectCtos.refresh();
       sessions.refresh();
@@ -171,8 +183,8 @@ export function BuilderPage() {
         if (result.saved !== true || result.executionStarted !== false || result.sessionsReady !== true) throw new Error("Unexpected Lead session preparation result.");
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
-    loading={state.loading || projectCtos.loading} error={current.error ?? memoryView.error ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); memory.refresh(); projectCtos.refresh(); }} onImportConsultation={async text => {
+    loading={state.loading || projectCtos.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
+    onRefresh={() => { state.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); memory.refresh(); projectCtos.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };
