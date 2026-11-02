@@ -5,7 +5,10 @@ import path from "node:path";
 
 const desktop = process.env.SPS_BUILDER_CORE_DESKTOP;
 const liveCodex = process.env.SPS_BUILDER_LIVE_CODEX;
+const liveCancel = process.env.SPS_BUILDER_LIVE_CANCEL;
 assert.ok(liveCodex === undefined || liveCodex === "1", "Live account use must be explicitly enabled with SPS_BUILDER_LIVE_CODEX=1.");
+assert.ok(liveCancel === undefined || liveCancel === "1" && liveCodex === "1",
+  "Live cancellation requires explicit live-account and cancellation opt-in.");
 if (liveCodex === "1") {
   assert.ok(!process.env.OPENAI_API_KEY && !process.env.PAPERCLIP_CODEX_PROVIDERS,
     "Live subscription smoke must not inherit an API key or an alternate provider.");

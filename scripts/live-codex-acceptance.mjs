@@ -125,8 +125,57 @@ export async function runAcceptance(context) {
   await eventually(assistantVisible, Boolean, "restarted actual assistant response, excluding user prompt text");
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-live-lead-restarted.png"));
   assert.deepEqual((await request(`/api/agents/${agent.id}`)).adapterConfig, agent.adapterConfig);
+  let actualCliCancellation = false;
+  if (process.env.SPS_BUILDER_LIVE_CANCEL === "1") {
+    stage("send_short_cancellation_probe");
+    const cancellationText = "Please answer in two short neutral sentences about a quiet day. No tools, code, or file access.";
+    await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled === false`), Boolean, "second chat readiness");
+    await workspace.evaluate(`(() => {const field=document.querySelector('textarea[aria-label="Lead에게 메시지"]');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,${JSON.stringify(cancellationText)});
+      field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="메시지 보내기"]')?.disabled === false`), Boolean, "cancellation probe send button");
+    await click(workspace, 'button[aria-label="메시지 보내기"]', "Start one authorized short chat for cancellation");
+    let processRun = null;
+    const processDeadline = Date.now() + 30_000;
+    while (Date.now() < processDeadline) {
+      const page = await conversation();
+      if (page.active?.runId) {
+        const candidate = await request(`/api/heartbeat-runs/${page.active.runId}`);
+        assert.ok(["queued", "running"].includes(candidate.status), "The cancellation probe finished before a process could be observed; do not create a replacement run.");
+        if (candidate.status === "running" && Number.isSafeInteger(candidate.processPid) && candidate.processPid > 0) {
+          processRun = candidate;
+          break;
+        }
+      }
+      await pause(30);
+    }
+    assert.ok(processRun, "Observe the actual managed CLI process before requesting cancellation.");
+    assert.equal(process.kill(processRun.processPid, 0), true, "The observed CLI process must still exist before cancellation.");
+    await eventually(() => workspace.evaluate(`(() => {const button=document.querySelectorAll('.builder-conversation-controls button')[1];
+      return button?.textContent.trim()==='실행 중단' && button.disabled===false;})()`), Boolean, "actual cancellation control");
+    await click(workspace, '.builder-conversation-controls button:nth-child(2)', "Cancel through the actual public Builder UI action");
+    const cancelled = await eventually(async () => {
+      await request(`/api/plugins/${plugin.id}/actions/builder.refresh-lead-conversation`, { method: "POST", body: {
+        companyId: company.id, params: { channel: "main" },
+      } });
+      return conversation();
+    }, value => value.totalTurns === 2 && value.active === null && value.turns[0]?.state === "cancelled"
+      && value.turns[0]?.termination === "confirmed", "actual cancelled run and confirmed termination");
+    await eventually(async () => {
+      try { process.kill(processRun.processPid, 0); return false; }
+      catch (error) { if (error.code === "ESRCH") return true; throw error; }
+    }, Boolean, "observed managed CLI process exit", 15_000);
+    assert.equal(cancelled.turns[0].runId, processRun.id);
+    assert.deepEqual(await readdir(workingDirectory), []);
+    workspace = await restart({ companyPrefix: company.issuePrefix, pluginId: plugin.id, readySelector: ".builder-shell" });
+    assert.deepEqual(await conversation(), cancelled, "Restart must not resurrect the cancelled turn.");
+    assert.equal((await request(`/api/companies/${company.id}/heartbeat-runs?agentId=${agent.id}&limit=100`)).length, 2);
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes('실행 중단')`), Boolean, "retained cancellation in actual UI");
+    actualCliCancellation = true;
+    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-live-cancel-restarted.png"));
+  }
   console.log(JSON.stringify({ liveLeadChat: true, aiExecuted: true, defaultCliAccount: true,
     actualUiSend: true, actualProviderSucceeded: true, actualAnswerRendered: true, restartRetainedAnswer: true,
-    repeatedRequestDidNotExecuteAgain: true, commandsOrCodeExecuted: false, installedProfileChanged: false,
+    repeatedRequestDidNotExecuteAgain: true, actualCliCancellation, commandsOrCodeExecuted: false, installedProfileChanged: false,
     answerSha256: createHash("sha256").update(turn.answer).digest("hex"), cleanupQualificationPending: true }));
 }
