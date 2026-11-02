@@ -29,6 +29,10 @@ The acceptance criteria below follow the canonical [v15 design](../design/01_Des
 
 The deliverable is a working Builder workflow, not a UI-only prototype. The initial inspection at Builder `17224a9f` found a workspace-scoped initial snapshot, consultation text persistence, Lead Agent selection, three prepared Lead session IDs and read-only views, without actual AI execution. That is the baseline for the checklist below, not a claim about later code. The separately recorded durable-chat increment now demonstrates one authorized real CLI answer and restart retention; see [its exact evidence and limits](LEAD-DURABLE-CHAT-2026-11-02.md). No Lead-authored complete specification or executable customer deliverable has been accepted. **The Builder is not complete.**
 
+### 2026-11-02 추가 기록: Lead 선택 조건부 저장
+
+[Lead 선택 조건부 저장의 정확한 계약, 개발 Host 검증 결과와 한계](LEAD-CONDITIONAL-STATE-2026-11-02.md)를 추가했다. 선택 저장 경로에 한정된 증거이며 AC-02, 전체 Builder 완료 또는 보류 중인 Marketplace·Preview·Native LAN 범위의 완료를 뜻하지 않는다.
+
 The code status labels used below are an initial source inspection, not test results:
 
 - `P` Partial behavior exists, but the full AC is not met.
