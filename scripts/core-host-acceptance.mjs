@@ -78,13 +78,21 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   value => value.ready && value.path === `/${company.issuePrefix}/builder` && !value.loading && !value.failed, "actual Builder Shell route");
   const visual = await workspace.evaluate(`(() => {
     const shell=document.querySelector('.builder-shell');
+    const bounds=shell.getBoundingClientRect();
     return {background:getComputedStyle(shell).backgroundColor,scheme:getComputedStyle(shell).colorScheme,
+      coreFrame:Boolean(document.querySelector('#main-content')),left:bounds.left,top:bounds.top,
+      width:bounds.width,height:bounds.height,viewportWidth:innerWidth,viewportHeight:innerHeight,
       duplicateHeader:Boolean(document.querySelector('.builder-view-header')),
       title:document.querySelector('.builder-chat-heading h1')?.textContent,
       tabs:[...document.querySelectorAll('.builder-rail-tabs [role="tab"]')].map(item=>({label:item.textContent,disabled:item.disabled}))};
   })()`);
   assert.equal(visual.background, 'rgb(24, 24, 24)');
   assert.equal(visual.scheme, 'dark');
+  assert.equal(visual.coreFrame, false, "Builder must not inherit the Core compatibility frame.");
+  assert.ok(Math.abs(visual.left) <= 1 && visual.width >= visual.viewportWidth - 20,
+    "Builder must own the available window width without the Core sidebar.");
+  assert.ok(Math.abs(visual.top) <= 1 && Math.abs(visual.height - visual.viewportHeight) <= 1,
+    "Builder must fill the window height without a leftover Core canvas.");
   assert.equal(visual.duplicateHeader, false);
   assert.equal(visual.title, 'Lead와 대화');
   assert.deepEqual(visual.tabs.map(value => value.label), ['수정사항','작업 지시','기록','작업 파일','설계']);
@@ -266,7 +274,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
-    uiSha256, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
+    uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
     systemView: { pageHeading: systemView.pageHeading, scopeDescription: systemView.scopeDescription,
       runnerMessage: systemView.runnerUnavailableMessage, activityRailCount: systemView.activityRailCount,
       activityOpenToggleCount: systemView.activityOpenToggleCount, activityCloseToggleCount: systemView.activityCloseToggleCount,
