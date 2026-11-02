@@ -1,5 +1,25 @@
 # Builder v15 Full Completion Plan
 
+## 최신 목표와 현재 작업 범위 (2026-11-02)
+
+### 최신 목표
+
+최신 목표는 이 저장소의 v15 통합 설계, UI v9, 최신 UI 적용 기준을 따르는 실제 Builder를 완성하는 것이다. 화면 시제품만으로 완료 처리하지 않는다. 안전한 진행에 꼭 필요한 Core 선행 사항이 있으면 그것부터 확인·해결한다. Core 문서와 기술상 핵심 경로는 별도 담당 범위이며, 이 계획은 Builder를 다시 설계하거나 줄이지 않는다.
+
+이번 재개는 Builder 목표를 다시 진행하는 승인이지, Core 전체 완성이나 Stable 선행 범위 확대의 승인이 아니다. 현재 문서 갱신 범위는 이 계획서와 Core–Plugin 정렬 문서 두 개다. 이 문서 수정만으로 Builder 구현, 전체 AC 통과, 실제 AI 실행 또는 제품 완료를 주장하지 않는다.
+
+### 우선 보류
+
+Marketplace, 자체 LAN 개발, Preview 기능 개발 및 Preview를 포함한 추가 시험은 보류한다. Preview 관련 부분은 아래 AC-10, AC-25, AC-66에서 현재 작업 범위에 넣지 않으며 완료로 보지 않는다. 이는 해당 AC 전체를 버리거나 나머지 요구를 제외한다는 뜻이 아니다. Preview와 무관한 요구를 포함해 AC-01~118은 모두 보존하며, 보류 범위 밖의 항목을 포기하거나 완료 처리하지 않는다.
+
+- AC-10: 순수 SPS 플러그인의 Preview 부분만 보류·미완료·이번 범위 제외다. AI 없이 빌드하고 전달하는 나머지 요구는 유지한다.
+- AC-25: 실제 Plugin Preview 통과 부분만 보류·미완료·이번 범위 제외다. 현재 Core/SDK 계약 호환 및 전달 차단 등 나머지 요구는 유지한다.
+- AC-66: Preview 격리와 iPad 팝업 차단 복구 부분은 보류·미완료·이번 범위 제외다. AC 자체를 삭제하거나 통과 처리하지 않는다.
+
+이 보류 표시는 현재 작업 순서를 정하기 위한 것이며, 원래 AC 문구·ID나 과거 기록을 고쳐 쓰지 않는다. 보류 해제와 시험 재개는 별도 사용자 결정이 필요하다.
+
+## 원래 계획과 기준
+
 Date: 2026-11-02
 Status: initial source baseline plus separately dated progress; no full v15 acceptance item is declared complete by this document.
 
