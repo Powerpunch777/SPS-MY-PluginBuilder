@@ -369,6 +369,45 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(await data(company.id), saved, "Workspace activation must not erase Builder state.");
   const shell = await request(`/api/companies/${company.id}/workspace-shell`);
   assert.ok(JSON.stringify(shell).includes(plugin.id), "Explicit Shell choice must survive restart.");
+  // UI-only long transcript fixture; never writes a synthetic conversation to Host.
+  await workspace.evaluate(`(() => {
+    if(globalThis.__spsBuilderSavedFetch) throw new Error('Unexpected existing fixture interceptor');
+    globalThis.__spsBuilderScrollFixture=${JSON.stringify(saved)};
+    globalThis.__spsBuilderScrollFixture.messages=Array.from({length:32},(_,index)=>({
+      id:'scroll-fixture-'+index,channel:'main',actorId:null,role:'user',
+      text:'SCROLL_FIXTURE_'+index+' '+('Read-only transcript fixture. '.repeat(12)),
+      createdAt:'2026-11-02T00:00:00.000Z',runId:null}));
+    const original=globalThis.fetch; globalThis.__spsBuilderSavedFetch=original;
+    globalThis.fetch=function(input,init){
+      const url=new URL(typeof input==='string'?input:input.url,location.href);
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.snapshot`)})
+        return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderScrollFixture}),{status:200,headers:{'content-type':'application/json'}}));
+      return original.call(this,input,init);
+    };
+  })()`);
+  const transcriptPosition = () => workspace.evaluate(`(() => {const e=document.querySelector('.builder-transcript');
+    return e && {top:e.scrollTop,gap:e.scrollHeight-e.clientHeight-e.scrollTop,height:e.scrollHeight,client:e.clientHeight};})()`);
+  try {
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Load a marked long-transcript UI fixture");
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.textContent.includes('SCROLL_FIXTURE_31')`), Boolean, "long fixture transcript");
+    await eventually(transcriptPosition, value => value.height > value.client && value.gap <= 2, "initial transcript follows latest message");
+    await workspace.evaluate(`(() => {const e=document.querySelector('.builder-transcript');e.scrollTop=0;e.dispatchEvent(new Event('scroll'));})()`);
+    await eventually(() => workspace.evaluate(`Boolean(document.querySelector('[aria-label="최근 메시지로 이동"]'))`), Boolean, "explicit jump control while reading older text");
+    await workspace.evaluate(`globalThis.__spsBuilderScrollFixture.messages.push({id:'scroll-new',channel:'main',actorId:null,role:'assistant',
+      text:'SCROLL_NEW_ANSWER '+('Additional read-only content. '.repeat(50)),createdAt:'2026-11-02T00:01:00.000Z',runId:null})`);
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Observe an incoming message without moving an older-text reader");
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.textContent.includes('SCROLL_NEW_ANSWER')`), Boolean, "new fixture answer");
+    assert.ok((await transcriptPosition()).top <= 2, "Incoming content must not force a scrolled-up reader to the bottom.");
+    await click(workspace, '[aria-label="최근 메시지로 이동"]', "Explicitly return to latest messages");
+    await eventually(transcriptPosition, value => value.gap <= 2, "explicit jump reaches the end");
+    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-transcript-follow.png"));
+  } finally {
+    await workspace.evaluate(`(() => {if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;}
+      delete globalThis.__spsBuilderScrollFixture;})()`);
+  }
+  await click(workspace, '[aria-label="Workspace 새로고침"]', "Restore real Host transcript after presentation fixture");
+  await eventually(() => workspace.evaluate(`!document.querySelector('.builder-transcript')?.textContent.includes('SCROLL_FIXTURE_')`), Boolean, "scroll fixture removed");
+  assert.deepEqual(await data(company.id), saved);
   console.log(JSON.stringify({ builderCoreHost: true, realUiBridge: true, actualWorkspaceState: true,
     workspaceIsolation: true, explicitShell: true, idempotentInput: true, hostRestart: true,
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
@@ -377,6 +416,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
+    transcriptScrollPresentationFixture: true, olderReaderPositionPreserved: true, explicitJumpToLatest: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
     systemView: { pageHeading: systemView.pageHeading, scopeDescription: systemView.scopeDescription,

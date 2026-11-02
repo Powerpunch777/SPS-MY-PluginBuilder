@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity, AlertCircle, ArrowUp, Bot, Check, ChevronLeft, ChevronRight, CircleHelp, FileText,
   GitBranch, GitFork, LoaderCircle, MessageSquare, Network, PanelRight, RefreshCw, Send,
@@ -9,6 +9,7 @@ import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
 import { DesignDraftSummary } from "./DesignDraftSummary.tsx";
+import { isNearTranscriptBottom, transcriptScrollAction, type TranscriptPage } from "./transcript-scroll.ts";
 import { selectLeadDecisionTranscript } from "../domain/selectors.ts";
 import { assertConsultationRequestSize, decodeConsultationFile, MAX_CONSULTATION_REQUEST_BYTES } from "../domain/consultation-file.js";
 import type {
@@ -129,11 +130,32 @@ function ActivityRail({
   </aside>;
 }
 
-function MessageList({ messages, actor, actors = [] }: { messages: readonly BuilderMessage[]; actor?: BuilderActor | null; actors?: BuilderActor[] }) {
+function MessageList({ messages, actor, actors = [], followLatest = true }: {
+  messages: readonly BuilderMessage[]; actor?: BuilderActor | null; actors?: BuilderActor[]; followLatest?: boolean;
+}) {
+  const transcript = useRef<HTMLDivElement>(null);
+  const sticky = useRef(true);
+  const previous = useRef<{ page: TranscriptPage; followLatest: boolean } | null>(null);
+  const [showLatest, setShowLatest] = useState(false);
+  useLayoutEffect(() => {
+    const element = transcript.current;
+    if (!element) { previous.current = null; return; }
+    const page = { firstId: messages[0]?.id ?? null, lastId: messages.at(-1)?.id ?? null, count: messages.length };
+    const action = transcriptScrollAction(previous.current?.page ?? null, page, followLatest,
+      previous.current?.followLatest ?? followLatest, sticky.current);
+    if (action === "bottom") element.scrollTop = element.scrollHeight;
+    else if (action === "start") element.scrollTop = 0;
+    sticky.current = isNearTranscriptBottom(element);
+    setShowLatest(!sticky.current);
+    previous.current = { page, followLatest };
+  }, [messages, followLatest]);
   if (!messages.length) return <EmptyState icon={actor ? Bot : MessageSquare}
     title={actor ? "이 세션에 연결된 대화가 없습니다" : "Lead 대화가 아직 없습니다"}
     detail={actor ? "이 Builder 상태에는 해당 세션의 메시지가 기록되지 않았습니다." : "Lead에게 메시지를 보내면 실제 대화 기록이 여기에 표시됩니다."} />;
-  return <div className="builder-transcript" aria-live="polite">
+  return <><div className="builder-transcript" aria-live="polite" ref={transcript} onScroll={event => {
+    sticky.current = isNearTranscriptBottom(event.currentTarget);
+    setShowLatest(!sticky.current);
+  }}>
     {messages.map(message => {
       const isUser = message.role === "user";
       const messageActor = message.actorId ? actors.find(candidate => candidate.id === message.actorId) : null;
@@ -144,7 +166,12 @@ function MessageList({ messages, actor, actors = [] }: { messages: readonly Buil
           <div className="builder-message-bubble">{message.text}</div></div>
       </article>;
     })}
-  </div>;
+  </div>{showLatest && followLatest && <div className="builder-transcript-jump">
+    <button className="builder-quiet-button" type="button" aria-label="최근 메시지로 이동" onClick={() => {
+      const element = transcript.current;
+      if (element) { element.scrollTop = element.scrollHeight; sticky.current = true; setShowLatest(false); }
+    }}>최근 메시지로 이동</button>
+  </div>}</>;
 }
 
 function conversationMessages(props: BuilderShellProps, channel: LeadChannel): BuilderMessage[] {
@@ -256,7 +283,7 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
       {props.loading && <div className="builder-status-strip"><LoaderCircle /> Workspace 상태를 불러오는 중입니다.</div>}
       {props.error && <div className="builder-status-strip is-error" role="alert"><AlertCircle /> Workspace 상태를 불러오지 못했습니다.</div>}
       {!readOnly && <ConversationControls channel={channel} props={props} />}
-      <MessageList actor={actor} messages={messages} />
+      <MessageList actor={actor} messages={messages} followLatest={Boolean(actor) || !props.conversationHasNewer} />
       {readOnly ? <div className="builder-composer-note" style={{ padding: 13 }}>이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.</div> : <>
         {importOpen && props.onImportConsultation && <ConsultationImport onImport={props.onImportConsultation} />}
         <MessageComposer channel={channel} enabled={enabled} onSend={props.onSendMessage} />
@@ -424,7 +451,7 @@ function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
         {selected.answer && <div className="builder-recommendation"><Check aria-hidden="true" size={14} /> 결정된 답변: {selected.answer}{selected.revisionId ? ` · ${selected.revisionId}` : ""}</div>}
       </div></>
         : <EmptyState icon={CircleHelp} title="미결정사항이 없습니다" detail="Lead가 사용자 결정을 요청하면 여기에 표시됩니다." />}
-      {(selected || messages.length > 0) && <MessageList actors={props.snapshot.actors} messages={messages} />}
+      {(selected || messages.length > 0) && <MessageList actors={props.snapshot.actors} messages={messages} followLatest={!props.conversationHasNewer} />}
       {selected && <MessageComposer channel="decisions" enabled={Boolean(props.onSendMessage) && selected.status === "open"
         && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === "decisions" && !props.conversation.active)} onSend={props.onSendMessage} />}
     </section>
