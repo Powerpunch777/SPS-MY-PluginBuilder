@@ -8,6 +8,14 @@
   회색으로 적용한다. Core 테마와 구분하며, 미구현 기능은 위치를 유지하고
   사용 불가 상태로 표시한다. 임시 밝은 UI는 최종 기준이 아니다.
 
+## 검토 중인 개정안
+
+- [명세 검증 G1~G6 통합 개정안 (2026-11-02)](proposals/SPECIFICATION-GATES-INTEGRATION-DRAFT-2026-11-02.md)
+- [추가 인수 기준·기존 AC 추적표](proposals/SPECIFICATION-GATES-AC-TRACE-2026-11-02.md)
+
+위 두 문서는 작성·검토를 위한 초안이다. 기존 v15를 대체하거나 새 검증 정책의
+구현을 승인하지 않으며, 기존 AC의 완료 상태와 UI v9 기준을 변경하지 않는다.
+
 ## 사용 안내
 `03_UI/SPS_Builder_Lead_UI_v9.html` 파일을 브라우저에서 열면 UI 시제품을 볼 수 있습니다.
 이 HTML은 **동작 시연용 프로토타입**이며 실제 SPS Core·Codex·GitHub 연동을 포함하지 않습니다.
