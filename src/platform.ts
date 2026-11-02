@@ -12,6 +12,8 @@ import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_D
 import { publishDesignBaseline, readLeadDesignBaseline, readDesignBaseline } from "./design-baseline-tools.ts";
 import { PUBLISH_TECHNOLOGY_DECISIONS_TOOL, READ_TECHNOLOGY_DECISIONS_TOOL } from "./tool-declarations.mjs";
 import { publishTechnologyDecisions, readLeadTechnologyDecisions, readTechnologyDecisions } from "./technology-decision-tools.ts";
+import { PUBLISH_WORKSTREAM_TOOL, READ_WORKSTREAMS_TOOL, READ_CTO_WORKSTREAM_TOOL, ACKNOWLEDGE_WORKSTREAM_TOOL } from "./workstream-tool-declarations.mjs";
+import { publishWorkstream, readLeadWorkstreams, readCtoWorkstream, acknowledgeWorkstream, readWorkstreams } from "./workstream-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -475,6 +477,22 @@ export async function readLeadTechnologyRegister(params: unknown, runContext: un
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => readLeadTechnologyDecisions(params, context, platform));
 }
+export async function publishLeadWorkstream(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => publishWorkstream(params, context, platform));
+}
+export async function readWorkstreamBoardAsLead(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readLeadWorkstreams(params, context, platform));
+}
+export async function readAssignedCtoWorkstream(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readCtoWorkstream(params, context, platform));
+}
+export async function acknowledgeAssignedWorkstream(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => acknowledgeWorkstream(params, context, platform));
+}
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
@@ -518,8 +536,26 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => publishLeadTechnologyDecisions(params, context, platform) },
     { name: READ_TECHNOLOGY_DECISIONS_TOOL.name, declaration: { displayName: READ_TECHNOLOGY_DECISIONS_TOOL.displayName,
       description: READ_TECHNOLOGY_DECISIONS_TOOL.description, parametersSchema: READ_TECHNOLOGY_DECISIONS_TOOL.parametersSchema },
-      handler: (params, context, platform) => readLeadTechnologyRegister(params, context, platform) }],
-    data: [{ key: "builder.technology-decisions", handler: async (params, platform) => {
+      handler: (params, context, platform) => readLeadTechnologyRegister(params, context, platform) },
+    { name: PUBLISH_WORKSTREAM_TOOL.name, declaration: { displayName: PUBLISH_WORKSTREAM_TOOL.displayName,
+      description: PUBLISH_WORKSTREAM_TOOL.description, parametersSchema: PUBLISH_WORKSTREAM_TOOL.parametersSchema },
+      handler: (params, context, platform) => publishLeadWorkstream(params, context, platform) },
+    { name: READ_WORKSTREAMS_TOOL.name, declaration: { displayName: READ_WORKSTREAMS_TOOL.displayName,
+      description: READ_WORKSTREAMS_TOOL.description, parametersSchema: READ_WORKSTREAMS_TOOL.parametersSchema },
+      handler: (params, context, platform) => readWorkstreamBoardAsLead(params, context, platform) },
+    { name: READ_CTO_WORKSTREAM_TOOL.name, declaration: { displayName: READ_CTO_WORKSTREAM_TOOL.displayName,
+      description: READ_CTO_WORKSTREAM_TOOL.description, parametersSchema: READ_CTO_WORKSTREAM_TOOL.parametersSchema },
+      handler: (params, context, platform) => readAssignedCtoWorkstream(params, context, platform) },
+    { name: ACKNOWLEDGE_WORKSTREAM_TOOL.name, declaration: { displayName: ACKNOWLEDGE_WORKSTREAM_TOOL.displayName,
+      description: ACKNOWLEDGE_WORKSTREAM_TOOL.description, parametersSchema: ACKNOWLEDGE_WORKSTREAM_TOOL.parametersSchema },
+      handler: (params, context, platform) => acknowledgeAssignedWorkstream(params, context, platform) }],
+    data: [{ key: "builder.workstreams", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
+      const current = await readWorkstreams(companyId, params.projectId, platform);
+      return current && { workspaceId: companyId, projectId: params.projectId, sequence: current.sequence,
+        board: current.revision } as unknown as JsonValue;
+    } }, { key: "builder.technology-decisions", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
       const current = await readTechnologyDecisions(companyId, params.projectId, platform);

@@ -129,6 +129,21 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       return entry && Object.freeze({ sequence: entry.sequence, revision: entry.revision });
     },
 
+    // Follow the published chain, not a raw revision key: failed head writes can
+    // leave staged entries that must never be represented as published history.
+    async publishedRevision(revisionId: string, maximum = 1_000): Promise<Readonly<{ sequence: number; revision: T }> | null> {
+      identifier(revisionId);
+      if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 1_000) throw new TypeError("Published history lookup limit must be 1 through 1000.");
+      let { entry } = await head();
+      for (let count = 0; entry && count < maximum; count += 1) {
+        if (codec.revisionId(entry.revision) === revisionId) return Object.freeze({ sequence: entry.sequence, revision: entry.revision });
+        if (!entry.parent) return null;
+        if (count + 1 === maximum) throw new Error("Published history lookup limit reached; absence is not established.");
+        entry = await entryAt(entry.parent);
+      }
+      return null;
+    },
+
     async recent(limit = 20) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError("History limit must be 1 through 50.");
       const current = await head();

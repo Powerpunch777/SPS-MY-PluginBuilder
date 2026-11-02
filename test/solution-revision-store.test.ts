@@ -120,6 +120,35 @@ function barrier(parties: number): () => Promise<void> {
   };
 }
 
+test("published lookup follows history, preserves scope and does not claim absence at its bound", async () => {
+  const state = new FakeState();
+  const store = makeStore(state);
+  assert.equal(await store.publishedRevision("not-present"), null);
+  await store.publish(patch(null, revision("graph-r01")));
+  await store.publish(patch("graph-r01", revision("graph-r02")));
+  assert.deepEqual(await store.publishedRevision("graph-r01"), { sequence: 1, revision: revision("graph-r01") });
+  assert.equal(await store.publishedRevision("not-present"), null);
+  assert.equal(await makeStore(state, WORKSPACE_B).publishedRevision("graph-r01"), null);
+  assert.equal(await makeStore(state, WORKSPACE_A, PROJECT_B).publishedRevision("graph-r01"), null);
+  await assert.rejects(store.publishedRevision("graph-r01", 1), /absence is not established/);
+  await assert.rejects(store.publishedRevision("bad\0id"));
+  await assert.rejects(store.publishedRevision("graph-r01", Infinity));
+});
+
+test("published lookup excludes staged revisions and rejects broken historical entries", async () => {
+  const state = new FakeState();
+  const store = makeStore(state);
+  await store.publish(patch(null, revision("graph-r01")));
+  state.swapOverride = call => call.key.stateKey.startsWith("solution-head") ? false : undefined;
+  assert.equal((await store.publish(patch("graph-r01", revision("staged-only")))).status, "conflict");
+  assert.ok(state.values.has(fullKey(revisionKey("staged-only"))));
+  assert.equal(await store.publishedRevision("staged-only"), null);
+  state.swapOverride = undefined;
+  await store.publish(patch("graph-r01", revision("graph-r02")));
+  state.values.delete(fullKey(revisionKey("graph-r01")));
+  await assert.rejects(store.publishedRevision("graph-r01"), /Published solution revision is missing/);
+});
+
 test("empty state, publish, restart, and immutable newest-first history", async () => {
   const state = new FakeState();
   const store = makeStore(state);

@@ -207,7 +207,7 @@ test("built Worker routes design sources to an unapproved draft and back without
       revisionId: "design-draft-2",
       sourceIds: [consultationId, answerSourceId],
       specification: { ...draft.specification, revisionId: "spec-2" },
-      graph: { ...draft.graph, graphRevisionId: "graph-2" },
+      graph: { ...draft.graph, graphRevisionId: "graph-2", entities: [{ id: "rpc-feature", kind: "feature", specRef: "req-1", contractRefs: ["rpc-contract"] }] },
     };
     const resolution = { projectId: workspaceA, expectedBaseRevisionId: draft.revisionId, questionId: designQuestion.id,
       answerSourceId, answerText, draft: resolvedDraft };
@@ -305,6 +305,50 @@ test("built Worker routes design sources to an unapproved draft and back without
     const technologyDto = await serviceUntil(20);
     assert.equal(technologyDto.error, undefined, JSON.stringify(technologyDto.error));
     assert.deepEqual(technologyDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 1, record: technologyReply.result.data.revision });
+
+    const ctoSessionId = "12121212-1212-4212-8212-121212121212";
+    const ctoContext = { ...runContext, sessionId: ctoSessionId, runId: "13131313-1313-4313-8313-131313131313" };
+    hostState.set(JSON.stringify(stateKey(`project-ctos.v1.${sha256(workspaceA)}`)), {
+      schemaVersion: 1, workspaceId: workspaceA, projectId: workspaceA, revision: 1,
+      ctos: [{ ctoId: "rpc-cto", displayName: "Fake Host CTO", agentId: leadId, sessionId: ctoSessionId,
+        status: "AVAILABLE", createdAt: "2026-11-02T00:00:00.000Z",
+        createdBy: { agentId: leadId, sessionId, runId, selectionRevision: 1 } }],
+    });
+    const workstreamSpec = { projectId: workspaceA, id: "rpc-workstream", revision: 1,
+      sourceSpecRevisionId: baseline.specification.revisionId, assignedCtoId: "rpc-cto", title: "Fake Host workstream",
+      goal: "Verify versioned instruction and receipt, not execute code.", scopeNodeIds: ["rpc-feature"],
+      included: ["Read assigned specification."], excluded: ["Code execution."], dependencies: [],
+      interfaceContracts: ["rpc-contract"], technologyDecisionsRef: technologyRegister.revisionId, reuseCandidates: [],
+      acceptance: ["Exact revision receipt."], evidenceRequired: ["Host receipt record."], openQuestions: [] };
+    invoke(21, "builder.publish-workstream", { projectId: workspaceA, expectedBaseRevisionId: null, revisionId: "board-rpc-1",
+      spec: workstreamSpec, change: { previousRevision: null, reason: "Initial instruction.", diff: "New workstream.",
+        impactNodeIds: ["rpc-feature"], impactInterfaceContracts: ["rpc-contract"], impactTaskIds: [], effectiveFrom: "Receipt only; no dispatch." } });
+    const workstreamReply = await serviceUntil(21);
+    assert.equal(workstreamReply.error, undefined, JSON.stringify(workstreamReply.error));
+    assert.equal(workstreamReply.result.data.status, "published");
+    assert.equal(workstreamReply.result.data.executionStarted, false);
+    assert.equal(workstreamReply.result.data.revision.workstreams[0].receipt, null);
+    invoke(22, "builder.read-cto-workstream", { projectId: workspaceA, ctoId: "rpc-cto", workstreamId: "rpc-workstream" }, ctoContext);
+    const assignedRead = await serviceUntil(22);
+    assert.equal(assignedRead.error, undefined, JSON.stringify(assignedRead.error));
+    assert.deepEqual(assignedRead.result.data.workstream.spec, workstreamSpec);
+    assert.deepEqual(assignedRead.result.data.sources.baseline, baseline);
+    const receiptInput = { projectId: workspaceA, ctoId: "rpc-cto", workstreamId: "rpc-workstream",
+      expectedBaseRevisionId: "board-rpc-1", revisionId: "board-rpc-2", specRevision: 1, readiness: "ready",
+      note: "Fake Host CTO understood this revision; no code or provider execution." };
+    invoke(23, "builder.acknowledge-workstream", receiptInput, runContext);
+    assert.ok((await serviceUntil(23)).error, "A Lead session cannot acknowledge as a CTO.");
+    invoke(24, "builder.acknowledge-workstream", receiptInput, ctoContext);
+    const receiptReply = await serviceUntil(24);
+    assert.equal(receiptReply.error, undefined, JSON.stringify(receiptReply.error));
+    assert.equal(receiptReply.result.data.status, "published");
+    assert.equal(receiptReply.result.data.executionStarted, false);
+    assert.equal(receiptReply.result.data.revision.workstreams[0].receipt.runId, ctoContext.runId);
+    send({ jsonrpc: "2.0", id: 25, method: "getData", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
+      params: { key: "builder.workstreams", companyId: workspaceA, params: { projectId: workspaceA } } });
+    const workstreamDto = await serviceUntil(25);
+    assert.equal(workstreamDto.error, undefined, JSON.stringify(workstreamDto.error));
+    assert.deepEqual(workstreamDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 2, board: receiptReply.result.data.revision });
 
     assert.ok(calls.includes("state.compareAndSet"), "proposal publication must use conditional state writes");
     assert.equal(hostState.get(JSON.stringify(stateKey("snapshot.v1"))).revision, 1,

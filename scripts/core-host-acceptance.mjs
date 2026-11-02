@@ -283,6 +283,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     globalThis.__spsBuilderQuestionSends=[];
     globalThis.__spsBuilderBaselineFixture=null;
     globalThis.__spsBuilderTechnologyFixture=null;
+    globalThis.__spsBuilderWorkstreamsFixture=null;
     const original=globalThis.fetch; globalThis.__spsBuilderSavedFetch=original;
     globalThis.fetch=function(input,init){
       const url=new URL(typeof input==='string'?input:input.url,location.href);
@@ -292,6 +293,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderBaselineFixture}),{status:200,headers:{'content-type':'application/json'}}));
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.technology-decisions`)})
         return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderTechnologyFixture}),{status:200,headers:{'content-type':'application/json'}}));
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.workstreams`)})
+        return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderWorkstreamsFixture}),{status:200,headers:{'content-type':'application/json'}}));
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`)}){
         const body=JSON.parse(init.body);globalThis.__spsBuilderQuestionSends.push(body);
         return Promise.resolve(new Response(JSON.stringify({data:{saved:true,requestId:body.params.requestId}}),{status:200,headers:{'content-type':'application/json'}}));
@@ -384,9 +387,42 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         && ["required", "allowed", "prohibited", "undecided"].every(word => value.includes(word)), "technology choices are reports, not verified execution");
     assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
     if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-technology-fixture.png"));
+    const workstreamsFixture = { workspaceId: company.id, projectId: company.id, sequence: 1,
+      board: { projectId: company.id, revisionId: "fixture-board-1", workstreams: [{
+        spec: { projectId: company.id, id: "fixture-workstream", revision: 1, sourceSpecRevisionId: "fixture-baseline-spec-1",
+          assignedCtoId: "fixture-cto", title: "Fixture workstream", goal: "Show a versioned instruction without executing it.",
+          scopeNodeIds: ["REQ-FIXTURE"], included: ["Read a planning record."], excluded: ["Code execution."],
+          dependencies: [], interfaceContracts: [], technologyDecisionsRef: "fixture-technology-1", reuseCandidates: [],
+          acceptance: ["Receipt remains separate from execution."], evidenceRequired: ["Actual receipt required later."], openQuestions: [] },
+        sourceBaselineRevisionId: "fixture-baseline-1", baselineDigest: "d".repeat(64), technologyDigest: "e".repeat(64),
+        ctoAgentId: leadAgent.id, ctoSessionId: "12121212-1212-4212-8212-121212121212",
+        author: baselineFixture.baseline.author, createdAt: draftFixture.createdAt,
+        change: { previousRevision: null, reason: "Initial UI fixture.", diff: "New fixture only.", impactNodeIds: ["REQ-FIXTURE"],
+          impactInterfaceContracts: [], impactTaskIds: [], effectiveFrom: "No execution." }, receipt: null,
+      }] } };
+    await workspace.evaluate(`globalThis.__spsBuilderWorkstreamsFixture=${JSON.stringify(workstreamsFixture)}`);
+    await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Refresh marked Workstream presentation fixture");
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Load pending instruction without real CTO or Host write");
+    await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Read Workstream instruction document");
+    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')))`), Boolean, "Workstream fixture document");
+    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+      value => value?.includes("수신 확인 대기") && value.includes("실행 권한을 만들지 않습니다"), "pending instruction is not delivered or started");
+    await workspace.evaluate(`globalThis.__spsBuilderWorkstreamsFixture.board.workstreams[0].receipt=${JSON.stringify({
+      revision: 1, agentId: leadAgent.id, sessionId: "12121212-1212-4212-8212-121212121212",
+      runId: "13131313-1313-4313-8313-131313131313", createdAt: draftFixture.createdAt, readiness: "ready", note: "Presentation report only; no real CTO receipt.",
+    })}`);
+    await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Refresh marked readiness presentation fixture");
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Read readiness report without executing a CTO");
+    await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Inspect readiness versus execution distinction");
+    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+      value => value?.includes("착수 가능 보고 · 실행 시작 아님") && value.includes("Presentation report only"), "CTO readiness is not a running state");
+    assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
+    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-workstream-fixture.png"));
   } finally {
     await workspace.evaluate(`(() => { if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;}
-      delete globalThis.__spsBuilderQuestionDraftFixture;delete globalThis.__spsBuilderQuestionSends;delete globalThis.__spsBuilderBaselineFixture;delete globalThis.__spsBuilderTechnologyFixture;})()`);
+      delete globalThis.__spsBuilderQuestionDraftFixture;delete globalThis.__spsBuilderQuestionSends;delete globalThis.__spsBuilderBaselineFixture;delete globalThis.__spsBuilderTechnologyFixture;delete globalThis.__spsBuilderWorkstreamsFixture;})()`);
   }
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead before using its refresh control");
   await click(workspace, '[aria-label="Workspace 새로고침"]', "Restore real Host data after UI-only fixture");
@@ -398,6 +434,9 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.equal((await request(`/api/plugins/${plugin.id}/data/builder.technology-decisions`, {
     method: "POST", body: { companyId: company.id, params: { projectId: company.id } },
   })).data, null, "The presentation fixture must not persist actual technology research.");
+  assert.equal((await request(`/api/plugins/${plugin.id}/data/builder.workstreams`, {
+    method: "POST", body: { companyId: company.id, params: { projectId: company.id } },
+  })).data, null, "The presentation fixture must not persist actual Workstream/CTO readiness records.");
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
   await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled === false`),
@@ -509,6 +548,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     questionAnswerAssociationPresentationFixture: true, sendReceiptDoesNotResolveQuestion: true, storedAnswerPresentationFixture: true,
     designBaselinePresentationFixture: true, realHostBaselineWritten: false,
     technologyDecisionsPresentationFixture: true, realHostTechnologyWritten: false,
+    workstreamPresentationFixture: true, readinessIsNotExecution: true, realHostWorkstreamWritten: false,
     transcriptScrollPresentationFixture: true, olderReaderPositionPreserved: true, explicitJumpToLatest: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
