@@ -40,6 +40,10 @@ AC 상태는 변경하지 않는다.
 [명세 Revision 구조 검증](SPECIFICATION-VALIDATION-2026-11-02.md)을 추가했다.
 승인 근거 문자열의 존재를 실제 승인으로 오인하지 않으며, 저장·도구·UI 연결은 아직 남아 있다.
 
+[Lead 전용 Solution 조회 도구](LEAD-SOLUTION-READ-TOOL-2026-11-02.md)를 등록했다.
+단위/Worker JSONL 검사와 실제 source 앱의 등록·사용자 사칭 거부를 확인했다. 실제 AI의
+도구 호출이나 Graph 작성·화면 갱신 완료는 아직 증명하지 않았으며 AC 상태는 유지한다.
+
 The code status labels used below are an initial source inspection, not test results:
 
 - `P` Partial behavior exists, but the full AC is not met.
