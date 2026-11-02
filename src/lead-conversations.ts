@@ -107,6 +107,18 @@ async function loadTurn(platform: SpsPlatformInvocationContext, scope: Scope, re
   if (turn.requestId !== requestId) throw error();
   return turn;
 }
+
+/** User input only; assistant answers never become customer approval evidence. */
+export async function readLeadUserSource(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
+  const raw = await platform.state.get({ scopeKind: "company", scopeId: sessions.workspaceId,
+    namespace: "sonpark.my-builder", stateKey: `lead-chat.turn.v1.${id(requestId)}` });
+  const row = record(raw, TURN_KEYS);
+  if (row.channel !== "main" && row.channel !== "decisions") throw error();
+  const scope = scopeFor(sessions, row.channel);
+  const turn = parseTurn(raw, scope);
+  if (turn.requestId !== requestId) throw error();
+  return Object.freeze({ id: `lead-turn:${requestId}`, text: turn.text });
+}
 function runProjection(turn: LeadTurn, result: SpsAgentSessionRunResult): LeadTurn {
   if (!result || result.runId !== turn.runId || !["queued", "running", "cancelling", ...TERMINAL].includes(result.status)
     || typeof result.cancellationRequested !== "boolean" || !["not_applicable", "pending", "confirmed"].includes(result.termination)) throw error();

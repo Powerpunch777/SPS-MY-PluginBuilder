@@ -8,6 +8,7 @@ import { Background, Controls, MarkerType, ReactFlow, type Edge, type Node } fro
 import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
+import { DesignDraftSummary } from "./DesignDraftSummary.tsx";
 import { selectLeadDecisionTranscript } from "../domain/selectors.ts";
 import { assertConsultationRequestSize, decodeConsultationFile, MAX_CONSULTATION_REQUEST_BYTES } from "../domain/consultation-file.js";
 import type {
@@ -605,6 +606,7 @@ export function BuilderShell(props: BuilderShellProps) {
         </div>
       </aside>
       <main className="builder-main">
+        <DesignDraftSummary draft={props.designDraft ?? null} loading={props.designDraftLoading ?? false} error={props.designDraftError ?? null} />
         {view !== "lead" && view !== "decisions" && !activeActor
           ? <div className="builder-view-body"><div className="builder-page-actions"><h1>{current.title}</h1>{headerActions}</div>{content}</div>
           : <div className="builder-view-body">{content}</div>}

@@ -12,7 +12,7 @@ import type { BuilderShellProps } from "../src/domain/model.js";
 const projectRoot = path.resolve(import.meta.dirname, "..");
 
 test("BuilderShell server-renders the Lead workspace without inventing activity", async () => {
-  const temporary = await mkdtemp(path.join(projectRoot, ".ui-test-"));
+  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".ui-test-"));
   try {
     const output = path.join(temporary, "BuilderShell.mjs");
     await build({

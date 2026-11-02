@@ -2,19 +2,19 @@ import { createHash } from "node:crypto";
 import type { JsonValue, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { applyLeadGraphPatch, type SolutionRevision } from "./domain/graph-revisions.ts";
 
-type State = {
+export type RevisionState = {
   get(key: SpsStateKey): Promise<JsonValue | null>;
   compareAndSet?(key: SpsStateKey, expected: { exists: false } | { exists: true; value: JsonValue },
     value: JsonValue): Promise<{ swapped: boolean }>;
 };
 type Pointer = Readonly<{ revisionId: string; sequence: number; digest: string }>;
-type Entry = Readonly<{
+type Entry<T> = Readonly<{
   schemaVersion: 1;
   workspaceId: string;
   projectId: string;
   sequence: number;
   parent: Pointer | null;
-  revision: SolutionRevision;
+  revision: T;
   digest: string;
 }>;
 export type PublishedSolutionRevision = Readonly<{ sequence: number; revision: SolutionRevision }>;
@@ -69,16 +69,26 @@ function validatedRevision(value: unknown): SolutionRevision {
  * must verify Lead/Workspace/current-run authority before exposing publication.
  * Immutable entries are staged first; only the CAS head makes one published.
  */
-export function createSolutionRevisionStore(workspaceId: string, projectId: string, state: State) {
+export function createSolutionRevisionStore(workspaceId: string, projectId: string, state: RevisionState) {
+  return createRevisionJournal(workspaceId, projectId, state, {
+    prefix: "solution", parse: validatedRevision, revisionId: revision => revision.graphRevisionId,
+  });
+}
+
+/** Internal Builder journal shared by solution and explicitly unapproved drafts.
+ * Existing solution key names and serialized entries remain unchanged. */
+export function createRevisionJournal<T>(workspaceId: string, projectId: string, state: RevisionState,
+  codec: { prefix: string; parse(value: unknown): T; revisionId(value: T): string }) {
   if (typeof workspaceId !== "string" || !UUID.test(workspaceId)) throw new TypeError("A canonical Workspace ID is required.");
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(codec.prefix)) throw new TypeError("Invalid Builder revision journal prefix.");
   identifier(projectId);
   const projectKey = hash(projectId);
   const key = (stateKey: string): SpsStateKey => ({ scopeKind: "company", scopeId: workspaceId,
     namespace: "sonpark.my-builder", stateKey });
-  const headKey = key(`solution-head.v1.${projectKey}`);
-  const entryKey = (id: string) => key(`solution-revision.v1.${projectKey}.${hash(id)}`);
+  const headKey = key(`${codec.prefix}-head.v1.${projectKey}`);
+  const entryKey = (id: string) => key(`${codec.prefix}-revision.v1.${projectKey}.${hash(id)}`);
 
-  function parseEntry(value: unknown, expected: Pointer): Entry {
+  function parseEntry(value: unknown, expected: Pointer): Entry<T> {
     const row = fields(value, ["schemaVersion", "workspaceId", "projectId", "sequence", "parent", "revision", "digest"], "solution entry");
     if (row.schemaVersion !== 1 || row.workspaceId !== workspaceId || row.projectId !== projectId || row.sequence !== expected.sequence
       || row.digest !== expected.digest) throw new Error("Solution revision identity mismatch.");
@@ -86,14 +96,14 @@ export function createSolutionRevisionStore(workspaceId: string, projectId: stri
     if (parent === null ? row.sequence !== 1 : parent.sequence !== expected.sequence - 1) {
       throw new Error("Solution revision history is inconsistent.");
     }
-    const revision = validatedRevision(row.revision);
-    if (revision.graphRevisionId !== expected.revisionId) throw new Error("Solution revision ID mismatch.");
+    const revision = codec.parse(row.revision);
+    if (identifier(codec.revisionId(revision)) !== expected.revisionId) throw new Error("Solution revision ID mismatch.");
     const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence: expected.sequence, parent, revision };
     if (hash(json(body)) !== row.digest) throw new Error("Solution revision digest mismatch.");
     return Object.freeze({ ...body, digest: expected.digest });
   }
 
-  async function entryAt(ref: Pointer): Promise<Entry> {
+  async function entryAt(ref: Pointer): Promise<Entry<T>> {
     const raw = await state.get(entryKey(ref.revisionId));
     if (raw === null) throw new Error("Published solution revision is missing; existing state has not been repaired or replaced.");
     return parseEntry(raw, ref);
@@ -114,7 +124,7 @@ export function createSolutionRevisionStore(workspaceId: string, projectId: stri
   }
 
   return Object.freeze({
-    async current(): Promise<PublishedSolutionRevision | null> {
+    async current(): Promise<Readonly<{ sequence: number; revision: T }> | null> {
       const { entry } = await head();
       return entry && Object.freeze({ sequence: entry.sequence, revision: entry.revision });
     },
@@ -122,7 +132,7 @@ export function createSolutionRevisionStore(workspaceId: string, projectId: stri
     async recent(limit = 20) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError("History limit must be 1 through 50.");
       const current = await head();
-      const revisions: PublishedSolutionRevision[] = [];
+      const revisions: Readonly<{ sequence: number; revision: T }>[] = [];
       let entry = current.entry;
       while (entry && revisions.length < limit) {
         revisions.push(Object.freeze({ sequence: entry.sequence, revision: entry.revision }));
@@ -139,17 +149,18 @@ export function createSolutionRevisionStore(workspaceId: string, projectId: stri
       // rejects accessors, mutable aliases, bad relations and dependency cycles.
       const patch = fields(patchValue, ["expectedBaseRevisionId", "revision"], "solution patch");
       const expectedId = patch.expectedBaseRevisionId === null ? null : identifier(patch.expectedBaseRevisionId);
-      const proposed = validatedRevision(patch.revision);
+      const proposed = codec.parse(patch.revision);
+      const proposedId = identifier(codec.revisionId(proposed));
       const current = await head();
       const actualId = current.ref?.revisionId ?? null;
       if (expectedId !== actualId) return Object.freeze({ status: "conflict" as const, actualBaseRevisionId: actualId });
-      if (proposed.graphRevisionId === actualId) throw new TypeError("A new solution revision ID is required.");
+      if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
       const sequence = (current.ref?.sequence ?? 0) + 1;
       if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
       const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence, parent: current.ref, revision: proposed };
-      const entry: Entry = Object.freeze({ ...body, digest: hash(json(body)) });
+      const entry: Entry<T> = Object.freeze({ ...body, digest: hash(json(body)) });
       if (Buffer.byteLength(json(entry), "utf8") > MAX_ENTRY_BYTES) throw new TypeError("Solution revision exceeds 192 KiB; no state was changed.");
-      const next = Object.freeze({ revisionId: proposed.graphRevisionId, sequence, digest: entry.digest });
+      const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
       if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
         const existing = await entryAt(next);
         if (json(existing) !== json(entry)) throw new Error("Solution revision ID already contains different immutable content.");

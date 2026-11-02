@@ -250,6 +250,64 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     })}).then(async r=>({status:r.status,body:await r.json()}))`, true);
   assert.equal(forgedTool.status, 403, "A user UI request cannot impersonate the prepared Lead Agent run.");
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
+  const proposedTool = await workspace.evaluate(`fetch('/api/plugins/tools/execute', {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      tool:'com.sonparkserver.my-plugin-builder:builder.propose-design',parameters:{projectId:${JSON.stringify(company.id)}},
+      runContext:{companyId:${JSON.stringify(company.id)},agentId:${JSON.stringify(leadAgent.id)},
+        runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions.main)}}
+    })}).then(r=>({status:r.status}))`, true);
+  assert.equal(proposedTool.status, 403, "User UI cannot call the Lead draft-writing tool.");
+
+  // Presentation fixture only. It exercises the actual compiled UI with an
+  // explicitly intercepted DTO, not Host persistence, AI output or approval.
+  const draftFixture = { workspaceId: company.id, projectId: company.id, selectionRevision: 1, agentId: leadAgent.id,
+    sequence: 1, createdAt: "2026-11-02T00:00:00.000Z", draft: { projectId: company.id, revisionId: "fixture-draft-1",
+      sourceIds: [saved.messages[0].id], specification: { revisionId: "fixture-spec-1", productTier: "M",
+        requirements: [{ id: "REQ-FIXTURE", description: "Display the fixture requirement as an unapproved draft", acceptanceCriteriaIds: ["AC-FIXTURE"] }],
+        targets: ["desktop"], dataPolicyRef: "fixture-unverified-policy" },
+      graph: { graphRevisionId: "fixture-graph-1", entities: [{ id: "REQ-FIXTURE", kind: "requirement", specRef: "REQ-FIXTURE" }],
+        relations: [], viewLayoutRef: "fixture-layout-1" }, questions: [{ id: "Q-FIXTURE", title: "Fixture question",
+        text: "This UI fixture is not a customer decision.", options: [{ id: "A", label: "Fixture option", tradeoff: "Not executed" }], recommendation: "A" }] } };
+  await workspace.evaluate(`(() => {
+    if(globalThis.__spsBuilderSavedFetch) throw new Error('Unexpected existing fixture interceptor');
+    const original=globalThis.fetch; globalThis.__spsBuilderSavedFetch=original;
+    globalThis.fetch=function(input,init){
+      const url=new URL(typeof input==='string'?input:input.url,location.href);
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.design-draft`)})
+        return Promise.resolve(new Response(JSON.stringify({data:${JSON.stringify(draftFixture)}}),{status:200,headers:{'content-type':'application/json'}}));
+      return original.call(this,input,init);
+    };
+  })()`);
+  try {
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Refresh actual UI with a clearly marked draft DTO fixture");
+    await eventually(() => workspace.evaluate(`document.querySelector('[aria-label="Lead 설계 초안"]')?.innerText`),
+      value => value?.includes("설계 초안 · 승인·실행 전") && value.includes("fixture-draft-1"), "unapproved draft summary");
+    await click(workspace, '[aria-label="Lead 설계 초안"] summary', "Expand read-only draft source/requirement details");
+    await eventually(() => workspace.evaluate(`document.querySelector('[aria-label="Lead 설계 초안"] details')?.open`), Boolean, "draft details open");
+    await click(workspace, '.builder-nav [aria-label="설계 시각화"]', "Read the draft Graph in the actual app");
+    await eventually(() => workspace.evaluate(`({nodes:document.querySelectorAll('.react-flow__node').length,
+      text:document.querySelector('.builder-graph-note')?.textContent})`),
+    value => value.nodes === 1 && value.text?.includes("fixture-graph-1"), "draft Graph node and revision");
+    await click(workspace, '.react-flow__node', "Select read-only draft node");
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-graph-meta')?.textContent`),
+      value => value?.includes("계획") && !value.includes("검증 완료"), "draft is planned, not verified work");
+    await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Read the draft specification document");
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+      value => value?.includes("REQ-FIXTURE"), "draft document projection");
+    await click(workspace, '.builder-nav [aria-label="미결정사항"]', "Read the draft question");
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent`),
+      value => value?.includes("Fixture question") && value.includes("답변 필요"), "draft question is unanswered");
+    const layout = await workspace.evaluate(`({overflow:document.querySelector('.builder-shell').scrollWidth>document.querySelector('.builder-shell').clientWidth,
+      nodeEditable:document.querySelectorAll('.react-flow__node.draggable').length})`);
+    assert.equal(layout.overflow, false);
+    assert.equal(layout.nodeEditable, 0);
+  } finally {
+    await workspace.evaluate(`(() => { if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;} })()`);
+  }
+  await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead before using its refresh control");
+  await click(workspace, '[aria-label="Workspace 새로고침"]', "Restore real Host data after UI-only fixture");
+  await eventually(() => workspace.evaluate(`document.querySelector('[aria-label="Lead 설계 초안"]') === null`), Boolean, "draft fixture removed");
+  assert.deepEqual(await data(company.id), saved, "Presentation fixture must not persist a design or alter consultation state.");
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
   await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled === false`),
@@ -318,6 +376,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
+    userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
     systemView: { pageHeading: systemView.pageHeading, scopeDescription: systemView.scopeDescription,

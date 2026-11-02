@@ -100,6 +100,9 @@ export interface BuilderSnapshot {
 }
 
 export interface BuilderShellProps {
+  designDraft?: import("./design-drafts.ts").DesignDraft | null;
+  designDraftLoading?: boolean;
+  designDraftError?: string | null;
   snapshot: BuilderSnapshot;
   workspaceLabel: string;
   loading?: boolean;

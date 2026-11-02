@@ -36,7 +36,7 @@ function snapshotWithMessage(workspaceId: string, text: string): BuilderSnapshot
 }
 
 test("BuilderPage uses the public UI bridge for scoped data and action hooks", async () => {
-  const temporary = await mkdtemp(path.join(projectRoot, ".ui-bridge-test-"));
+  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".ui-bridge-test-"));
   const previousPrimary = globalThis[primaryBridge as keyof typeof globalThis];
   const previousLegacy = globalThis[legacyBridge as keyof typeof globalThis];
   try {

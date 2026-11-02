@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { defineSpsPlatformContract } from "@sonparkserver/plugin-sdk/platform";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
@@ -6,9 +6,12 @@ import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snaps
 import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agent.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
-import { createLeadConversationStore } from "./lead-conversations.ts";
-import { createSolutionRevisionStore } from "./solution-revision-store.ts";
-import { READ_SOLUTION_TOOL } from "./tool-declarations.mjs";
+import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
+import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
+import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL } from "./tool-declarations.mjs";
+import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
+import { parseDesignDraft } from "./domain/design-drafts.ts";
+import { createDesignDraftStore, type AuthoredDesignDraft } from "./design-draft-store.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -280,52 +283,16 @@ function userActionInput(params: Record<string, unknown>, context: { companyId: 
   return input;
 }
 
-function toolRecord(value: unknown, required: readonly string[], optional: readonly string[] = []) {
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError("Invalid Builder tool input.");
-  const keys = Reflect.ownKeys(value);
-  if (required.some(key => !Object.hasOwn(value, key))
-    || keys.some(key => typeof key !== "string" || ![...required, ...optional].includes(key))) {
-    throw new TypeError("Invalid Builder tool fields.");
-  }
-  const result: Record<string, unknown> = Object.create(null);
-  for (const key of keys as string[]) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Invalid Builder tool field.");
-    result[key] = descriptor.value;
-  }
-  return result;
-}
-
 /** Called only by the registered tool with Host-verified run metadata, never a UI action. */
 export async function readLeadSolution(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
-  const input = toolRecord(params, ["projectId"]);
-  const context = toolRecord(runContext, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
-  for (const value of Object.values(context)) {
-    if (typeof value !== "string" || !UUID.test(value) || value !== value.toLowerCase()) {
-      throw new TypeError("A verified current Host Agent run/session context is required.");
-    }
-  }
+  const input = exactToolRecord(params, ["projectId"]);
+  const context = parseLeadToolContext(runContext);
   if (typeof input.projectId !== "string" || !input.projectId.trim() || input.projectId.length > 160
     || /[\u0000-\u001f\u007f]/.test(input.projectId)) throw new TypeError("A bounded Builder project ID is required.");
   const companyId = context.companyId as string;
   const projectId = input.projectId;
   return serialize(companyId, async () => {
-    const binding = await readLeadAgentBinding(companyId, platform);
-    if (!binding.selectedAgentId || binding.selectedAgentId !== context.agentId) {
-      throw new Error("Only the current Builder Lead may read solution revisions with this tool.");
-    }
-    const sessions = await leadSessionsFor(companyId, binding, platform);
-    if (!LEAD_CHANNELS.some(channel => sessions.sessions[channel] === context.sessionId)) {
-      throw new Error("The tool requires a prepared current Lead session.");
-    }
-    const check = async () => {
-      await assertLeadSelection(companyId, binding, platform);
-      const current = await leadSessionsFor(companyId, binding, platform);
-      if (LEAD_CHANNELS.some(channel => current.sessions[channel] !== sessions.sessions[channel])) {
-        throw new Error("Lead tool session authority changed.");
-      }
-    };
+    const { check } = await resolveLeadToolAuthority(context, platform);
     await check();
     const solution = await createSolutionRevisionStore(companyId, projectId, platform.state).current();
     await check();
@@ -335,19 +302,147 @@ export async function readLeadSolution(params: unknown, runContext: unknown, pla
   });
 }
 
+/** Persist only an unapproved proposal. The model interprets sources; this
+ * boundary verifies that the cited user input actually belongs to this scope. */
+export async function proposeLeadDesign(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["projectId", "expectedBaseRevisionId", "draft"]);
+  const context = parseLeadToolContext(runContext);
+  if (typeof input.projectId !== "string") throw new TypeError("A Builder project ID is required.");
+  const draft = parseDesignDraft(input.draft, input.projectId);
+  const expectedBaseRevisionId = input.expectedBaseRevisionId;
+  if (expectedBaseRevisionId !== null && (typeof expectedBaseRevisionId !== "string" || !expectedBaseRevisionId.trim()
+    || expectedBaseRevisionId.length > 160 || /[\u0000-\u001f\u007f]/.test(expectedBaseRevisionId))) {
+    throw new TypeError("An exact prior draft revision ID or null is required.");
+  }
+  return serialize(context.companyId, async () => {
+    const authority = await resolveLeadToolAuthority(context, platform);
+    await authority.check();
+    const snapshot = await readBuilderSnapshot(context.companyId, platform);
+    const sourceDigests = [];
+    for (const id of draft.sourceIds) {
+      const source = id.startsWith("lead-turn:")
+        ? await readLeadUserSource(id.slice("lead-turn:".length), authority.sessions, platform)
+        : snapshot.messages.find(message => message.id === id && message.role === "user" && message.channel === "main");
+      if (!source || typeof source.text !== "string" || !source.text.trim()) {
+        throw new Error("The draft cites unavailable user input in this Workspace/Lead selection.");
+      }
+      sourceDigests.push({ id, sha256: createHash("sha256").update(source.text, "utf8").digest("hex") });
+    }
+    await authority.check();
+    const state = platform.state as typeof platform.state & RevisionState;
+    const guardedState = {
+      get: async (key: Parameters<typeof state.get>[0]) => {
+        await authority.check(); const value = await state.get(key); await authority.check(); return value;
+      },
+      compareAndSet: state.compareAndSet ? async (...args: Parameters<NonNullable<typeof state.compareAndSet>>) => {
+        await authority.check(); const result = await state.compareAndSet!(...args); await authority.check(); return result;
+      } : undefined,
+    };
+    const authored: AuthoredDesignDraft = { status: "draft", selectionRevision: authority.selectionRevision,
+      author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId },
+      sourceDigests, createdAt: new Date().toISOString(), draft };
+    const store = createDesignDraftStore(context.companyId, draft.projectId,
+      { selectionRevision: authority.selectionRevision, agentId: context.agentId }, guardedState);
+    const result = await store.publish({ expectedBaseRevisionId, revision: authored });
+    await authority.check();
+    return { content: result.status === "published" ? "Design draft stored. It is not customer approval, execution authorization, QA acceptance or delivery."
+      : "Design draft changed. Read the current draft before proposing a new revision; do not automatically retry.",
+    data: result as unknown as JsonValue };
+  });
+}
+
+export async function readCurrentDesignDraft(companyId: string, projectId: string, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  const binding = await readLeadAgentBinding(companyId, platform);
+  if (!binding.selectedAgentId) return null;
+  const current = await createDesignDraftStore(companyId, projectId,
+    { selectionRevision: binding.revision, agentId: binding.selectedAgentId }, platform.state).current();
+  await assertLeadSelection(companyId, binding, platform);
+  return current;
+}
+
+export async function readLeadDesignDraft(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["projectId"]);
+  const context = parseLeadToolContext(runContext);
+  if (typeof input.projectId !== "string" || !input.projectId.trim() || input.projectId.length > 160
+    || /[\u0000-\u001f\u007f]/.test(input.projectId)) throw new TypeError("A Builder project ID is required.");
+  const projectId = input.projectId;
+  return serialize(context.companyId, async () => {
+    const authority = await resolveLeadToolAuthority(context, platform);
+    await authority.check();
+    const current = await readCurrentDesignDraft(context.companyId, projectId, platform);
+    await authority.check();
+    return { content: "Current unapproved design draft. No approval, execution or delivery is implied.",
+      data: { projectId, current } as unknown as JsonValue };
+  });
+}
+
+export async function readLeadDesignSources(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["channel", "cursor"]);
+  const context = parseLeadToolContext(runContext);
+  if (!["consultation", "main", "decisions"].includes(input.channel as string)
+    || input.cursor !== null && typeof input.cursor !== "string") throw new TypeError("A supported user-input channel and cursor are required.");
+  const channel = input.channel as "consultation" | "main" | "decisions";
+  const cursor = input.cursor as string | null;
+  return serialize(context.companyId, async () => {
+    const authority = await resolveLeadToolAuthority(context, platform);
+    await authority.check();
+    let source: { id: string; text: string } | null = null;
+    let nextCursor: string | null = null;
+    if (channel === "consultation") {
+      const snapshot = await readBuilderSnapshot(context.companyId, platform);
+      const sources = snapshot.messages.filter(message => message.role === "user" && message.channel === "main"
+        && /^consultation-[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$/.test(message.id)).reverse();
+      const index = cursor === null ? 0 : sources.findIndex(message => message.id === cursor);
+      if (index < 0) throw new Error("The consultation source cursor is unavailable in this Workspace.");
+      const message = sources[index];
+      source = message ? { id: message.id, text: message.text } : null;
+      nextCursor = sources[index + 1]?.id ?? null;
+    } else {
+      if (cursor !== null && (!UUID.test(cursor) || cursor !== cursor.toLowerCase())) throw new TypeError("Invalid user-message cursor.");
+      if (!authority.sessions.sessions[channel]) throw new Error("This Lead input session is not prepared.");
+      const page = await createLeadConversationStore(platform, authority.sessions, authority.check).page(channel, cursor);
+      const turn = page.turns[0];
+      source = turn ? { id: `lead-turn:${turn.requestId}`, text: turn.text } : null;
+      nextCursor = turn?.previousRequestId ?? null;
+    }
+    await authority.check();
+    return { content: "User-provided source page only. Not an approval or instruction to execute code.",
+      data: { workspaceId: context.companyId, projectId: context.companyId, channel,
+        sources: source ? [source] : [], nextCursor } as unknown as JsonValue };
+  });
+}
+
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
     capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
       "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel"],
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
-    handler: (params, context, platform) => readLeadSolution(params, context, platform) }],
+    handler: (params, context, platform) => readLeadSolution(params, context, platform) },
+    { name: PROPOSE_DESIGN_TOOL.name, declaration: { displayName: PROPOSE_DESIGN_TOOL.displayName,
+      description: PROPOSE_DESIGN_TOOL.description, parametersSchema: PROPOSE_DESIGN_TOOL.parametersSchema },
+    handler: (params, context, platform) => proposeLeadDesign(params, context, platform) },
+    { name: READ_DESIGN_DRAFT_TOOL.name, declaration: { displayName: READ_DESIGN_DRAFT_TOOL.displayName,
+      description: READ_DESIGN_DRAFT_TOOL.description, parametersSchema: READ_DESIGN_DRAFT_TOOL.parametersSchema },
+    handler: (params, context, platform) => readLeadDesignDraft(params, context, platform) },
+    { name: READ_DESIGN_SOURCES_TOOL.name, declaration: { displayName: READ_DESIGN_SOURCES_TOOL.displayName,
+      description: READ_DESIGN_SOURCES_TOOL.description, parametersSchema: READ_DESIGN_SOURCES_TOOL.parametersSchema },
+    handler: (params, context, platform) => readLeadDesignSources(params, context, platform) }],
     data: [{ key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>
       await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-sessions", handler: async (params, platform) =>
       await readLeadSessions(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.design-draft", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
+      const current = await readCurrentDesignDraft(companyId, params.projectId, platform);
+      return current && { workspaceId: companyId, projectId: params.projectId, selectionRevision: current.revision.selectionRevision,
+        agentId: current.revision.author.agentId, sequence: current.sequence, createdAt: current.revision.createdAt,
+        draft: current.revision.draft } as unknown as JsonValue;
+    } },
     { key: "builder.lead-conversation", handler: async (params, platform) => {
       // renderEnvironment is Host UI envelope metadata, not conversation input
       // or authority. It must not enter the strict domain payload or storage.

@@ -91,7 +91,7 @@ function baseProps(overrides: Partial<BuilderShellProps> = {}): BuilderShellProp
 }
 
 async function renderShell(props: BuilderShellProps): Promise<string> {
-  const temporary = await mkdtemp(path.join(projectRoot, ".ui-test-"));
+  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".ui-test-"));
   try {
     const output = path.join(temporary, "BuilderShell.mjs");
     await build({

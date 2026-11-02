@@ -101,7 +101,7 @@ test("registered read-only tool declaration matches the manifest and platform re
   const manifest = (await import(new URL("../src/manifest.mjs", import.meta.url).href)).default;
   const registered = createBuilderPlatform().tools.find(tool => tool.name === READ_SOLUTION_TOOL.name);
   assert.ok(registered);
-  assert.deepEqual(manifest.tools, [READ_SOLUTION_TOOL]);
+  assert.deepEqual(manifest.tools.find((tool: { name: string }) => tool.name === READ_SOLUTION_TOOL.name), READ_SOLUTION_TOOL);
   assert.deepEqual(registered.declaration, {
     displayName: READ_SOLUTION_TOOL.displayName,
     description: READ_SOLUTION_TOOL.description,

@@ -6,12 +6,14 @@ import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
 import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import type { LeadChannel } from "../domain/model.ts";
 import { parseLeadConversationPage } from "../lead-conversations.ts";
+import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
 
 export function BuilderPage() {
   const context = useHostContext();
   const state = usePluginData<unknown>("builder.snapshot");
   const lead = usePluginData<unknown>("builder.lead-agents");
   const sessions = usePluginData<unknown>("builder.lead-sessions");
+  const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
   const [channel, setChannel] = useState<LeadChannel>("main");
   const [cursor, setCursor] = useState<string | null>(null);
   const conversation = usePluginData<unknown>("builder.lead-conversation", { channel, cursor });
@@ -49,6 +51,12 @@ export function BuilderPage() {
     if (!leadSessions || conversation.loading || conversation.error) return null;
     try { return parseLeadConversationPage(conversation.data, leadSessions, channel); } catch { return null; }
   }, [leadSessions, conversation.data, conversation.loading, conversation.error, channel]);
+  const draftView = useMemo(() => {
+    if (!context.companyId || !leadOptions?.selectedAgentId || design.loading || design.error) return { view: null, error: null };
+    if (design.data === null) return { view: null, error: null };
+    try { return { view: parseDesignDraftView(design.data, context.companyId, leadOptions.revision, leadOptions.selectedAgentId), error: null }; }
+    catch { return { view: null, error: "설계 초안을 확인하지 못했습니다. 새로고침해 주세요." }; }
+  }, [context.companyId, leadOptions, design.data, design.loading, design.error]);
   const scope = JSON.stringify([context.companyId, leadOptions?.revision ?? null, channel]);
   liveScope.current = scope;
   useEffect(() => { setCursor(null); pendingMessage.current = null; }, [context.companyId, leadOptions?.revision]);
@@ -63,7 +71,7 @@ export function BuilderPage() {
       if (document.visibilityState === "hidden") { timer = setTimeout(() => void poll(), 2_000); return; }
       try {
         await refreshConversation({ channel });
-        if (!disposed && liveScope.current === observedScope) conversation.refresh();
+        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); }
       } catch {
         // Polling only observes the exact saved request. Stop on error; the
         // explicit button remains available and no send is retried here.
@@ -74,10 +82,13 @@ export function BuilderPage() {
     timer = setTimeout(() => void poll(), 2_000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [conversationPage?.active?.requestId, conversationPage?.active?.runId, conversationPage?.active?.state,
-    conversation.error, scope, channel, refreshConversation, conversation.refresh]);
+    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
-  return <BuilderShell key={workspaceId} snapshot={current.snapshot} workspaceLabel={context.companyPrefix ?? "Workspace"}
+  return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(current.snapshot, draftView.view) : current.snapshot}
+    designDraft={draftView.view?.draft ?? null} designDraftLoading={design.loading}
+    designDraftError={draftView.error ?? (design.error ? "설계 초안을 불러오지 못했습니다." : null)}
+    workspaceLabel={context.companyPrefix ?? "Workspace"}
     conversation={conversationPage} conversationChannel={channel} conversationLoading={conversation.loading}
     conversationError={leadSessions?.sessions[channel] && !conversation.loading && !conversationPage ? "대화 기록을 확인하지 못했습니다. 새로고침해 주세요." : null}
     conversationHasNewer={cursor !== null}
@@ -88,7 +99,7 @@ export function BuilderPage() {
       try {
         const result = await refreshConversation({ channel });
         if (result.refreshed !== true) throw new Error("Unexpected refresh result.");
-      } finally { conversation.refresh(); lead.refresh(); }
+      } finally { conversation.refresh(); lead.refresh(); design.refresh(); }
     } : undefined}
     onCancelLeadMessage={conversationPage?.active?.runId ? async () => {
       try { await cancelMessage({ channel }); } finally { conversation.refresh(); }
@@ -126,6 +137,7 @@ export function BuilderPage() {
       const result = await selectLead({ agentId, expectedRevision });
       if (result.saved !== true || result.executionStarted !== false) throw new Error("Unexpected Lead Agent selection result.");
       lead.refresh();
+      design.refresh();
       sessions.refresh();
       conversation.refresh();
     }}
@@ -137,7 +149,7 @@ export function BuilderPage() {
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
     loading={state.loading} error={current.error ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); }} onImportConsultation={async text => {
+    onRefresh={() => { state.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };

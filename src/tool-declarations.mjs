@@ -9,3 +9,58 @@ export const READ_SOLUTION_TOOL = Object.freeze({
     additionalProperties: false,
   }),
 });
+
+export const PROPOSE_DESIGN_TOOL = Object.freeze({
+  name: "builder.propose-design",
+  displayName: "Store an unapproved Builder design draft",
+  description: "The current Lead can record a new requirements, questions and Graph draft citing actual consultation-UUID or lead-turn:UUID user input. This is never approval or execution. projectId is the Builder project scope; the current UI uses its Workspace UUID. expectedBaseRevisionId must match the prior draft or be null for the first. Unknown outcomes must be reconciled, not resent automatically.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
+    required: Object.freeze(["projectId", "expectedBaseRevisionId", "draft"]),
+    properties: Object.freeze({ projectId: Object.freeze({ type: "string", minLength: 1, maxLength: 160 }),
+      expectedBaseRevisionId: Object.freeze({ type: ["string", "null"], maxLength: 160 }),
+      draft: Object.freeze({ type: "object", additionalProperties: false,
+        required: ["projectId", "revisionId", "sourceIds", "specification", "graph", "questions"],
+        properties: { projectId: { type: "string" }, revisionId: { type: "string" },
+          sourceIds: { type: "array", minItems: 1, maxItems: 32, items: { type: "string" } },
+          specification: { type: "object", additionalProperties: false,
+            required: ["revisionId", "productTier", "requirements", "targets", "dataPolicyRef"],
+            properties: { revisionId: { type: "string" }, productTier: { enum: ["S", "M", "L", "XL"] },
+              requirements: { type: "array", items: { type: "object", additionalProperties: false,
+                required: ["id", "description", "acceptanceCriteriaIds"], properties: { id: { type: "string" },
+                  description: { type: "string" }, acceptanceCriteriaIds: { type: "array", items: { type: "string" } } } } },
+              targets: { type: "array", items: { enum: ["sps-plugin", "desktop", "web-api", "cli-automation", "agent-workflow", "hybrid"] } },
+              dataPolicyRef: { type: "string" } } },
+          graph: { type: "object", additionalProperties: false, required: ["graphRevisionId", "entities", "relations", "viewLayoutRef"],
+            properties: { graphRevisionId: { type: "string" }, entities: { type: "array", items: { type: "object", additionalProperties: false,
+              required: ["id", "kind"], properties: { id: { type: "string" }, kind: { enum: ["requirement", "feature", "component", "agent", "external-system", "data", "workflow", "test", "environment", "approval"] },
+                specRef: { type: "string", description: "An ID from this draft's requirements, not a claim of approval." }, contractRefs: { type: "array", items: { type: "string" } } } } },
+              relations: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "sourceId", "targetId", "kind"],
+                properties: { id: { type: "string" }, sourceId: { type: "string" }, targetId: { type: "string" },
+                  kind: { enum: ["implements", "depends_on", "data_flow", "triggers", "integrates_with", "tested_by", "deployed_to", "requires_approval"] }, contractRef: { type: "string" } } } }, viewLayoutRef: { type: "string" } } },
+          questions: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false,
+            required: ["id", "title", "text", "options", "recommendation"], properties: { id: { type: "string" },
+              title: { type: "string" }, text: { type: "string" }, options: { type: "array", items: { type: "object",
+                additionalProperties: false, required: ["id", "label", "tradeoff"], properties: { id: { type: "string" },
+                  label: { type: "string" }, tradeoff: { type: "string" } } } }, recommendation: { type: ["string", "null"] } } } },
+        } }),
+    }),
+  }),
+});
+
+export const READ_DESIGN_DRAFT_TOOL = Object.freeze({
+  name: "builder.read-design-draft",
+  displayName: "Read the current unapproved design draft",
+  description: "Read the current prepared Lead selection's draft and its revision ID before proposing a revision. null means no draft in this selection. Previous selection branches remain stored; none is automatically approved or executed.",
+  parametersSchema: READ_SOLUTION_TOOL.parametersSchema,
+});
+
+export const READ_DESIGN_SOURCES_TOOL = Object.freeze({
+  name: "builder.read-design-sources",
+  displayName: "Read user-provided Builder design sources",
+  description: "Read one page of actual user input with IDs to cite in design drafts. consultation is imported user text; main and decisions are the current Lead selection's user messages, not assistant answers or CTO intake. Follow nextCursor for older input. Source presence never means customer approval.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
+    required: Object.freeze(["channel", "cursor"]),
+    properties: Object.freeze({ channel: Object.freeze({ enum: ["consultation", "main", "decisions"] }),
+      cursor: Object.freeze({ type: ["string", "null"], maxLength: 160 }) }),
+  }),
+});
