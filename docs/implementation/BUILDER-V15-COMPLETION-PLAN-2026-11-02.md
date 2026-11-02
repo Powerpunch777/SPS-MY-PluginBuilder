@@ -1,13 +1,13 @@
 # Builder v15 Full Completion Plan
 
 Date: 2026-11-02
-Status: plan only; no implementation or acceptance item is declared complete by this document.
+Status: initial source baseline plus separately dated progress; no full v15 acceptance item is declared complete by this document.
 
 ## Authority and Status
 
 The acceptance criteria below follow the canonical [v15 design](../design/01_Design/SPS_Plugin_Builder_Codex_Final_Design_v15.md), AC-01 through AC-118. UI work must also follow the approved [UI v9 implementation contract](../design/03_UI/UI-IMPLEMENTATION-CONTRACT-2026-11-01.md). The November 2 Core–Plugin alignment in v15 takes precedence over older product assumptions: Builder is an optional, general-purpose plugin; it is not a mandatory Core workflow or Primary. Builder owns its full plugin UI. Core Native Settings and OS-level controls remain independent.
 
-The deliverable is a working Builder workflow, not a UI-only prototype. Current `src` contains a workspace-scoped initial snapshot, consultation text persistence, Lead Agent selection, preparation of three Lead session IDs, and read-only views. The worker explicitly reports that AI integration is not configured. There is no evidence here of an AI message being sent, a Lead producing a specification, or a customer deliverable being built and accepted. **AI execution is not implemented/verified; the Builder is not complete.**
+The deliverable is a working Builder workflow, not a UI-only prototype. The initial inspection at Builder `17224a9f` found a workspace-scoped initial snapshot, consultation text persistence, Lead Agent selection, three prepared Lead session IDs and read-only views, without actual AI execution. That is the baseline for the checklist below, not a claim about later code. The separately recorded durable-chat increment now demonstrates one authorized real CLI answer and restart retention; see [its exact evidence and limits](LEAD-DURABLE-CHAT-2026-11-02.md). No Lead-authored complete specification or executable customer deliverable has been accepted. **The Builder is not complete.**
 
 The code status labels used below are an initial source inspection, not test results:
 
@@ -330,4 +330,4 @@ These references inform integration investigation; they do not prove that Builde
 
 For each AC, replace the initial `P`/`S`/`M` baseline with `PASS`, `PARTIAL`, `BLOCKED` or `NOT STARTED` only when evidence is attached. Keep criterion wording and IDs intact. Include exact revision, test command and output reference; identify mocked versus real Host/provider paths; list security limitations and unresolved decisions. Do not report full v15 completion until every required AC is accepted and the end-to-end customer deliverable plus user acceptance gate is proven.
 
-This plan-only change ran no tests and changed no runtime, SDK, Core or application behavior. It does not assert AI execution or Builder completion.
+Checklist authorship alone is not implementation evidence. Dated implementation records must identify their exact revisions, actual tests and remaining scope before changing any AC's acceptance status.
