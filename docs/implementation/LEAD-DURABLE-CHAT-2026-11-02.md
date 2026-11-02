@@ -2,7 +2,7 @@
 
 Date: 2026-11-02. Development acceptance, not full v15 or Stable qualification.
 
-## Exact Source
+## First Successful Answer Increment: Exact Source
 
 - Builder implementation/operator: `b874181c86a6f96fa0ae2922739df172905fb860`.
 - Consuming Desktop source: `c8c6b46f977afac12299d0c9dd33b02bb257f312`.
@@ -65,7 +65,7 @@ An intermediate successful provider/restart check used a broad transcript-text a
 
 ## Still Open
 
-- Actual live CLI cancellation/termination UI acceptance (unit coverage is not a substitute).
+- At this first increment: actual live CLI cancellation/termination UI acceptance. The separately identified follow-up below now exercises that case.
 - Shared structured Lead memory; Lead authoring tools and authorized Graph persistence. The new Graph module is pure validation only, not authorization/storage or a registered tool.
 - CTO, independent Dev/QA, GitHub/Runner, requirement-linked evidence and deliverable acceptance.
 - Protected Preview and OS-enforced file/Vault/child protection. Tools-off/read-only chat is not proof of that boundary.
@@ -74,3 +74,21 @@ An intermediate successful provider/restart check used a broad transcript-text a
 All AC-01 through AC-118 remain tracked by the [full v15 plan](BUILDER-V15-COMPLETION-PLAN-2026-11-02.md); this increment is not full Builder completion.
 
 Official reference: [Codex exec](https://learn.chatgpt.com/docs/developer-commands#codex-exec). Actual installed CLI flags and the existing Host adapter were checked before this live test; documentation alone is not its execution evidence.
+
+## Follow-up: Actual CLI Cancellation and Restart
+
+Operator revision: `9fdb553c9d8d296391cd789153c34ae3c4703f57`, committed unchanged from the tested worktree. Desktop source: `a69f68cb515478b1cf22f0719fe4f5adbd784630`; Host/SDK revisions above are unchanged. Worker/UI/manifest hashes above are unchanged; this follow-up modifies trusted test operators, not Plugin runtime or user settings.
+
+This requires a second explicit opt-in, in addition to live account permission:
+
+```powershell
+$env:SPS_BUILDER_LIVE_CODEX = '1'
+$env:SPS_BUILDER_LIVE_CANCEL = '1'
+npm run test:core-host
+```
+
+The first actual answer, exact assistant bubble, duplicate rejection and restart checks passed again. The operator then sent one additional short nonsecret conversation message, observed a running Core run with a live managed CLI PID, and clicked the real Builder cancellation control. The same saved turn became `cancelled` with `termination: confirmed`; the observed process no longer existed. After another Main/Host restart the exact cancelled turn stayed terminal and the Agent had exactly the two explicitly requested runs, not a replay. The temporary working folder remained empty. This is an application-level observed managed-process check, not proof of every possible descendant, PID-resistant hardware attestation or OS sandbox containment.
+
+Final opt-in cancellation app run: exit 0, six Main exits0, twelve ended output streams, zero output failures, exact temporary-data cleanup. Builder check rerun at the operator revision: 87/87 plus typecheck/build/SDK validate/test passed. The cancellation text is asserted in the actual restarted transcript; its capture extends below the first viewport, so no claim that every retained message is simultaneously visible. The earlier assistant captures were visually inspected. Raw logs, account data and captures remain private.
+
+Remaining work is shared memory, authorized authoring/Graph persistence, CTO/Dev/QA, real external Runner/delivery evidence, complete Native management/UX, protected Preview and release qualification. The actual CLI cancellation case is no longer listed as untested, but this does not accept all 118 v15 criteria.
