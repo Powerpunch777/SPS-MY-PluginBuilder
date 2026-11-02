@@ -160,6 +160,53 @@ test("built Worker JSONL round-trips workspace state and rejects cross-workspace
       "malicious action must be rejected before any host state call");
     assert.equal(hostState.has(workspaceB), false);
 
+    const agentId = "44444444-4444-4444-8444-444444444444";
+    const sessionId = "55555555-5555-4555-8555-555555555555";
+    const runContext = { companyId: workspaceA, agentId, sessionId,
+      runId: "66666666-6666-4666-8666-666666666666" };
+    const readTool = (id, context) => send({ jsonrpc: "2.0", id, method: "executeTool",
+      paperclipInvocation: { id: `tool-invocation-${id}`, scope: { companyId: workspaceA } },
+      params: { toolName: "builder.read-solution", parameters: { projectId: "project-one" }, runContext: context } });
+    readTool(8, runContext);
+    for (let index = 0; index < 7; index += 1) {
+      const call = await waitForMessage("Lead read tool state call", message => typeof message.method === "string");
+      assert.equal(call.method, "state.get", "The read tool cannot write state or invoke an Agent");
+      assert.equal(call.paperclipInvocationId, "tool-invocation-8");
+      assert.equal(call.params.scopeKind, "company");
+      assert.equal(call.params.scopeId, workspaceA);
+      assert.equal(call.params.namespace, "sonpark.my-builder");
+      const key = call.params.stateKey;
+      let value;
+      if (key === "lead-agent.v1") value = { workspaceId: workspaceA, revision: 1, selectedAgentId: agentId };
+      else if (key === "lead-sessions.v1.1") value = { workspaceId: workspaceA, selectionRevision: 1, agentId,
+        sessions: { main: sessionId, "cto-inbox": null, decisions: null } };
+      else {
+        assert.match(key, /^solution-head\.v1\.[a-f0-9]{64}$/);
+        value = null;
+      }
+      send({ jsonrpc: "2.0", id: call.id, result: value });
+    }
+    const solution = await workerResponse(8);
+    assert.equal(solution.error, undefined);
+    assert.deepEqual(solution.result.data, { projectId: "project-one", solution: null });
+    assert.match(solution.result.content, /No stored solution revision/);
+
+    const noSession = { ...runContext };
+    delete noSession.sessionId;
+    readTool(9, noSession);
+    assert.ok((await workerResponse(9)).error, "An older Host without verified session metadata must fail explicitly");
+    readTool(10, { ...runContext, companyId: workspaceB });
+    const deniedRead = await waitForMessage("Core scope check for the tool invocation", message => typeof message.method === "string");
+    assert.equal(deniedRead.method, "state.get");
+    assert.equal(deniedRead.paperclipInvocationId, "tool-invocation-10");
+    assert.equal(deniedRead.params.scopeId, workspaceB);
+    // The private Host owns invocation/tenant authority. This fake refuses the
+    // mismatching scope instead of pretending SDK client validation is a fence.
+    send({ jsonrpc: "2.0", id: deniedRead.id, error: { code: -32005, message: "Workspace invocation scope denied" } });
+    assert.ok((await workerResponse(10)).error, "Invocation Workspace must agree with tool run metadata");
+    assert.equal(messages.some(message => typeof message.method === "string"), false,
+      "Rejected tool calls must not reach Host services");
+
     send({ jsonrpc: "2.0", id: 7, method: "shutdown", params: {} });
     const shutdown = await workerResponse(7);
     assert.equal(shutdown.error, undefined);

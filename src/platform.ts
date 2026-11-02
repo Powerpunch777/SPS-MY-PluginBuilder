@@ -7,6 +7,8 @@ import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agen
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
 import { createLeadConversationStore } from "./lead-conversations.ts";
+import { createSolutionRevisionStore } from "./solution-revision-store.ts";
+import { READ_SOLUTION_TOOL } from "./tool-declarations.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -278,10 +280,68 @@ function userActionInput(params: Record<string, unknown>, context: { companyId: 
   return input;
 }
 
+function toolRecord(value: unknown, required: readonly string[], optional: readonly string[] = []) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError("Invalid Builder tool input.");
+  const keys = Reflect.ownKeys(value);
+  if (required.some(key => !Object.hasOwn(value, key))
+    || keys.some(key => typeof key !== "string" || ![...required, ...optional].includes(key))) {
+    throw new TypeError("Invalid Builder tool fields.");
+  }
+  const result: Record<string, unknown> = Object.create(null);
+  for (const key of keys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Invalid Builder tool field.");
+    result[key] = descriptor.value;
+  }
+  return result;
+}
+
+/** Called only by the registered tool with Host-verified run metadata, never a UI action. */
+export async function readLeadSolution(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = toolRecord(params, ["projectId"]);
+  const context = toolRecord(runContext, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
+  for (const value of Object.values(context)) {
+    if (typeof value !== "string" || !UUID.test(value) || value !== value.toLowerCase()) {
+      throw new TypeError("A verified current Host Agent run/session context is required.");
+    }
+  }
+  if (typeof input.projectId !== "string" || !input.projectId.trim() || input.projectId.length > 160
+    || /[\u0000-\u001f\u007f]/.test(input.projectId)) throw new TypeError("A bounded Builder project ID is required.");
+  const companyId = context.companyId as string;
+  const projectId = input.projectId;
+  return serialize(companyId, async () => {
+    const binding = await readLeadAgentBinding(companyId, platform);
+    if (!binding.selectedAgentId || binding.selectedAgentId !== context.agentId) {
+      throw new Error("Only the current Builder Lead may read solution revisions with this tool.");
+    }
+    const sessions = await leadSessionsFor(companyId, binding, platform);
+    if (!LEAD_CHANNELS.some(channel => sessions.sessions[channel] === context.sessionId)) {
+      throw new Error("The tool requires a prepared current Lead session.");
+    }
+    const check = async () => {
+      await assertLeadSelection(companyId, binding, platform);
+      const current = await leadSessionsFor(companyId, binding, platform);
+      if (LEAD_CHANNELS.some(channel => current.sessions[channel] !== sessions.sessions[channel])) {
+        throw new Error("Lead tool session authority changed.");
+      }
+    };
+    await check();
+    const solution = await createSolutionRevisionStore(companyId, projectId, platform.state).current();
+    await check();
+    return { content: solution === null ? "No stored solution revision exists for this Builder project."
+      : "Stored solution revision. Customer approval and delivery have not been verified by this read.",
+    data: { projectId, solution } as unknown as JsonValue };
+  });
+}
+
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
-    capabilities: ["plugin.state.read", "plugin.state.write", "agents.read", "agent.sessions.create",
+    capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
       "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel"],
+    tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
+      description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
+    handler: (params, context, platform) => readLeadSolution(params, context, platform) }],
     data: [{ key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>

@@ -238,6 +238,18 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     Boolean, "session recheck complete");
   assert.deepEqual(await leadSessions(company.id), preparedSessions);
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
+  const registeredTools = await request(`/api/plugins/tools?pluginId=${encodeURIComponent(plugin.pluginKey)}`);
+  assert.ok(Array.isArray(registeredTools) && registeredTools.some(tool => tool.pluginId === plugin.id
+    && tool.name === "com.sonparkserver.my-plugin-builder:builder.read-solution"),
+  "Declared Builder read tool must be present in the actual Host inventory (not an Agent grant).");
+  const forgedTool = await workspace.evaluate(`fetch('/api/plugins/tools/execute', {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      tool:'com.sonparkserver.my-plugin-builder:builder.read-solution',parameters:{projectId:'test-project'},
+      runContext:{companyId:${JSON.stringify(company.id)},agentId:${JSON.stringify(leadAgent.id)},
+        runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions.main)},role:'lead'}
+    })}).then(async r=>({status:r.status,body:await r.json()}))`, true);
+  assert.equal(forgedTool.status, 403, "A user UI request cannot impersonate the prepared Lead Agent run.");
+  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
   await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled === false`),
@@ -305,6 +317,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     actualNonAiFailedDispatch: true, duplicateDispatchPrevented: true, conversationRunRestart: true,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
+    leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,
     systemView: { pageHeading: systemView.pageHeading, scopeDescription: systemView.scopeDescription,
