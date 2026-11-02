@@ -37,6 +37,9 @@ The deliverable is a working Builder workflow, not a UI-only prototype. The init
 충돌·과거 기록·응답 유실을 검사한 내부 모듈이며 아직 Lead 권한 API나 UI에 연결하지 않았다.
 AC 상태는 변경하지 않는다.
 
+[명세 Revision 구조 검증](SPECIFICATION-VALIDATION-2026-11-02.md)을 추가했다.
+승인 근거 문자열의 존재를 실제 승인으로 오인하지 않으며, 저장·도구·UI 연결은 아직 남아 있다.
+
 The code status labels used below are an initial source inspection, not test results:
 
 - `P` Partial behavior exists, but the full AC is not met.
