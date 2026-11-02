@@ -20,6 +20,15 @@ function fixture() {
       async set(key: { scopeId: string; stateKey: string }, value: JsonValue) {
         states.set(`${key.scopeId}:${key.stateKey}`, structuredClone(value));
       },
+      async compareAndSet(key: { scopeId: string; stateKey: string }, expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue) {
+        const stateKey = `${key.scopeId}:${key.stateKey}`;
+        const exists = states.has(stateKey);
+        const current = states.get(stateKey);
+        const matches = expected.exists ? exists && JSON.stringify(current) === JSON.stringify(expected.value) : !exists;
+        if (!matches) return { swapped: false };
+        states.set(stateKey, structuredClone(value));
+        return { swapped: true };
+      },
       async delete() { throw new Error("Session preparation must not delete state"); },
     },
     agents: {

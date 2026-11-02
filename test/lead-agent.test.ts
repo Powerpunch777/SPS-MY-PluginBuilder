@@ -11,13 +11,24 @@ const OTHER = "44444444-4444-4444-8444-444444444444";
 function fixture() {
   const states = new Map<string, JsonValue>();
   const writes: unknown[] = [];
+  const ordinaryWrites: unknown[] = [];
   const rows: Record<string, JsonValue>[] = [{ id: AGENT, companyId: A, name: "Existing Agent", status: "idle",
     adapterConfig: { secret: "must-not-reach-ui", cwd: "private-path" } }];
   const platform = {
     state: {
       async get(key: { scopeId: string; stateKey: string }) { return structuredClone(states.get(`${key.scopeId}:${key.stateKey}`) ?? null); },
       async set(key: { scopeId: string; stateKey: string }, value: JsonValue) {
-        assert.equal(key.stateKey, "lead-agent.v1"); writes.push(key); states.set(`${key.scopeId}:${key.stateKey}`, structuredClone(value));
+        ordinaryWrites.push(key); states.set(`${key.scopeId}:${key.stateKey}`, structuredClone(value));
+      },
+      async compareAndSet(key: { scopeId: string; stateKey: string }, expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue) {
+        assert.equal(key.stateKey, "lead-agent.v1");
+        const stateKey = `${key.scopeId}:${key.stateKey}`;
+        const exists = states.has(stateKey);
+        const current = states.get(stateKey);
+        const matches = expected.exists ? exists && JSON.stringify(current) === JSON.stringify(expected.value) : !exists;
+        if (!matches) return { swapped: false };
+        writes.push(key); states.set(stateKey, structuredClone(value));
+        return { swapped: true };
       },
       async delete() { throw new Error("No delete permitted"); },
     },
@@ -27,7 +38,11 @@ function fixture() {
     },
     events: { async emit() { throw new Error("Unexpected event"); } },
   } as unknown as SpsPlatformInvocationContext;
-  return { platform, states, writes, rows };
+  return { platform, states, writes, ordinaryWrites, rows };
+}
+
+function replaceCompareAndSet(platform: SpsPlatformInvocationContext, method: (...args: any[]) => Promise<unknown>) {
+  (platform.state as unknown as { compareAndSet: (...args: any[]) => Promise<unknown> }).compareAndSet = method;
 }
 
 test("Lead options expose only bounded same-Workspace identity, never credentials or paths", async () => {
@@ -70,8 +85,62 @@ test("unavailable or foreign Agents, invalid input and save failure cannot chang
   }
   assert.equal(f.writes.length, 0);
   f.rows[0].status = "idle";
-  f.platform.state.set = async () => { throw new Error("Save failed"); };
+  replaceCompareAndSet(f.platform, async () => { throw new Error("Save failed"); });
   await assert.rejects(selectLeadAgent(A, { agentId: AGENT, expectedRevision: 0 }, f.platform), /Save failed/);
+});
+
+test("selection CAS preserves an independent writer's newer binding without falling back to state.set", async () => {
+  const f = fixture();
+  const list = f.platform.agents.list;
+  let externalWrite = true;
+  f.platform.agents.list = async (...args) => {
+    const rows = await list(...args);
+    if (externalWrite) {
+      externalWrite = false;
+      f.states.set(`${A}:lead-agent.v1`, { workspaceId: A, revision: 1, selectedAgentId: OTHER });
+    }
+    return rows;
+  };
+  await assert.rejects(selectLeadAgent(A, { agentId: AGENT, expectedRevision: 0 }, f.platform), /changed\. Refresh/);
+  assert.deepEqual(f.states.get(`${A}:lead-agent.v1`), { workspaceId: A, revision: 1, selectedAgentId: OTHER });
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.ordinaryWrites.length, 0);
+});
+
+test("unsupported, malformed, revoked and response-lost CAS never falls back or retries", async () => {
+  const unsupported = fixture();
+  delete (unsupported.platform.state as unknown as { compareAndSet?: unknown }).compareAndSet;
+  await assert.rejects(selectLeadAgent(A, { agentId: AGENT, expectedRevision: 0 }, unsupported.platform), /Unsupported Host.*compareAndSet/);
+  assert.equal(unsupported.ordinaryWrites.length, 0);
+
+  const getterReceipt = Object.defineProperty({}, "swapped", { enumerable: true, get() { throw new Error("receipt getter ran"); } });
+  const symbolReceipt = { swapped: true, [Symbol("extra")]: 1 };
+  for (const malformed of [null, true, {}, { applied: true }, { swapped: true, extra: 1 }, { swapped: "yes" },
+    getterReceipt, symbolReceipt, Object.assign(Object.create(null), { swapped: true })]) {
+    const f = fixture();
+    replaceCompareAndSet(f.platform, async () => malformed);
+    await assert.rejects(selectLeadAgent(A, { agentId: AGENT, expectedRevision: 0 }, f.platform), /Invalid Host.*receipt/);
+    assert.equal(f.ordinaryWrites.length, 0);
+  }
+
+  for (const error of ["Host authorization revoked", "Response lost after commit"]) {
+    const f = fixture(); let calls = 0;
+    replaceCompareAndSet(f.platform, async (key, expected, value) => {
+      calls += 1;
+      if (error === "Response lost after commit") {
+        const actual = await f.platform.state.get(key);
+        assert.equal(actual, null);
+        f.states.set(`${A}:lead-agent.v1`, structuredClone(value));
+      }
+      throw new Error(error);
+    });
+    await assert.rejects(selectLeadAgent(A, { agentId: AGENT, expectedRevision: 0 }, f.platform), new RegExp(error));
+    assert.equal(calls, 1);
+    assert.equal(f.ordinaryWrites.length, 0);
+    if (error === "Response lost after commit") {
+      assert.deepEqual(f.states.get(`${A}:lead-agent.v1`), { workspaceId: A, revision: 1, selectedAgentId: AGENT });
+    } else assert.equal(f.states.has(`${A}:lead-agent.v1`), false);
+  }
 });
 
 test("parallel selections cannot overwrite a newer revision", async () => {

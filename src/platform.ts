@@ -100,7 +100,10 @@ export async function selectLeadAgent(companyId: string, params: Record<string, 
     throw new TypeError("Lead Agent selection requires an Agent ID and the displayed revision.");
   }
   return serialize(companyId, async () => {
-    const current = await readLeadAgentBinding(companyId, platform);
+    const stored = await platform.state.get(leadAgentKey(companyId));
+    const current = parseLeadAgentBinding(stored === null
+      ? { workspaceId: companyId, revision: 0, selectedAgentId: null }
+      : stored, companyId);
     if (current.revision !== params.expectedRevision) throw new Error("Lead Agent selection changed. Refresh before saving.");
     if (params.agentId !== null) {
       const options = await readLeadAgentOptions(companyId, platform);
@@ -109,7 +112,28 @@ export async function selectLeadAgent(companyId: string, params: Record<string, 
     }
     if (current.selectedAgentId === params.agentId) return { saved: true, executionStarted: false, revision: current.revision };
     const updated = parseLeadAgentBinding({ ...current, selectedAgentId: params.agentId, revision: current.revision + 1 }, companyId);
-    await platform.state.set(leadAgentKey(companyId), updated as unknown as JsonValue);
+    const state = platform.state as typeof platform.state & {
+      compareAndSet?: (key: ReturnType<typeof leadAgentKey>, expected: { exists: false } | { exists: true; value: JsonValue },
+        value: JsonValue) => Promise<unknown>;
+    };
+    if (!("compareAndSet" in platform.state) || typeof state.compareAndSet !== "function") {
+      throw new Error("Unsupported Host: atomic state.compareAndSet is required to select a Lead Agent.");
+    }
+    const receipt = await state.compareAndSet(leadAgentKey(companyId), stored === null
+      ? { exists: false }
+      : { exists: true, value: stored }, updated as unknown as JsonValue);
+    const receiptDescriptor = receipt && typeof receipt === "object" && !Array.isArray(receipt)
+      && Object.getPrototypeOf(receipt) === Object.prototype && Reflect.ownKeys(receipt).length === 1
+      && Reflect.ownKeys(receipt)[0] === "swapped"
+      ? Object.getOwnPropertyDescriptor(receipt, "swapped")
+      : undefined;
+    if (!receiptDescriptor || !receiptDescriptor.enumerable || !("value" in receiptDescriptor)
+      || typeof receiptDescriptor.value !== "boolean") {
+      throw new TypeError("Invalid Host state.compareAndSet receipt.");
+    }
+    if (!receiptDescriptor.value) {
+      throw new Error("Lead Agent selection changed. Refresh before saving.");
+    }
     return { saved: true, executionStarted: false, revision: updated.revision };
   });
 }
