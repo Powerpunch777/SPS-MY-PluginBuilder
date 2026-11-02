@@ -1,19 +1,18 @@
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { parseCtoQuestionBoard, parseCtoQuestionProposal, type CtoQuestionRecord } from "./domain/cto-questions.ts";
-import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
+import type { RevisionState } from "./solution-revision-store.ts";
+import { createCtoQuestionStore } from "./cto-question-store.ts";
+export { createCtoQuestionStore } from "./cto-question-store.ts";
 import { resolveCtoPlanningAuthority } from "./cto-planning-authority.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { readPinnedWorkstreamSources, readWorkstreams } from "./workstream-tools.ts";
 import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
+import { resolveBoundCtoIntake } from "./cto-intake-store.ts";
 
 const json = (value: unknown) => value as JsonValue;
 function id(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/.test(value)) throw new TypeError("A bounded question scope ID is required.");
   return value;
-}
-export function createCtoQuestionStore(workspaceId: string, projectId: string, state: RevisionState) {
-  return createRevisionJournal(workspaceId, projectId, state, { prefix: "cto-questions",
-    parse: value => parseCtoQuestionBoard(value, projectId), revisionId: board => board.revisionId });
 }
 function conflict(current: string | null) {
   return { content: "The CTO intake board changed. Read the existing receipt; never automatically repeat a write.",
@@ -128,7 +127,8 @@ export async function readUserCtoQuestions(workspaceId: string, projectId: strin
 export async function reviewCtoQuestion(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["projectId", "questionId", "expectedBaseRevisionId", "revisionId", "reviewId", "disposition", "rationale", "evidenceRefs"]);
   const projectId = id(input.projectId), questionId = id(input.questionId), expected = id(input.expectedBaseRevisionId), revisionId = id(input.revisionId);
-  const authority = await intakeAuthority(projectId, runContext, platform), current = await authority.store.current();
+  const authority = await resolveBoundCtoIntake(projectId, questionId, runContext, platform);
+  const current = await createCtoQuestionStore(authority.context.companyId, projectId, authority.state).current();
   if (!current || current.revision.revisionId !== expected) return conflict(current?.revision.revisionId ?? null);
   const question = current.revision.questions.find(row => row.proposal.id === questionId);
   if (!question) throw new Error("The exact CTO proposal is unavailable.");

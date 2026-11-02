@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { submitCtoQuestion, readOwnCtoQuestion, readCtoQuestions, reviewCtoQuestion, readUserCtoQuestions, createCtoQuestionStore } from "../src/cto-question-tools.ts";
+import { createCtoIntakeStore } from "../src/cto-intake-store.ts";
+import { CTO_INTAKE_EXECUTION_POLICY, ctoIntakeRequestId, parseCtoIntakeDelivery } from "../src/domain/cto-intake-deliveries.ts";
 import { dispatchCtoWorkstream } from "../src/cto-workstream-delivery.ts";
 import { createWorkstreamStore } from "../src/workstream-tools.ts";
 import { fixture, W, A, S, C, P, CTO, ctx, key, mapKey } from "./fixtures/cto-platform.ts";
@@ -26,12 +28,47 @@ async function setup() {
     recommendation: "session", delayImpact: "Only the affected planning decision is blocked.", scopeNodeIds: ["feature"], evidenceRefs: [] };
   const input = { projectId: P, ctoId: CTO, workstreamId: "ws-1", expectedBaseRevisionId: null, revisionId: "question-board-1", proposal };
   const intake = ctx(intakeSession, intakeRun), store = createCtoQuestionStore(W, P, f.state);
+  let seededRequestId: string | null = null, intakeReceiptRunId: string = intakeRun;
+  const originalGetRequest = f.platform.agents.sessions.getRequest;
+  f.platform.agents.sessions.getRequest = async (sessionId, workspaceId, requestId) => {
+    if (sessionId === intakeSession) {
+      if (workspaceId !== W || requestId !== seededRequestId || seededRequestId === null) return null;
+      return { requestId: seededRequestId, state: "submitted", runId: intakeReceiptRunId };
+    }
+    return originalGetRequest(sessionId, workspaceId, requestId);
+  };
   const submit = () => submitCtoQuestion(input, context, f.platform);
-  const review = (disposition = "user-decision-needed", evidenceRefs = ["baseline:baseline-1"]) => reviewCtoQuestion({
+  const reviewParams = (disposition = "user-decision-needed", evidenceRefs = ["baseline:baseline-1"]) => ({
     projectId: P, questionId: proposal.id, expectedBaseRevisionId: "question-board-1", revisionId: "question-board-2",
     reviewId: "review-1", disposition, rationale: "The user owns this policy decision; the cited baseline does not settle it.", evidenceRefs,
-  }, intake, f.platform);
-  return { ...f, f, context, intake, intakeSession, intakeRun, runId, proposal, input, store, submit, review };
+  });
+  const reviewDirect = (runContext = intake, disposition = "user-decision-needed", evidenceRefs = ["baseline:baseline-1"]) =>
+    reviewCtoQuestion(reviewParams(disposition, evidenceRefs), runContext, f.platform);
+  async function seedIntake() {
+    if (seededRequestId !== null) return seededRequestId;
+    const question = (await store.current())?.revision.questions.find(row => row.proposal.id === proposal.id);
+    if (!question) return null;
+    const target = { agentId: A, sessionId: intakeSession, selectionRevision: 1 };
+    const requestId = ctoIntakeRequestId(W, P, proposal.id, question, target);
+    const intakeStore = createCtoIntakeStore(W, P, proposal.id, f.state);
+    const prepared = parseCtoIntakeDelivery({ schemaVersion: 1, workspaceId: W, projectId: P, questionId: proposal.id,
+      revisionId: `${requestId}:prepared`, requestId, question, target, executionPolicy: CTO_INTAKE_EXECUTION_POLICY,
+      createdAtISO: "2026-11-02T01:02:03.004Z", phase: "prepared", runId: null, cancellationRequested: false,
+      termination: "not_applicable" }, W, P, proposal.id);
+    assert.equal((await intakeStore.publish({ expectedBaseRevisionId: null, revision: prepared })).status, "published");
+    const dispatching = parseCtoIntakeDelivery({ ...prepared, revisionId: `${requestId}:dispatching`, phase: "dispatching" }, W, P, proposal.id);
+    assert.equal((await intakeStore.publish({ expectedBaseRevisionId: prepared.revisionId, revision: dispatching })).status, "published");
+    const submitted = parseCtoIntakeDelivery({ ...dispatching, revisionId: `${requestId}:submitted`, phase: "submitted", runId: intakeRun }, W, P, proposal.id);
+    assert.equal((await intakeStore.publish({ expectedBaseRevisionId: dispatching.revisionId, revision: submitted })).status, "published");
+    seededRequestId = requestId;
+    return requestId;
+  }
+  const review = async (disposition = "user-decision-needed", evidenceRefs = ["baseline:baseline-1"]) => {
+    await seedIntake();
+    return reviewDirect(intake, disposition, evidenceRefs);
+  };
+  return { ...f, f, context, intake, intakeSession, intakeRun, runId, proposal, input, store, submit, review, reviewDirect,
+    seedIntake, setIntakeReceiptRunId: (value: string) => { intakeReceiptRunId = value; } };
 }
 
 test("CTO proposals are internal, Core-bound, immutable and do not create a user question or another run", async () => {
@@ -87,7 +124,7 @@ test("a superseded specification cannot submit, be reviewed or appear as a curre
       spec: { ...x.instruction.spec, revision: 2 }, change: { ...x.instruction.change, previousRevision: 1 } }],
   } });
   await assert.rejects(x.submit(), /no longer current/);
-  await assert.rejects(x.review(), /assignment changed/);
+  await assert.rejects(x.review(), /assignment or specification changed/);
   assert.deepEqual((await readUserCtoQuestions(W, P, x.platform))!.board.questions, []);
 });
 
@@ -146,10 +183,31 @@ test("a cancelled intake Lead or missing CAS cannot publish a review", async () 
         const run = await original(...args);
         return args[0] === x.intakeSession ? { ...run, cancellationRequested: true, termination: "pending" } : run;
       };
-    } else x.platform.state.compareAndSet = undefined;
-    await assert.rejects(x.review());
+      await assert.rejects(x.review());
+    } else {
+      await x.seedIntake();
+      x.platform.state.compareAndSet = undefined;
+      await assert.rejects(x.reviewDirect());
+    }
     assert.equal((await x.store.current())!.revision.questions[0]!.review, null);
   }
+});
+
+test("review requires an exact Core-admitted intake journal, matching receipt and the intake Lead session", async () => {
+  const x = await setup(); await x.submit();
+  await assert.rejects(x.reviewDirect(), /recorded question intake/);
+  assert.equal((await x.store.current())!.revision.questions[0]!.review, null);
+  const requestId = await x.seedIntake();
+  assert(requestId);
+  assert.equal((await x.platform.agents.sessions.getRequest(x.intakeSession, W, requestId))?.runId, x.intakeRun);
+  assert.equal(await x.platform.agents.sessions.getRequest(x.intakeSession, W, randomUUID()), null);
+  x.setIntakeReceiptRunId(randomUUID());
+  await assert.rejects(x.reviewDirect(), /actual Core receipt/);
+  await assert.rejects(x.reviewDirect(ctx()), /prepared CTO-intake Lead session/);
+  assert.equal((await x.store.current())!.revision.questions[0]!.review, null);
+  x.setIntakeReceiptRunId(x.intakeRun);
+  await x.reviewDirect();
+  assert.equal((await x.store.current())!.revision.questions[0]!.review!.reviewer.runId, x.intakeRun);
 });
 
 test("the reporting CTO can reconcile its own question without reading another CTO's proposal", async () => {

@@ -18,8 +18,9 @@ import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL
 import { dispatchCtoWorkstream, inspectCtoWorkstreamDelivery } from "./cto-workstream-delivery.ts";
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
 import { readCtoMemory, updateCtoMemory } from "./cto-memory-tools.ts";
-import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
+import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
 import { submitCtoQuestion, readCtoQuestions, readOwnCtoQuestion, readUserCtoQuestions, reviewCtoQuestion } from "./cto-question-tools.ts";
+import { dispatchQuestionToLead, readBoundCtoIntake } from "./cto-intake-delivery.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -521,7 +522,23 @@ export async function updateAssignedCtoMemory(params: unknown, runContext: unkno
 }
 export async function submitAssignedCtoQuestion(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
-  return serialize(context.companyId, () => submitCtoQuestion(params, context, platform));
+  return serialize(context.companyId, async () => {
+    const result = await submitCtoQuestion(params, context, platform);
+    const data = result.data as { status: string; questionId: string };
+    if (!["published", "existing"].includes(data.status)) return result;
+    const { aiDispatched: _storageOnlyFlag, ...proposalReceipt } = result.data as Record<string, JsonValue>;
+    const input = exactToolRecord(params, ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "proposal"]);
+    try {
+      const intake = await dispatchQuestionToLead({ projectId: input.projectId, ctoId: input.ctoId,
+        workstreamId: input.workstreamId, questionId: data.questionId }, context, platform);
+      return { content: "The CTO proposal is stored. " + intake.content,
+        data: { ...proposalReceipt, intake: intake.data, userQuestionCreated: false } as JsonValue };
+    } catch {
+      // Storage may already have committed; an unknown send must never trigger a replacement.
+      return { content: "The CTO proposal is stored, but Lead delivery is unconfirmed. Observe the saved request; do not automatically repeat submission or treat this as a user decision.",
+        data: { ...proposalReceipt, intake: { status: "unconfirmed", automaticallyResent: false }, userQuestionCreated: false } as JsonValue };
+    }
+  });
 }
 export async function readCtoQuestionIntake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
@@ -530,6 +547,10 @@ export async function readCtoQuestionIntake(params: unknown, runContext: unknown
 export async function readOwnCtoQuestionReceipt(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => readOwnCtoQuestion(params, context, platform));
+}
+export async function readBoundCtoQuestionIntake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readBoundCtoIntake(params, context, platform));
 }
 export async function reviewCtoQuestionIntake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
@@ -612,6 +633,9 @@ export function createBuilderPlatform() {
     { name: READ_CTO_QUESTIONS_TOOL.name, declaration: { displayName: READ_CTO_QUESTIONS_TOOL.displayName,
       description: READ_CTO_QUESTIONS_TOOL.description, parametersSchema: READ_CTO_QUESTIONS_TOOL.parametersSchema },
       handler: (params, context, platform) => readCtoQuestionIntake(params, context, platform) },
+    { name: READ_CTO_INTAKE_TOOL.name, declaration: { displayName: READ_CTO_INTAKE_TOOL.displayName,
+      description: READ_CTO_INTAKE_TOOL.description, parametersSchema: READ_CTO_INTAKE_TOOL.parametersSchema },
+      handler: (params, context, platform) => readBoundCtoQuestionIntake(params, context, platform) },
     { name: READ_OWN_CTO_QUESTION_TOOL.name, declaration: { displayName: READ_OWN_CTO_QUESTION_TOOL.displayName,
       description: READ_OWN_CTO_QUESTION_TOOL.description, parametersSchema: READ_OWN_CTO_QUESTION_TOOL.parametersSchema },
       handler: (params, context, platform) => readOwnCtoQuestionReceipt(params, context, platform) },

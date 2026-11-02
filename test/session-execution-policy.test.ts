@@ -7,6 +7,7 @@ import {
   LEAD_PLANNING_TOOL_NAMES,
   LEAD_SESSION_EXECUTION_POLICY,
 } from "../src/session-execution-policy.ts";
+import { CTO_INTAKE_EXECUTION_POLICY } from "../src/domain/cto-intake-deliveries.ts";
 
 const { default: manifest } = await import(new URL("../src/manifest.mjs", import.meta.url).href);
 const manifestTools = (manifest as { tools: Array<{ name: string }> }).tools;
@@ -33,7 +34,13 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   const manifestNames = manifestTools.map(tool => tool.name);
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
-    manifestNames.filter(name => !ctoToolNames.has(name)).sort());
+    manifestNames.filter(name => !ctoToolNames.has(name) && name !== "builder.read-cto-intake").sort());
+  const allPlanningTools = new Set<string>([...LEAD_PLANNING_TOOL_NAMES, ...CTO_WORKSTREAM_TOOL_NAMES,
+    ...CTO_INTAKE_EXECUTION_POLICY.toolNames]);
+  assert.deepEqual([...allPlanningTools].sort(), manifestNames.sort());
+  assert.ok(!new Set<string>(LEAD_PLANNING_TOOL_NAMES).has("builder.read-cto-intake"));
+  assert.ok(!ctoToolNames.has("builder.read-cto-intake"));
+  assert.ok(CTO_INTAKE_EXECUTION_POLICY.toolNames.includes("builder.read-cto-intake"));
   assert.deepEqual([...CTO_WORKSTREAM_TOOL_NAMES].sort(), [
     "builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.submit-cto-question", "builder.update-cto-memory",
   ]);

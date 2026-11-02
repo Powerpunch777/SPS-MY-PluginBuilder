@@ -3,7 +3,7 @@ import test from "node:test";
 import manifest from "../src/manifest.mjs";
 import { CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL, DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL } from "../src/delivery-tool-declarations.mjs";
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-tool-declarations.mjs";
-import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
+import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
   assert.equal(manifest.companyActivation?.defaultEnabled, false);
@@ -70,7 +70,7 @@ test("CTO memory tools expose strict private-memory contracts in the manifest", 
 });
 
 test("CTO question tools expose strict planning-only contracts in the manifest", () => {
-  const declarations = [SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL];
+  const declarations = [SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL];
   assert.deepEqual(declarations.map(declaration => manifest.tools.find(tool => tool.name === declaration.name)), declarations);
   const submit = SUBMIT_CTO_QUESTION_TOOL.parametersSchema;
   assert.deepEqual(submit.required, ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "proposal"]);
@@ -88,6 +88,11 @@ test("CTO question tools expose strict planning-only contracts in the manifest",
   assert.equal(proposal.properties.evidenceRefs.maxItems, 32);
   assert.deepEqual(READ_CTO_QUESTIONS_TOOL.parametersSchema.required, ["projectId"]);
   assert.equal(READ_CTO_QUESTIONS_TOOL.parametersSchema.additionalProperties, false);
+  assert.deepEqual(READ_CTO_INTAKE_TOOL.parametersSchema.required, ["projectId", "questionId"]);
+  assert.deepEqual(Object.keys(READ_CTO_INTAKE_TOOL.parametersSchema.properties).sort(), ["projectId", "questionId"]);
+  assert.equal(READ_CTO_INTAKE_TOOL.parametersSchema.additionalProperties, false);
+  assert.match(READ_CTO_INTAKE_TOOL.description, /registered Lead CTO-intake run bound to the stable Core admission receipt/);
+  assert.match(READ_CTO_INTAKE_TOOL.description, /never a user answer, approval, private CTO memory/);
   assert.deepEqual(READ_OWN_CTO_QUESTION_TOOL.parametersSchema.required, ["projectId", "ctoId", "workstreamId", "questionId"]);
   assert.equal(READ_OWN_CTO_QUESTION_TOOL.parametersSchema.additionalProperties, false);
   assert.match(READ_OWN_CTO_QUESTION_TOOL.description, /exact active Core-bound CTO session/);

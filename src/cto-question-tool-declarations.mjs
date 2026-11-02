@@ -8,7 +8,7 @@ const project = { type: "object", additionalProperties: false, required: ["proje
 
 export const SUBMIT_CTO_QUESTION_TOOL = Object.freeze({
   name: "builder.submit-cto-question", displayName: "Submit a planning question from this CTO",
-  description: "Only the exact active Core-bound CTO delivery may submit a Workstream-scoped question for Lead intake. This stores a planning proposal only: it does not message the user, auto-dispatch work, grant approval, or authorize implementation. Reconcile an unknown write by reading; never automatically retry.",
+  description: "Only the exact active Core-bound CTO delivery may submit a Workstream-scoped question. Stores the immutable proposal, then admits one planning-only turn to the prepared internal Lead intake session. It does not message the user, grant approval or authorize implementation. Do not wait for a Lead response in this CTO run. Reconcile unknown writes/delivery by reading; never automatically retry submission.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "proposal"],
     properties: { projectId: id, ctoId: id, workstreamId: id,
@@ -31,6 +31,13 @@ export const READ_CTO_QUESTIONS_TOOL = Object.freeze({
   parametersSchema: project,
 });
 
+export const READ_CTO_INTAKE_TOOL = Object.freeze({
+  name: "builder.read-cto-intake", displayName: "Read the exact CTO question delivered for Lead review",
+  description: "Only the registered Lead CTO-intake run bound to the stable Core admission receipt may read this exact question and its pinned planning sources. Returns the proposal and source records only, never a user answer, approval, private CTO memory or implementation authority.",
+  parametersSchema: { type: "object", additionalProperties: false, required: ["projectId", "questionId"],
+    properties: { projectId: id, questionId: id } },
+});
+
 export const READ_OWN_CTO_QUESTION_TOOL = Object.freeze({
   name: "builder.read-own-cto-question", displayName: "Read this CTO's own question receipt",
   description: "Only the exact active Core-bound CTO session may read its own Workstream question and Lead review, plus the current board revision. No other CTO question or private memory is returned. Read before publishing and after an uncertain write; this never resends or starts work.",
@@ -40,7 +47,7 @@ export const READ_OWN_CTO_QUESTION_TOOL = Object.freeze({
 
 export const REVIEW_CTO_QUESTION_TOOL = Object.freeze({
   name: "builder.review-cto-question", displayName: "Record the Lead's planning review of a CTO question",
-  description: "Only a prepared Lead CTO-intake session may record a revision-bound planning review: existing specification, delegated choice, or user decision needed. Only user-decision-needed is eligible for the user decisions list. This does not generate a user answer, approve implementation, respond to the CTO or dispatch work. Read the current revision before retrying; unknown writes are never automatically repeated.",
+  description: "Only the exact current Lead CTO-intake run bound to this question's actual Core admission receipt may record a revision-bound planning review: existing specification, delegated choice, or user decision needed. Only user-decision-needed is eligible for the user decisions list. This does not generate a user answer, approve implementation, respond to the CTO or dispatch work. Read the current revision before retrying; unknown writes are never automatically repeated.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["projectId", "questionId", "expectedBaseRevisionId", "revisionId", "reviewId", "disposition", "rationale", "evidenceRefs"],
     properties: { projectId: id, questionId: id, expectedBaseRevisionId: id,

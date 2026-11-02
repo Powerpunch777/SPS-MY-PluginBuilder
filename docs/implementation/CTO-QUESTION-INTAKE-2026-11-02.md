@@ -13,6 +13,15 @@ Lead가 해결할 수 있는 질문은 CTO에게 직접 답하는 것이 목표�
 - 질문 ID는 불변 내용/실제 reporter와 결합한다. 같은 ID의 결과 조회를 중복 제출로
   처리하지 않고, 다른 내용/다른 CTO로 바꾸면 거부한다. 프로젝트 보드는 기존 CAS
   journal을 재사용한다. 동시 접수는 명시적 conflict이며 일반 set/자동 재송신이 없다.
+- 질문 제출은 먼저 보드에 durable 저장한 뒤 등록된 Lead `cto-inbox`로 dispatch한다.
+  전달은 안정된 Core admission receipt에 결합한다. 결과가 불명확하면 재전송하지 않고
+  `builder.read-cto-intake`로 그 receipt와 정확한 질문/고정된 출처를 읽어 복구한다.
+  `main`, `decisions`, 원래 CTO 세션 또는 새 임시 Lead 세션으로 fallback하지 않는다.
+  제출한 CTO는 Lead 검토를 기다리지 않고 반환한다. 같은 Agent의 직렬 실행 대기열에서
+  Lead 응답을 기다리면 이후 CTO 처리와 교착될 수 있기 때문이다.
+- 이 전달 경로는 등록된 9-tool CTO-intake profile과 정확한 Core-bound Lead run을
+  사용한다. read/review는 접수된 질문 하나와 고정된 근거에만 결합하며, 일반 Lead run이
+  프로젝트 내부 CTO 질문을 대신 읽거나 검토하는 우회 경로를 만들지 않는다.
 - CTO는 자기 질문 한 건과 현재 보드 revision만 읽을 수 있다. 다른 CTO의 내부 질문이나
   사적 기억은 반환하지 않는다. 자기 질문의 접수/Lead 검토를 조회하는 기능이지 실제
   응답 전달이나 사용자 답변의 수신 확인은 아니다.
@@ -26,6 +35,10 @@ Lead가 해결할 수 있는 질문은 CTO에게 직접 답하는 것이 목표�
 질문을 새 명세의 유효한 결정으로 대체하지 않는다. `user-decision-needed`만 현재 정확한
 Workstream digest가 유지될 때 사용자 UI provider에 투영한다. 미검토/Lead 직접 해결
 질문은 목록에 나오지 않는다. 조회/저장 오류를 완료나 '질문 없음'으로 표시하지 않는다.
+Lead가 내부적으로 해결할 수 있다고 판단한 질문의 목적지는 사용자 미결정사항이 아니라
+원래 CTO에 대한 직접 회신이다. 이는 제품 흐름의 구분이며, 현재 CTO 회신 전달은 아직
+연결되지 않았다. 오직 Lead가 `user-decision-needed`로 분류한 질문만 사용자가 선택할
+미결정사항으로 투영한다.
 
 ## 화면과 현재 미완료
 
@@ -37,10 +50,13 @@ Workstream digest가 유지될 때 사용자 UI provider에 투영한다. 미검
 질문은 읽기 전용이며 답변 입력/전송을 비활성화하고 준비되지 않았다고 표시한다. 이를
 연결되지 않은 일반 decisions 대화로 보내거나 가짜 답변/수신/설계 revision을 만들지 않는다.
 
-CTO 제출 후 내부 Lead 세션 자동 기동, Lead 자체 해결의 CTO 회신, 사용자 질문 전용
-답변과 공유 기억/새 설계 Revision/Workstream 재전달의 연결은 후속 범위다. 이들을
-일반 저장 성공이나 현재 UI 표시로 완료 처리하지 않는다. 실제 AI 시험은 승인 방식 결정
-전 다시 실행하지 않는다. 이전 MCP 취소 처리 시험을 성공으로 바꾸지 않았다.
+durable CTO→Lead dispatch와 receipt-bound 질문 조회/검토 계약은 추가됐지만, 이를 실제
+AI 호출 성공이나 Lead 검토 완료로 간주하지 않는다. Lead 자체 해결 결과를 원래 CTO에
+직접 회신하는 전송 경로, 사용자 선택 답변을 질문 ID에 묶는 경로, 그 답변의 공유 기억/
+새 설계 Revision/Workstream 재전달 연결은 아직 미완료다. 이들을 일반 저장 성공이나
+현재 UI 표시로 완료 처리하지 않는다. 실제 AI 시험은 승인 방식 결정 전 다시 실행하지
+않는다. 자동 MCP 승인 override를 추가하지 않았고, 이전 MCP 취소 처리 시험을 성공으로
+바꾸지 않았다.
 
 ## 기존 실행과 기억
 
@@ -77,6 +93,34 @@ mock Identity/실제 UI bridge에서 일반 초안 질문과 사용자 목록의
 표시 질문은 명시적인 가로챈 DTO fixture이며 실제 CTO나 Lead가 저장한 질문이 아니다.
 제거 후 실제 사용자 결정 provider는 null이다. Main4/4 정상 종료, 출력8개 종료/실패0와
 임시 데이터 제거를 확인했다. 기존 로컬 복구 harness는 새 Native LAN 실증이 아니다.
+
+이후 추가된 durable CTO→Lead dispatch 및 `builder.read-cto-intake` 연결은 위의 과거
+383개 시험 결과에 포함되지 않는다. 후속 Node24.22.1 격리 검사에서는 타입/빌드,
+전체 **404/404**, SDK CLI validate/test가 통과했다. 도메인9개, 전달 서비스와 실제
+platform wrapper11개, 강화한 질문 서비스12개가 포함된다. 정확한 Core receipt/run
+결합, 저장 후 전달, 대상 변경/취소/명세 변경/미지원 정책/CAS 누락 차단, 응답 유실 후
+동일 request 조회와 미재전송, 개인 기억/출력 비공개를 fake Host로 검사했다.
+이는 실제 CTO/Lead 모델 실행이나 실제 Core를 통한 질문 전달 성공의 증거가 아니다.
+
+초기 격리 타입 검사는 작성 중 테스트의 타입 오류, 다음 타입 검사는 두 테스트 fixture의
+타입 지정 오류로 실패했다. 이를 고친 전체 검사에서는 신규 전용 도구를 일반 Lead 도구와
+구분하지 않은 정책 목록 assertion1개가 실패했다. 일반 Lead 권한을 확대하지 않고 전용
+9-tool 정책과 전체 manifest 합집합을 검증하도록 고쳤다. 이 실패들을 통과로 세지 않는다.
+
+마지막 no-AI source 앱 재검사도404개/타입/빌드/SDK CLI 이후 exit0이다. mock Identity와
+실제 Host/UI bridge에서 기존 상태·권한·재시작 및 CTO 질문 필터/읽기 전용 표시 회귀를
+확인하고 캡처를 검토했다. 질문 화면은 이전과 같은 명시적 DTO fixture이며 실제 질문
+작성/Lead 검토가 아니다. Main4/4 정상 종료, 출력8개 종료/실패0, 내부 임시 데이터 제거를
+확인했다. DEV와 설치본/로그인/의존성은 바꾸지 않았다. 추가 도구 등록과 no-AI 화면
+회귀가 실제 AI의 도구 승인이나 CTO 회신/사용자 답변 처리를 증명하지 않는다.
+
+이 후속 사본의 source 지문은 `fff3057a340f8fa44be6e99a75e8273252b070ae9039a2acc900e1e89dcdb749`,
+manifest는 `599036d8ba2a0b16876d40093bf3d4d016d02c9cf77321684b3feb9af49a20e2`,
+Worker는 `ebaf0a52287937b03202afc5d78e8a2b68d450de5594109ffc3fce40c2b7c564`,
+SDK CLI UI 집계는 `62928a714928dcde0f73ee1cfbcb62250cfa40e114bb365425321ef88c53f286`,
+실제 Host UI index는 `af179a1093ddb6530200ab71f865ccb0fb16559784f1997c54e787ab929e3e15`다.
+아래 표는 이전383개 시험 사본 식별을 그대로 보존한다. 이 후속 기록을 추가한 문서까지
+시험 사본과 같은 source 지문이라고 주장하지 않는다.
 
 검사 시 Core/SDK는 `a57f4d9ab0025b98ce4c7f9f5f6bf7db7060f136` /
 `c69915a518f0eb600f0ace8238144059911f8d04` clean source를 유지했다.
