@@ -44,6 +44,12 @@ AC 상태는 변경하지 않는다.
 단위/Worker JSONL 검사와 실제 source 앱의 등록·사용자 사칭 거부를 확인했다. 실제 AI의
 도구 호출이나 Graph 작성·화면 갱신 완료는 아직 증명하지 않았으며 AC 상태는 유지한다.
 
+[Lead 설계 초안 경로](LEAD-DESIGN-DRAFT-2026-11-02.md)를 추가했다. Lead 전용 출처 읽기,
+초안 제안·조회, 구조 검증과 CAS 저널을 구현하고 Node24 전체 159/159 및 SDK CLI
+검사를 통과했다. source Host 앱은 mock Identity와 UI 주입 DTO fixture로만 확인했으며,
+실제 Lead 도구 호출·Host 초안 저장·승인·실행은 확인하지 않았다. 새 Lead의 자동 handoff도
+미완성이다. AC 상태와 전체 완료 판단은 바꾸지 않는다.
+
 The code status labels used below are an initial source inspection, not test results:
 
 - `P` Partial behavior exists, but the full AC is not met.

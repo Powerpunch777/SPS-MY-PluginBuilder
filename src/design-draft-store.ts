@@ -52,4 +52,3 @@ export function createDesignDraftStore(workspaceId: string, projectId: string,
     prefix: `design-draft-lead-${selectionRevision}`, parse, revisionId: value => value.draft.revisionId,
   });
 }
-
