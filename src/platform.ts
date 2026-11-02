@@ -23,6 +23,8 @@ import { submitCtoQuestion, readCtoQuestions, readOwnCtoQuestion, readUserCtoQue
 import { dispatchQuestionToLead, readBoundCtoIntake } from "./cto-intake-delivery.ts";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "./cto-question-reply-tool-declarations.mjs";
 import { answerCtoQuestion, readCtoQuestionAnswer, acknowledgeCtoQuestionAnswer } from "./cto-question-reply-tools.ts";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "./task-packet-tool-declarations.mjs";
+import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -522,6 +524,14 @@ export async function updateAssignedCtoMemory(params: unknown, runContext: unkno
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => updateCtoMemory(params, context, platform));
 }
+export async function readAssignedCtoTaskPackets(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readCtoTaskPackets(params, context, platform));
+}
+export async function publishAssignedCtoTaskPacket(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => publishCtoTaskPacket(params, context, platform));
+}
 export async function submitAssignedCtoQuestion(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, async () => {
@@ -664,7 +674,13 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => acknowledgeCtoQuestionAnswerForCto(params, context, platform) },
     { name: REVIEW_CTO_QUESTION_TOOL.name, declaration: { displayName: REVIEW_CTO_QUESTION_TOOL.displayName,
       description: REVIEW_CTO_QUESTION_TOOL.description, parametersSchema: REVIEW_CTO_QUESTION_TOOL.parametersSchema },
-      handler: (params, context, platform) => reviewCtoQuestionIntake(params, context, platform) }],
+      handler: (params, context, platform) => reviewCtoQuestionIntake(params, context, platform) },
+    { name: READ_CTO_TASK_PACKETS_TOOL.name, declaration: { displayName: READ_CTO_TASK_PACKETS_TOOL.displayName,
+      description: READ_CTO_TASK_PACKETS_TOOL.description, parametersSchema: READ_CTO_TASK_PACKETS_TOOL.parametersSchema },
+      handler: (params, context, platform) => readAssignedCtoTaskPackets(params, context, platform) },
+    { name: PUBLISH_CTO_TASK_PACKET_TOOL.name, declaration: { displayName: PUBLISH_CTO_TASK_PACKET_TOOL.displayName,
+      description: PUBLISH_CTO_TASK_PACKET_TOOL.description, parametersSchema: PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema },
+      handler: (params, context, platform) => publishAssignedCtoTaskPacket(params, context, platform) }],
     data: [{ key: "builder.workstreams", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");

@@ -17,6 +17,7 @@ import { ACKNOWLEDGE_WORKSTREAM_TOOL, PUBLISH_WORKSTREAM_TOOL, READ_CTO_WORKSTRE
 import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL } from "./delivery-tool-declarations.mjs";
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
 import { SUBMIT_CTO_QUESTION_TOOL, READ_OWN_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "./task-packet-tool-declarations.mjs";
 
 export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
   READ_SOLUTION_TOOL.name,
@@ -48,6 +49,8 @@ export const CTO_WORKSTREAM_TOOL_NAMES = Object.freeze([
   UPDATE_CTO_MEMORY_TOOL.name,
   SUBMIT_CTO_QUESTION_TOOL.name,
   READ_OWN_CTO_QUESTION_TOOL.name,
+  READ_CTO_TASK_PACKETS_TOOL.name,
+  PUBLISH_CTO_TASK_PACKET_TOOL.name,
 ].sort());
 
 export type SessionExecutionPolicy = Readonly<{

@@ -20,6 +20,14 @@ Builder `0ec7b5e`의 [질문 답변 Revision 구현·검증](LEAD-QUESTION-REVIS
 
 최신 목표는 이 저장소의 v15 통합 설계, UI v9, 최신 UI 적용 기준을 따르는 실제 Builder를 완성하는 것이다. 화면 시제품만으로 완료 처리하지 않는다. 안전한 진행에 꼭 필요한 Core 선행 사항이 있으면 그것부터 확인·해결한다. Core 문서와 기술상 핵심 경로는 별도 담당 범위이며, 이 계획은 Builder를 다시 설계하거나 줄이지 않는다.
 
+### 2026-11-02 추가 확정: Lead에서 CTO까지 장기 자율 작업
+
+Lead의 최초 요청·검토와 CTO의 장기 작업을 분리한다. Lead가 사용자 요청을 검토해 프로젝트 CTO를 만들고 Workstream 명세·범위·인수 기준을 정해 배정한다. 각 CTO는 맡은 Workstream의 인수 기준을 바탕으로 Worker/QA용 Task Packet을 직접 세분화·배분하며, Task Packet의 세부 기준으로 Lead의 인수 기준을 약화하거나 바꾸지 않는다. CTO는 같은 논리 세션과 독립 기억을 유지하면서 기존 Codex 네이티브 Worker/QA 기능으로 작업을 나누고, 결과·검증을 확인해 필요한 수정과 QA를 인수 기준을 충족할 때까지 반복한다. Lead는 계약·범위·비용·우선순위 등 사용자 고유 결정이 필요한 때만 질문한다. 질문과 무관한 작업은 이어가고, 사용자 명시 중지는 재시작 후에도 존중한다.
+
+이는 상주 모델이나 항상 실행되는 CTO 프로세스를 뜻하지 않는다. 목표·최신 명세·Task/Worker 참조·상태·근거·다음 조치를 기존 Core의 Workspace-scoped 저장과 이벤트 경로에 남기고, 작업 가능 이벤트나 재시작 뒤 기존 논리 세션을 복구한다. 새 분산 scheduler, Builder 전용 Job Queue 또는 CLI 무한 반복기를 만들지 않는다. 저장 원자성은 기존 Core 계약과 adapter를 따른다. 실제 저장소가 SQLite인 경우에 한해 SQLite transaction 문서를 참고해 상태 변경을 원자적으로 처리하고 단일 writer 경합을 고려한다. MCP 도구는 기존 승인 API를 호출하는 명시적 경계로만 재사용하며 장기 상태 저장·권한·복구를 자체 제공한다고 가정하지 않는다. 참고: [MCP Tools 사양](https://modelcontextprotocol.io/specification/2025-11-25/server/tools), [SQLite Transactions](https://www.sqlite.org/lang_transaction.html).
+
+**현재 경계:** 아래 후속 [Task Packet 구현·검사](CTO-TASK-PACKETS-2026-11-02.md)는 계획 도구를 연결한 단계이며 자율 실행 완료가 아니다. 실제 Host/provider에서 Codex 네이티브 Worker의 생성, 독립 세션/권한, Task Packet 전달, 이력 회수, 재시작·중지 복구를 입증하기 전에는 AI 생성 코드를 자동 실행하거나 Runner로 보내지 않는다. 개발 명령·테스트의 기술적 성공은 고객 요구 충족, QA 인수 또는 납품 완료와 별도로 기록한다. 문서 추가만으로 AC 상태를 바꾸지 않는다.
+
 이번 재개는 Builder 목표를 다시 진행하는 승인이지, Core 전체 완성이나 Stable 선행 범위 확대의 승인이 아니다. 현재 문서 갱신 범위는 이 계획서와 Core–Plugin 정렬 문서 두 개다. 이 문서 수정만으로 Builder 구현, 전체 AC 통과, 실제 AI 실행 또는 제품 완료를 주장하지 않는다.
 
 ### 우선 보류
@@ -82,10 +90,10 @@ Work in dependency order. A phase may proceed in parallel only after its API and
 3. **UI v9 and input foundation.** Complete the current black/neutral UI against the approved v9 contract; preserve responsive and empty/error states. Complete permitted consultation import, source attribution and normalization. Do not add unauthorized scraping or a Document Worker.
 4. **Lead runtime.** Select and verify one supported public SDK/Core execution route. Implement the three Lead sessions, durable request/receipt semantics, send, response persistence, memory sharing without transcript/permission merging, restart recovery and cancellation. Keep send disabled until retry safety and authority checks are proven.
 5. **Lead authoring and Graph.** Implement structured requirements, technology decisions, questions, contracts and evidence; Lead-only validated Graph Patch and immutable revisions; cycle/invariant checking; natural-language feedback and revision propagation. Keep React Flow view-only to users and layout-only for ELK.
-6. **Project organization and work execution.** Implement project-local CTOs and Workstreams, CTO single-session lifecycle, independent Worker/QA sessions, Task Packets, instructions, bounded concurrency, state transitions and durable history. Enforce role/Workspace authority in the data and execution boundary, not just UI.
+6. **Project organization and work execution.** Implement project-local CTOs and Workstreams, CTO single-logical-session lifecycle, independent native Worker/QA sessions, Task Packets, instructions, bounded concurrency, event-triggered wake/recovery, explicit stop handling, state transitions and durable history. Reuse supported Codex subagents and existing Core event/storage/tool boundaries; do not build a resident model process, custom distributed scheduler, private job queue or infinite CLI loop. Prove the actual native Worker path before allowing generated code to execute.
 7. **Reuse and external execution.** Implement the Reuse-First gates and product/target choices. Integrate verified existing GitHub, Codex and external-provider APIs; create and track Git/PR/Actions work only through supported contracts. Do not build a private Git host, generic CI, Runner fleet, coding runtime or queue.
 8. **QA, evidence and delivery.** Add TestPlan/QAResult and real Check/log/artifact evidence; Preview and package compatibility gates; acceptance, release, maintenance and change tracking. A green-looking local UI or mock is not evidence of an external run.
-9. **Security and full acceptance.** Verify customer/Workspace isolation, credential and process boundaries, untrusted Runner execution, permissions, data deletion/export and release gates. Execute the full AC suite against exact revisions, actual supported integrations and representative failure/restart scenarios. Only then report the v15 completion status.
+9. **Security and full acceptance.** Verify customer/Workspace isolation, credential and process boundaries, untrusted Runner execution, permissions, data deletion/export and release gates. Prove actual native Worker authority, history and restart/stop recovery before generated-code execution. Execute the full AC suite against exact revisions, actual supported integrations and representative failure/restart scenarios. Treat technical command success separately from business acceptance and user sign-off. Only then report the v15 completion status.
 
 ### Required evidence convention
 

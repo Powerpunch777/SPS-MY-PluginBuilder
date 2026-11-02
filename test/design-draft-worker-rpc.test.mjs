@@ -437,6 +437,58 @@ test("built Worker routes design sources to an unapproved draft and back without
       params: { key: "builder.cto-memory", companyId: workspaceA, params: memoryInput } });
     const privateMemoryData = await serviceUntil(30);
     assert.ok(privateMemoryData.error, "CTO memory must not have a generic data/UI provider.");
+
+    const taskPacketInput = { projectId: workspaceA, ctoId: "rpc-cto", workstreamId: "rpc-workstream" };
+    invoke(31, "builder.read-task-packets", taskPacketInput, ctoContext);
+    const emptyTaskPackets = await serviceUntil(31);
+    assert.equal(emptyTaskPackets.error, undefined, JSON.stringify(emptyTaskPackets.error));
+    assert.deepEqual(emptyTaskPackets.result.data, { projectId: workspaceA, ctoId: "rpc-cto",
+      workstreamId: "rpc-workstream", current: null,
+      currentSource: { requestId: ctoRequestId, workstreamId: "rpc-workstream", specRevision: 1,
+        sha256: workstreamInstructionDigest(instruction) }, taskStates: [] });
+
+    const taskPacket = { projectId: workspaceA, ctoId: "rpc-cto", workstreamId: "rpc-workstream",
+      taskId: "task-rpc-1", revision: 1, kind: "development", title: "Implement the assigned feature",
+      goal: "Implement only the exact assigned feature.", scopeNodeIds: ["rpc-feature"],
+      requirementIds: [baseline.specification.requirements[0].id], dependencies: [],
+      included: ["Implement the pinned feature."], excluded: ["Unrelated functionality."],
+      constraints: ["Preserve the approved public contract."], acceptance: ["The exact feature behavior passes."],
+      evidenceRequired: ["Record the focused test result."], reuse: [], testPlan: null };
+    invoke(32, "builder.publish-task-packet", { ...taskPacketInput, expectedBaseRevisionId: null,
+      revisionId: "packet-rpc-1", packet: taskPacket }, ctoContext);
+    const publishedTaskPacket = await serviceUntil(32);
+    assert.equal(publishedTaskPacket.error, undefined, JSON.stringify(publishedTaskPacket.error));
+    assert.deepEqual(publishedTaskPacket.result.data,
+      { status: "published", taskId: "task-rpc-1", boardRevisionId: "packet-rpc-1", executionStarted: false });
+    const packetJournalProject = `packets:${sha256(JSON.stringify([workspaceA, "rpc-cto", "rpc-workstream"]))}`;
+    const packetRecord = hostState.get(JSON.stringify(stateKey(
+      `task-packets-revision.v1.${sha256(packetJournalProject)}.${sha256("packet-rpc-1")}`)));
+    assert.equal(packetRecord.revision.revisionId, "packet-rpc-1");
+    const storedPacket = packetRecord.revision.packets[0];
+    assert.deepEqual(storedPacket.packet, taskPacket);
+    assert.deepEqual(storedPacket.dependencyPins, [], "dependency pins are server-derived and are empty for an independent task");
+    assert.deepEqual(storedPacket.author, { agentId: leadId, sessionId: ctoSessionId, runId: ctoContext.runId });
+    assert.deepEqual(storedPacket.source, { requestId: ctoRequestId, workstreamId: "rpc-workstream", specRevision: 1,
+      instructionSha256: workstreamInstructionDigest(instruction) });
+    assert.ok(calls.filter(method => method === "agents.sessions.getRequest").length > ctoCallsBefore,
+      "Task Packet publication must bind to the exact Core request receipt.");
+
+    invoke(33, "builder.read-task-packets", taskPacketInput, ctoContext);
+    const readTaskPackets = await serviceUntil(33);
+    assert.equal(readTaskPackets.error, undefined, JSON.stringify(readTaskPackets.error));
+    assert.equal(readTaskPackets.result.data.current.sequence, 1);
+    assert.deepEqual(readTaskPackets.result.data.current.revision, packetRecord.revision);
+
+    const casBeforeDeniedPacket = calls.filter(method => method === "state.compareAndSet").length;
+    invoke(34, "builder.publish-task-packet", { ...taskPacketInput, expectedBaseRevisionId: null,
+      revisionId: "packet-lead-denied", packet: { ...taskPacket, taskId: "task-lead-denied" } }, runContext);
+    const deniedPacketPublish = await serviceUntil(34);
+    assert.ok(deniedPacketPublish.error, "Lead main cannot publish as the assigned CTO.");
+    invoke(35, "builder.read-task-packets", taskPacketInput, runContext);
+    const deniedPacketRead = await serviceUntil(35);
+    assert.ok(deniedPacketRead.error, "Lead main cannot read private CTO Task Packets.");
+    assert.equal(calls.filter(method => method === "state.compareAndSet").length, casBeforeDeniedPacket,
+      "Lead main authorization failures must not publish or mutate Task Packet state.");
     assert.equal(calls.some(method => method === "agents.sessions.sendMessage" || method === "agents.sessions.ensure"
       || method === "agents.sessions.create"), false, "The compiled Worker test must not send to or create a provider session.");
 

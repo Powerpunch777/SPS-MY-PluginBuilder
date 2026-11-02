@@ -49,7 +49,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
     assert.ok(!ctoToolNames.has(name));
   }
   assert.deepEqual([...CTO_WORKSTREAM_TOOL_NAMES].sort(), [
-    "builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.submit-cto-question", "builder.update-cto-memory",
+    "builder.acknowledge-workstream", "builder.publish-task-packet", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.read-task-packets", "builder.submit-cto-question", "builder.update-cto-memory",
   ]);
   for (const name of ["builder.dispatch-workstream", "builder.read-workstream-delivery", "builder.cancel-workstream-delivery"] as const) {
     assert.ok(LEAD_PLANNING_TOOL_NAMES.includes(name), `${name} must be Lead-only`);

@@ -5,6 +5,7 @@ import { CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL, DISPATCH_CTO_WORKSTREAM_TOOL, READ
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-tool-declarations.mjs";
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "../src/cto-question-reply-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "../src/task-packet-tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
   assert.equal(manifest.companyActivation?.defaultEnabled, false);
@@ -137,4 +138,54 @@ test("CTO question tools expose strict planning-only contracts in the manifest",
   assert.match(SUBMIT_CTO_QUESTION_TOOL.description, /exact active Core-bound/);
   assert.match(SUBMIT_CTO_QUESTION_TOOL.description, /never automatically retry/);
   assert.match(REVIEW_CTO_QUESTION_TOOL.description, /does not generate a user answer/);
+});
+
+test("CTO task packet tools expose exact planning-only contracts in the manifest", () => {
+  for (const declaration of [READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL]) {
+    assert.deepEqual(manifest.tools.find(tool => tool.name === declaration.name), declaration);
+    assert.equal(declaration.parametersSchema.additionalProperties, false);
+  }
+  assert.deepEqual(READ_CTO_TASK_PACKETS_TOOL.parametersSchema.required, ["projectId", "ctoId", "workstreamId"]);
+  assert.deepEqual(Object.keys(READ_CTO_TASK_PACKETS_TOOL.parametersSchema.properties).sort(), ["ctoId", "projectId", "workstreamId"]);
+  const publish = PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema;
+  assert.deepEqual(publish.required, ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "packet"]);
+  assert.deepEqual(publish.properties.expectedBaseRevisionId.type, ["string", "null"]);
+  const packet = publish.properties.packet;
+  assert.equal(packet.additionalProperties, false);
+  assert.deepEqual(packet.required, ["projectId", "ctoId", "workstreamId", "taskId", "revision", "kind", "title", "goal", "scopeNodeIds", "requirementIds", "dependencies", "included", "excluded", "constraints", "acceptance", "evidenceRequired", "reuse", "testPlan"]);
+  assert.deepEqual(packet.properties.kind.enum, ["development", "qa"]);
+  assert.equal(packet.properties.revision.minimum, 1);
+  assert.deepEqual(packet.properties.testPlan.type, ["object", "null"]);
+  assert.match(READ_CTO_TASK_PACKETS_TOOL.description, /exact active Core-bound CTO/);
+  for (const declaration of [READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL]) {
+    assert.match(declaration.description, /planning/i);
+    assert.match(declaration.description, /does not create sessions/);
+    assert.match(declaration.description, /execute code/);
+    assert.match(declaration.description, /completion/);
+  }
+  assert.match(PUBLISH_CTO_TASK_PACKET_TOOL.description, /QA packets require a test plan/);
+});
+
+test("CTO task packet schema matches the service's serialized and reuse field bounds", () => {
+  const packet = PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema.properties.packet;
+  const reuse = packet.properties.reuse.items.properties;
+  assert.match(packet.description, /48 KiB UTF-8 JSON limit/);
+  assert.equal(reuse.sourceUrl.maxLength, 4096);
+  assert.match(reuse.sourceUrl.description, /HTTPS URL without credentials/);
+  assert.equal(reuse.licenseExpression.maxLength, 512);
+});
+
+test("CTO QA pass criteria are a bounded nonempty text list", () => {
+  const passCriteria = PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema.properties.packet.properties.testPlan.properties.passCriteria;
+  assert.equal(passCriteria.type, "array");
+  assert.equal(passCriteria.minItems, 1);
+  assert.equal(passCriteria.maxItems, 32);
+  assert.equal(passCriteria.items.maxLength, 4096);
+});
+
+test("CTO task packet text lists do not impose uniqueness beyond domain validation", () => {
+  const testPlan = PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema.properties.packet.properties.testPlan.properties;
+  assert.equal(testPlan.steps.uniqueItems, undefined);
+  assert.equal(testPlan.expectedResults.uniqueItems, undefined);
+  assert.equal(testPlan.passCriteria.uniqueItems, undefined);
 });

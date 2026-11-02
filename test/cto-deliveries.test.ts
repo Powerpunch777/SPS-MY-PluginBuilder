@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ctoDeliveryRequestId, parseCtoDelivery } from "../src/domain/cto-deliveries.ts";
 import type { WorkstreamRecord } from "../src/domain/workstreams.ts";
+import { parseTaskPacket } from "../src/domain/task-packets.ts";
 
 const workspaceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const projectId = "project-1";
@@ -106,6 +107,43 @@ test("new memory-capable policies do not silently expand a historical two-tool i
   assert.deepEqual(questions.executionPolicy.toolNames, questionNames);
   assert.equal(current.executionPolicy.toolNames.includes("builder.submit-cto-question"), false);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: [...names.slice(0, 3), "builder.propose-design"] } }), workspaceId, projectId, ctoId));
+});
+
+test("accepts the exact task-packet CTO profile while preserving all historical policy lengths", () => {
+  const legacyTwo = delivery();
+  const four = delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.update-cto-memory"] } });
+  const sixNames = ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.submit-cto-question", "builder.update-cto-memory"];
+  const six = delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: sixNames } });
+  const eightNames = ["builder.acknowledge-workstream", "builder.publish-task-packet", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.read-task-packets", "builder.submit-cto-question", "builder.update-cto-memory"];
+  const eight = delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: eightNames } });
+  assert.deepEqual(parseCtoDelivery(legacyTwo, workspaceId, projectId, ctoId).executionPolicy.toolNames,
+    ["builder.acknowledge-workstream", "builder.read-cto-workstream"]);
+  assert.deepEqual(parseCtoDelivery(four, workspaceId, projectId, ctoId).executionPolicy.toolNames, four.executionPolicy.toolNames);
+  assert.deepEqual(parseCtoDelivery(six, workspaceId, projectId, ctoId).executionPolicy.toolNames, sixNames);
+  assert.deepEqual(parseCtoDelivery(eight, workspaceId, projectId, ctoId).executionPolicy.toolNames, eightNames);
+  assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: [...eightNames, "builder.extra"] } }), workspaceId, projectId, ctoId), /exactly two, four, six or eight/);
+});
+
+test("parses exact scoped planning-only task packets and freezes nested data", () => {
+  const input = { projectId, ctoId, workstreamId: "WS-001", taskId: "TASK-001", revision: 1,
+    kind: "qa", title: "Verify contract", goal: "Confirm the approved behavior.", scopeNodeIds: ["auth-api"], requirementIds: ["REQ-1"],
+    dependencies: [], included: ["Contract test"], excluded: [], constraints: [], acceptance: ["Contract passes"], evidenceRequired: ["Test output"],
+    reuse: [{ id: "lib-1", sourceUrl: "https://example.com/source", licenseStatus: "unreviewed", licenseExpression: null,
+      evidenceRefs: [], compatibilityStatus: "not-verified", reuseScope: "Test adapter", doNotRebuild: "Use existing adapter" }],
+    testPlan: { environment: "Node 24", steps: ["Run focused test"], expectedResults: ["Pass"], passCriteria: ["All assertions pass"] } };
+  const parsed = parseTaskPacket(input, projectId, ctoId, "WS-001");
+  assert.deepEqual(parsed, input);
+  assert.notEqual(parsed, input);
+  assert(Object.isFrozen(parsed));
+  assert(Object.isFrozen(parsed.reuse[0]));
+  assert(Object.isFrozen(parsed.reuse[0]?.evidenceRefs));
+  assert(Object.isFrozen(parsed.testPlan?.steps));
+  assert.throws(() => parseTaskPacket(input, projectId, "CTO-002", "WS-001"), /expected scope/);
+  assert.throws(() => parseTaskPacket({ ...input, unexpected: true }, projectId, ctoId, "WS-001"), /unknown or missing fields/);
+  assert.throws(() => parseTaskPacket({ ...input, revision: 0 }, projectId, ctoId, "WS-001"), /positive safe integer/);
+  assert.throws(() => parseTaskPacket({ ...input, kind: "design" }, projectId, ctoId, "WS-001"), /unsupported/);
+  assert.throws(() => parseTaskPacket({ ...input, testPlan: { ...input.testPlan, steps: new Array(1) } }, projectId, ctoId, "WS-001"), /dense/);
+  assert.throws(() => parseTaskPacket({ ...input, reuse: [{ ...input.reuse[0], sourceUrl: "http://example.com" }] }, projectId, ctoId, "WS-001"), /HTTPS URL/);
 });
 
 test("rejects unknown keys, accessors, symbols, custom prototypes and malformed arrays", () => {

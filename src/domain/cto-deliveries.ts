@@ -14,6 +14,7 @@ const FIELDS = [
 const LEGACY_POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-workstream"] as const;
 const MEMORY_POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.update-cto-memory"] as const;
 const POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.submit-cto-question", "builder.update-cto-memory"] as const;
+const TASK_PACKET_POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.publish-task-packet", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.read-task-packets", "builder.submit-cto-question", "builder.update-cto-memory"] as const;
 const PHASES = ["prepared", "dispatching", "uncertain", "superseded", "submitted", "succeeded", "failed", "cancelled", "interrupted", "timed_out"] as const;
 const EARLY_PHASES = new Set<string>(["prepared", "dispatching", "uncertain", "superseded"]);
 
@@ -34,7 +35,7 @@ export type CtoDelivery = Readonly<{
   }>;
   executionPolicy: Readonly<{
     mode: "plugin-tools-only-v1";
-    toolNames: readonly typeof POLICY_TOOLS[number][];
+    toolNames: readonly (typeof POLICY_TOOLS[number] | typeof TASK_PACKET_POLICY_TOOLS[number])[];
   }>;
   createdAt: string;
   phase: typeof PHASES[number];
@@ -102,8 +103,8 @@ function parseExecutionPolicy(value: unknown): CtoDelivery["executionPolicy"] {
   }
   const keys = Reflect.ownKeys(row.toolNames);
   const length = Object.getOwnPropertyDescriptor(row.toolNames, "length")?.value;
-  if ((length !== 2 && length !== 4 && length !== 6) || keys.length !== length + 1 || !keys.includes("length")) {
-    throw new TypeError("executionPolicy.toolNames must contain exactly two, four or six dense entries with no extra properties.");
+  if ((length !== 2 && length !== 4 && length !== 6 && length !== 8) || keys.length !== length + 1 || !keys.includes("length")) {
+    throw new TypeError("executionPolicy.toolNames must contain exactly two, four, six or eight dense entries with no extra properties.");
   }
   const names: unknown[] = [];
   for (let index = 0; index < length; index += 1) {
@@ -113,7 +114,8 @@ function parseExecutionPolicy(value: unknown): CtoDelivery["executionPolicy"] {
     }
     names.push(descriptor.value);
   }
-  const expected = length === 2 ? LEGACY_POLICY_TOOLS : length === 4 ? MEMORY_POLICY_TOOLS : POLICY_TOOLS;
+  const expected = length === 2 ? LEGACY_POLICY_TOOLS : length === 4 ? MEMORY_POLICY_TOOLS
+    : length === 6 ? POLICY_TOOLS : TASK_PACKET_POLICY_TOOLS;
   if (names.some((name, index) => name !== expected[index])) {
     throw new TypeError("executionPolicy.toolNames must be a canonical sorted CTO planning profile.");
   }
