@@ -6,15 +6,24 @@
 
 ## 3A. 2026-10-29 기술 스택 선정 명세 — 공식 문서 조사 결과 (v15)
 
-> **용도:** 개인 전용 Builder *자체 구현*에 적용할 기술 선정 명세. 고객에게 납품할 S/M/L/XL 제품의 스택을 하나로 강제하지 않는다. 이 표의 `required`는 설계상의 목표이며 **SPS Core/SDK와 실제 버전 호환성 검증을 거쳐서 확정 구현**한다. `allowed`는 CTO가 범위 안에서 판단한다. `prohibited`는 본 제품의 기본 구현에서 사용하지 않는다는 뜻이며 특정 고객 계약이 요구하면 별도 기술 결정/명세 개정 후 검토한다.
+> **용도:** 공개·선택형 일반 목적 Builder plugin의 구현 후보를 정리한다. Builder는 Core의 유일한 제작 경로나 필수 첫 Workspace가 아니며 고객 납품 제품의 스택을 제한하지 않는다. 이 표의 `required`는 이 Builder reference workflow의 설계 목표이지 Core 전체의 의무가 아니다. 실제 채택 전 SPS Core/공개 SDK 호환성을 검증한다. `allowed`는 프로젝트 범위에서 판단하며 `prohibited`는 Builder 자체 기본 구현의 비채택을 뜻한다.
+
+## 2026-11-02 Core–Plugin 경계 정정
+
+- Plugin은 자기 화면 전체를 소유한다. Builder 화면 안에 Core navbar/sidebar/Dashboard/Inbox를 강제로 삽입하지 않는다. Core Native Settings·tray·전역 단축키는 독립 시스템 UI다. 공개 SDK의 설정 진입 기능은 선택적 연결점일 뿐 UI 요구사항이 아니다.
+- Host 설치는 Plugin 단위이고 활성화/config/data는 Workspace별 선택이다. Builder는 공개 일반 목적 plugin으로, 다른 IDE·CLI·Builder도 SDK를 사용할 수 있다. Primary는 0개일 수 있고 Builder가 필수 Primary가 아니다.
+- Lead 3개 세션/프로젝트별 CTO 단일 세션/독립 Dev·QA/GHA self-hosted Runner는 이 Builder가 선택한 솔루션 제작 워크플로의 확정 설계다. Core 계약으로 일반화하지 않는다.
+- Preview는 Builder 독점 기능이 아닌 선택형 재사용 capability다. Builder/Preview 라이선스 정책은 정해지지 않았다.
+- OS 사용자 경계로 제한된 파일 접근과 Vault plaintext 보호는 필수 보안 목표다. Trusted mode의 OS file-bound enforcement는 현재 부분/미완료다. SDK에서 파일을 숨기거나 DPAPI/프로세스 실행을 사용했다는 사실만으로 이를 달성했다고 간주하지 않는다.
+- Core 구현은 비공개로 유지하고 public SDK 계약만 참조한다. 이 설계 문서는 구현 상태를 증명하지 않는다.
 
 ### 3A.1 우선 채택 기술 (필수 / 구현 검증 조건부)
 
 | 영역 | 프로그램·스택 | 선정 상태 | 선택 이유·구현 경계 | 검증·위험 |
 | --- | --- | --- | --- | --- |
-| 호스트 / 플러그인 | **SPS Core + `@sonparkserver/plugin-sdk` Extension Profile v2** | **required** | Core를 수정하는 별도 앱이 아니라 Host에서 Workspace별로 활성화되는 사설 Builder 플러그인. SDK의 Manifest·Worker·Runtime·UI Bridge·Test Kit·Preview·Packaging 활용 | 공개 SDK가 Profile v2·도구/실행/상태·패키징 계약을 제공함을 확인. Host가 필요한 UI Shell/Primary/메모리 계약을 실제 지원하는지는 **Core CI 및 현행 Host에서 재확인** |
+| 호스트 / 플러그인 | **SPS Core + 공개 `@sonparkserver/plugin-sdk` Extension Profile v2** | **Builder 선택 시 required** | 공개 일반 목적 plugin. Host 설치는 Plugin 단위이며 Workspace별 활성화·설정·데이터 범위는 선택적. Preview는 필요할 때 재사용 | SDK 계약과 실제 Core 호환성은 별도 검증. Builder를 Primary로 강제하지 않으며 Primary 0개도 유효 |
 | 언어 / 런타임 | **Node.js 22+ / TypeScript / ESM** | **required** | 공개 SDK의 Node 22 이상 및 ESM Worker 번들에 맞춤. 새 백엔드 런타임을 추가하지 않음 | SDK 템플릿·현재 Core 빌드 구성과 버전 범위를 맞춘 뒤 잠금 파일로 고정. TS·Node 최신 버전 무조건 추종 금지 |
-| 플러그인 UI | **기존 SPS UI Bridge + Host가 지원하는 React UI** | **required (호환성 조건)** | 기존 Core 화면·좌측 메뉴·설정 진입을 재사용. v9 UI 레이아웃 유지, 중복 React Runtime/독립 Electron 창 생성 금지 | 공개 SDK UI Bridge는 제공되나 실제 Host UI ABI 및 React 주입·번들 방식 확인 필요 |
+| 플러그인 UI | **SPS UI Bridge + Host가 지원하는 React UI** | **Builder UI 선택 시 required** | Builder plugin이 전체 UI를 소유하고 v9 레이아웃은 plugin surface 안에 둔다. Core navbar/sidebar/dashboard/menu를 강제 주입하지 않는다. Core Native Settings는 독립이며 SDK 설정 링크는 선택 사항 | 공개 SDK 계약과 실제 Host UI ABI/React 번들 호환성은 별도 검증. 중복 React runtime과 독립 Electron 앱은 만들지 않음 |
 | 설계 지도 | **`@xyflow/react` (React Flow)** | **required** | 사용자 조회/줌/이동/기능 선택·Lead 수정 결과의 렌더링. **사용자 수동 Graph 편집 비활성** | MIT. 기존 UI의 3가지 설계 관점만 표시, Graph 데이터 원본으로 사용하지 않음 |
 | 그래프 자동 배치 | **`elkjs` (ELK.js)** | **required (라이선스 확인)** | 기능 DAG·CTO 영역 배치. 편집 UI 대신 Lead Graph Patch의 시각적 위치 계산 | **EPL-2.0** 라이선스 고지·변경/재배포 의무 확인 후 의존성 고정; React Flow Pro 유료 예제 코드는 무단 복제 금지 |
 | AI 실행 / 세션 | **Codex CLI + 공식 `@openai/codex-sdk` 또는 Codex app-server** | **required 기능 / 어댑터 선택 조건부** | Codex Harness 재사용, Lead 세 대화 세션·CTO 한 세션·Worker/QA 실행. **기본 초기 검증은 SDK**, 앱 내부의 전체 메시지·상태·승인/취소·실시간 이벤트가 필요하면 **app-server 우선 검증·채택** | TypeScript SDK는 시작/이어하기/재개 가능. app-server는 thread/read·turn/items/events 제공. 프로토콜/버전 성숙도와 Core의 기존 Codex Adapter 중복 여부 검증. **구현에서는 한 주 실행 경로만 선택** |
@@ -28,7 +37,7 @@
 | 범위 | 기본 선택 | 결정 | 새로 만들지 않을 것 |
 | --- | --- | --- | --- |
 | 작업·Graph·Revision·질문·승인 기록 | **Builder 고유 타입/데이터 + SPS SDK `platform`의 scoped state/events 등 검증된 저장·이벤트 원시 기능** | **required (저장 어댑터 조건부)** | 범용 Graph DB·Redis·PostgreSQL·이벤트 버스·작업 서버. **SDK가 Task/Role/Memory를 직접 제공하는 것은 아님** |
-| Lead 공유 기억 / CTO별 기억 / Worker 격리 | Core 기본 Memory가 실제 제공하는 scope·권한이면 재사용, 아니면 SDK 범위 내 Builder 전용 구조화 상태로 최소 구현 | **required 경계 / 구현 undecided** | 고객별 데이터를 합친 글로벌 메모리 DB·학습 서버·자동 공유 |
+| Builder 워크플로 기억 / CTO별 기억 / Worker 격리 | 공개 계약이 필요한 권한을 제공하면 Core scope를 재사용하고, 아니면 Builder 소유 구조화 상태를 최소 구현 | **Builder 워크플로 목표 / 구현 미정** | Core 전체에 강제되는 Lead/CTO/Worker 구성, 고객별 데이터를 합친 글로벌 기억 DB·학습 서버·자동 공유 |
 | Schema 검증 | SDK의 공식 타입·검증 함수를 먼저 활용, 프로젝트 추가 Schema는 JSON Schema/TypeScript 검증; **Zod는 기존 Core 의존성 및 보안·호환성 확인 후에만 allowed** | **allowed** | 동일 계약을 검증하는 중복 스키마 엔진. Zod 필수 종속화 |
 | 번들 / 테스트 / 패키징 | SPS SDK `sps-plugin` CLI (`build`/`validate`/`test`/`pack`), 기존 `npm`/Node `node:test`; UI E2E는 현행 Playwright 경로 확인 | **required / allowed** | 신규 패키저·자체 Release 서버. SDK `test`를 실제 E2E 또는 Core compatibility의 대체로 오해 금지 |
 | 고객 상담 입력 | 사용자가 선택해 제공한 파일·붙여넣기 → Builder parser → Lead. 크몽 공식 내보내기 확인 시만 API/Export 연동 | **required 최소 기능 / 외부 연동 undecided** | Document Worker·상시 크롤러·무허가 대화 추출·브라우저 로그인 우회 |
@@ -39,6 +48,7 @@
 - **prohibited (기본 설계):** 별도의 Electron/Tauri 데스크톱 앱, 독립 Next.js SaaS 프런트/백엔드, 자체 AI Harness·LangGraph/Paperclip/AutoGen 대체 오케스트레이터, 범용 Redis/RabbitMQ/Temporal 작업 큐, 자체 Git/Runner Fleet/CI 서버, 별도 Graph DB/Vector DB/검색 서버, 자체 VPN/SSH 서버, 공개 Marketplace·결제 서버, Document Worker AI.
 - **중요한 예외:** 위 비채택 목록이 **고객에게 제작·납품하는 제품의 기술 선택을 제한하지 않는다**. Builder 자체에는 쓰지 않지만 고객 계약 또는 기존 SPS Core 구현이 정당한 필요를 입증하면 승인된 Technology Decision Register를 개정한다.
 - **라이선스:** React Flow MIT, Octokit MIT, Zod MIT, SDK Apache-2.0, `elkjs` EPL-2.0은 용도·수정·배포 형태가 다르므로 패키지 버전별 `LICENSE/NOTICE` 원문을 Release 전 재검토한다.
+- **Builder / Preview 배포·라이선스:** 이 문서에서 정책을 새로 정하지 않는다. 공개 SDK와 Builder/Preview의 각 라이선스는 실제 배포 전 authoritative license 자료로 별도 확인한다.
 
 ### 3A.4 아직 코드/실행 환경에서 검증되지 않은 필수 점검
 

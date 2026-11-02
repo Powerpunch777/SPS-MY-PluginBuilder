@@ -3,16 +3,43 @@
 > **문서 ID:** SPS-PB-CODEX-FINAL-V15-2026-10-29  
 > **개정:** v15 — 최종 검토의 Reuse 조사 구분·Lead 전용 Graph 편집·설계 답변 즉시 반영 관련 표현 3곳 및 팔레트 문구를 수정하고 2026-10-29 공식 문서 기반 기술 스택 선정 명세와 미검증/제외 항목을 추가. v14 — Document Worker를 현재 제품·AI 조직·Skills·UI·검수 범위에서 제거하고 향후 재검토 대상으로 이동. 고객 상담 파일은 기존 Builder 가져오기·정규화 기능으로 Lead에 직접 인계. QA Worker와 Lead/CTO/Worker 구성 및 v13 UI 정합성은 유지. v13 — UI v8과 Lead 설계 편집 정책 정합성 반영. v12 — Lead 3세션/CTO 단일 세션/Worker 독립 세션 및 작업 자율성 확정.
 > **기준일:** 2026-10-29 (KST)  
-> **대상:** SPS의 개인 전용 Plugin Builder 플러그인 및 외주 제작 기능  
+> **대상:** SPS에서 선택적으로 사용할 수 있는 공개 범용 Plugin Builder 플러그인 및 고객 솔루션 제작 기능
 > **설계 상태:** 완성형 목표 아키텍처. 실제 저장소의 구현 완료·테스트 통과·제품 호환성을 확인한 보고서가 아니다.  
 > **최상위 원칙:** 이미 있는 기능은 재사용하고, Builder 고유의 기능만 최소한으로 구현한다.  
 > **전달 대상:** Codex. 이 파일 하나만 읽어도 제품 목표·범위·제약·완료 기준을 이해하도록 작성했다.
 
 ---
 
+## 2026-11-02 설계 기준 우선순위 정정
+
+2026-11-02 사용자 결정과 `CORE-PLUGIN-ARCHITECTURE-2026-10-25.md` 및
+`DESIGN-BASELINE-2026-11-02.md`에 따라 이 문서의 아래 오래된 전제보다 최신 Core–Plugin
+경계를 우선한다. 이 정정은 제품 목표이며 구현 완료를 뜻하지 않는다.
+
+- Builder는 누구나 선택해 쓸 수 있는 일반 목적의 공개 authoring plugin이다. Core의 유일한
+  제작 경로가 아니며 첫 Workspace에 필수이거나 모든 Workspace의 Primary일 필요가 없다.
+  다른 IDE·CLI·Builder도 같은 공개 SDK를 이용할 수 있다.
+- v15의 Lead 3개 세션·프로젝트별 CTO 단일 세션·독립 Dev/QA·GHA/self-hosted Runner 및
+  공유 기억 흐름은 이 Builder가 채택한 솔루션 제작 워크플로의 확정 설계다. Core나 다른 Builder의 필수 구조는 아니다.
+- Plugin은 화면 전체를 소유한다. Builder 화면 안에 Core navbar/sidebar/Dashboard/Inbox를
+  자동 삽입하거나 강제하지 않는다. OS tray·전역 단축키·Core Native Settings와 시스템 관리는 독립적으로
+  제공한다. 공개 SDK의 Core Settings 진입 API는 선택 가능한 affordance일 뿐 필수 메뉴가 아니다.
+- Plugin Preview는 Builder 전용이 아닌 재사용 가능한 선택 기능이다. Preview가 일반 기능으로
+  완성됐다고 이 설계만으로 주장하지 않는다. 검증되지 않은 Preview/Builder 라이선스를 만들지 않는다.
+- OS 사용자 경계 안의 파일 접근과 Vault plaintext 보호는 필수 목표다. 현재 trusted mode의
+  OS 파일 경계 강제는 부분 구현/미완료이므로, SDK 가림·DPAPI·프로세스 실행만으로 보호가
+  달성됐다고 표시하지 않는다. Core는 비공개, SDK는 공개라는 경계도 유지한다.
+- v9 검정·중립 회색은 Builder plugin 영역에만 적용한다. Core 전역 테마로 확장하지 않는다.
+
+아래 v15의 개인 외주 사례와 세션 운영안은 이 Builder의 솔루션 제작 워크플로로 남지만,
+플랫폼 전체에 대한 제한으로 해석하지 않는다. 날짜가 붙은 기존 검사·검증 기록은 그때의
+대상과 결과를 보존하며 이 정정으로 최신 구현 증거가 되지 않는다.
+
+---
+
 ## 0. Codex에게 전달하는 핵심 목표
 
-기존 SPS Core·SDK·Preview·Plugin Builder/Lead/Worker·GitHub 연동 코드를 **우선 재사용**하여, **본인 전용 외주 제작 플러그인**을 완성한다. **SPS Core Workspace를 고객 프로젝트의 기본 작업 경계로 사용하며, Host에 한 번 설치된 Plugin Builder를 각 Workspace의 Primary로 활성화하는 구성을 우선한다.** 고객의 요구사항을 **React Flow 기반 시각적 설계도**로 구성하고, 검증된 Blueprint와 기존 프로그램을 먼저 검색·조합하며, 부족한 부분만 Codex 등 코딩 AI로 개발한다. GitHub Actions와 Self-hosted Runner를 사용해 빌드·테스트·패키징하고, 요구사항별 검증 증거와 승인 내역을 연결해 실제 납품 가능한 산출물을 만든다.
+기존 SPS Core·공개 SDK·선택 가능한 Preview 및 외부 GitHub 연동을 **우선 재사용**하여, 일반 목적의 공개 Plugin Builder를 선택적으로 제공한다. Builder를 사용하기로 한 프로젝트에서는 SPS Core Workspace를 프로젝트 데이터 경계로 활용할 수 있고, Host에 설치된 플러그인을 필요 Workspace에서 선택적으로 활성화한다. **이 문서의 v15 Lead·CTO·Dev/QA 및 GHA/self-hosted 흐름은 Builder의 참고 솔루션 워크플로**다. 고객 요구사항을 React Flow 기반 설계도로 구성하고, 검증된 Blueprint와 기존 프로그램을 먼저 검색·조합하며, 필요한 부분만 Codex 등으로 개발·검증한다.
 
 이 Builder는 SPS 전용 플러그인만 제작하는 도구로 제한하지 않는다. **SPS 플러그인 제작을 지원하면서**, 독립 앱·웹/API·Python 자동화·Agent·워크플로 및 복합 워크스테이션도 같은 외주 프로젝트에서 설계·제작·납품할 수 있어야 한다. Hermes Agent, OpenClaw, OCE, n8n, Codex 및 앞으로 등장하는 프로그램을 **기술 중립적인 선택지**로 취급한다.
 
@@ -42,7 +69,7 @@
 
 ## 1. 제품 정체성과 외주 사업 범위
 
-**SPS Plugin Builder = 외주 작업을 수행하는 본인 전용 SPS 플러그인.** 기능 범위는 `Solution Builder`로 확장하지만, 고객에게 판매하는 범용 Builder 제품이나 공개 마켓플레이스가 아니다. 납품물은 Builder 자체가 아니라 고객 요구에 맞는 프로그램·플러그인·작업환경이다.
+**SPS Plugin Builder = 공개 제공을 목표로 하는 선택형 일반 목적 제작 플러그인.** 외주 프로젝트에서 고객 솔루션을 설계·제작하는 것은 적용 사례이며 개인 전용이나 유일한 제작 경로로 제한하지 않는다. Builder는 Core의 필수 기능이나 첫 Workspace의 필수 진입점이 아니다. 구체적인 배포 라이선스·판매·재판매·수익 배분은 별도 결정한다.
 
 | 분류 | 상품 가치 | 제품 예시 | Builder의 기술 선택과의 관계 |
 | --- | --- | --- | --- |
@@ -59,7 +86,7 @@
 
 ### 최종 사용자 경험
 
-1. 고객 또는 외주 프로젝트마다 원칙적으로 **SPS Core Workspace 하나**를 사용하고, 그 Workspace에서 Plugin Builder를 Primary로 활성화한다.
+1. Builder를 선택한 고객 또는 외주 프로젝트는 SPS Core Workspace를 데이터 경계로 활용할 수 있다. Builder 활성화와 Primary 지정은 Workspace별 선택이며, Primary가 없는 Workspace도 정상이다.
 2. **고객 상담 수집:** 크몽 등 외부 상담은 사용자가 대화방·메시지 수·기간을 선택하여 일회성으로 가져온다. 사용자 검토·프로젝트 매핑 후 기존 Builder 파일 처리 기능이 원문·첨부·출처를 정리해 Lead에게 직접 인계한다. **Lead가** 상담을 분석하고 요구사항·설계·계약·미결정 사항·인수 기준 초안을 작성한다.
 3. **Lead Agent**가 고객 대화를 분석하여 설계·계약 명세를 작성하고 사용할/사용하지 않을 프로그램·스택을 결정한 뒤 전체 기능·계약·의존성을 React Flow에 시각화한다. 모호한 고객 요구는 **사용자 대화용 메인 Lead 세션**에서 확인한다.
 4. Lead가 **의존성 엣지가 아니라 개발 가능한 기능 그룹(Workstream)** 을 CTO들에게 배정한다. CTO는 해당 그룹의 재사용 가능성을 더 조사하고 Workers에게 최소 구현 작업을 위임한다.
@@ -73,7 +100,7 @@
 
 ```mermaid
 flowchart TD
-  U["고객 요구·외주 담당자"] --> B["SPS Plugin Builder<br/>개인 전용 플러그인"]
+  U["사용자·고객 요구"] --> B["SPS Plugin Builder<br/>선택형 공개 authoring plugin"]
   B <--> V["React Flow / VAS<br/>Lead 설계 변경 결과·현황 조회"]
   B <--> S["승인 명세 + Solution Graph<br/>Builder 고유 데이터"]
   S <--> P["Blueprint / Reuse Planner<br/>Git Template·기존 패키지"]
@@ -198,20 +225,20 @@ flowchart TD
 
 > 여기서 `Workspace`는 **SPS Core가 제공하는 Workspace**를 뜻한다. 로컬 폴더, Git worktree, IDE workspace, Runner 작업 디렉터리와 동일하지 않다.
 
-- **기본 매핑: 고객 프로젝트 1개 ↔ SPS Core Workspace 1개.** 복수 저장소/기능 그룹/CTO는 한 Workspace 내부에서 프로젝트별 하위 개념으로 관리한다. 고객의 여러 프로젝트는 원칙적으로 서로 다른 Workspace로 나눈다. 프로젝트·고객 모델 자체는 Builder 플러그인이 소유한다.
-- **Plugin Builder 패키지는 Host에 1회 설치**하고, 각 프로젝트 Workspace에서 동일 Builder를 **그 Workspace의 Primary 플러그인**으로 활성화한다. 각 Workspace의 Primary는 최대 1개이며 Primary 없는 Workspace도 허용한다. 기존 Primary와 충돌하면 자동 교체하지 않고 사용자의 선택/승인이 필요하다.
+- Builder workflow를 선택한 경우의 권장 매핑은 고객 프로젝트 1개 ↔ SPS Core Workspace 1개다. 복수 저장소/기능 그룹/CTO는 한 Workspace 내부에서 프로젝트별 하위 개념으로 관리할 수 있고, 고객의 여러 프로젝트는 필요하면 서로 다른 Workspace로 나눈다. 이는 Core 전체 또는 다른 authoring 경로의 의무가 아니다. 프로젝트·고객 모델 자체는 Builder plugin이 소유한다.
+- 이 Builder 워크플로를 채택한 경우 Plugin Builder 패키지는 Host에 설치하고, 필요한 프로젝트 Workspace에서 선택적으로 활성화할 수 있다. Primary 지정을 택하면 Workspace당 최대 1개이며 Primary 없는 Workspace도 유효하다. Builder는 첫 Workspace나 모든 Workspace에서 필수가 아니고, 다른 Primary가 있으면 Core 정책에 따라 명시적으로 처리한다.
 - 각 Workspace의 활성화·설정·저장 데이터·승인 명세·Solution Graph·Agent 대화·메모리·작업 기록·사용권 범위는 독립적이다. Builder를 프로젝트마다 다시 설치하거나 SPS Core를 여러 번 실행하지 않는다.
 - 여러 Workspace를 동시에 열거나 백그라운드에서 실행하는 목표는 유지한다. **Workspace 전환/창 닫기가 다른 Workspace의 승인된 작업을 종료하지 않도록** Core 계약에 맞춘다.
 - SPS Core의 Workspace 실행·저장 격리 정책은 실제 구현 확인 대상이다. 문서상의 분리는 보안 검증이 끝난 사실을 뜻하지 않는다.
 
 ```text
 SPS Host / Core (공유, 한 번 실행)
-  ├─ Plugin Builder 설치 패키지 1개 (Host-scoped)
-  ├─ Workspace A (고객/프로젝트 A) ─ Primary = Plugin Builder
+  ├─ 선택한 경우 Plugin Builder 설치 패키지 1개 (Host-scoped)
+  ├─ Workspace A (Builder workflow 선택) ─ Builder 활성화 여부는 선택
   │    ├─ Lead · CTO A/B · Dev/QA Worker (상담 파일은 Builder Import)
   │    ├─ A 전용 메모리/대화/설계 Revision/Graph/작업상태
   │    └─ A 승인 범위의 GitHub 저장소·Workflow·Runner 실행 참조
-  ├─ Workspace B (고객/프로젝트 B) ─ Primary = Plugin Builder
+  ├─ Workspace B (Builder workflow 선택) ─ Builder 활성화 여부는 선택
   │    └─ B 전용 메모리/대화/설계 Revision/Graph/작업상태
   └─ Workspace C (다른 업무) ─ 다른 Primary 또는 없음
 ```
@@ -240,7 +267,7 @@ SPS Host / Core (공유, 한 번 실행)
 | GitHub Runner 컴퓨터 | 아니오 | 기존 Runner 공유, 고객 위험 수준에 따라 전용 그룹/격리 |
 | GPU에 올린 로컬 AI 모델 | 필수 아님 | 공유하는 경우 고객별 세션·메모리·프롬프트/캐시 분리 검증 |
 
-**자원 결론:** SPS Workspace를 프로젝트마다 나누는 것은 `코어·플러그인 패키지를 프로젝트 수만큼 복제하는 구조`가 아니므로 일반적으로 합리적인 기본값이다. 다만 프로젝트별 활성 세션·메모리·저장 데이터·UI·작업이 증가하는 만큼 RAM/CPU/디스크 사용량이 **0인 것은 아니다**. 실제 Core의 공유 Worker 방식과 백그라운드 실행을 기준으로 메모리·CPU·스토리지 증분을 측정하여 확인한다. Workspace를 단순히 나누기 위해 VM/컨테이너/별도 Runner를 만들지 않는다.
+**자원 결론:** Builder workflow를 사용하는 프로젝트를 Workspace별로 나누는 것은 `Core·Plugin 패키지를 프로젝트 수만큼 복제하는 구조`가 아니므로 유용한 선택지다. 프로젝트별 활성 세션·메모리·저장 데이터·UI·작업이 늘면 RAM/CPU/디스크 사용량도 늘 수 있으므로 실제 Core 동작을 기준으로 측정한다. Workspace를 단순히 나누기 위해 VM/컨테이너/별도 Runner를 만들지 않는다.
 
 ### 2B.4 SPS Core Workspace와 Git Worktree의 관계
 
@@ -251,7 +278,7 @@ SPS Host / Core (공유, 한 번 실행)
 
 ### 2B.5 구현·검증상의 주의
 
-현행 Core 설계 문서 `SPS_Core_Plugin_Architecture_Handoff_2026-10-25.md`는 Host당 최대 하나의 공유 Plugin Worker 모델, Workspace별 실행·데이터 분리, Primary 최대 1개, 여러 Workspace 동시 동작을 **목표 아키텍처**로 제시한다. **같은 Builder 패키지가 서로 다른 Workspace에서 동시에 활성화되는 실제 동작, 메모리/세션 분리, Workspace별 중지·복구, 비밀 원문·파일 접근 경계는 현행 저장소 코드와 테스트로 검증해야 한다.** 격리가 검증되지 않으면 고객 기밀을 안전하게 처리할 수 있다고 표시하지 않는다.
+Core architecture는 Host 설치와 Workspace별 활성화·config·data의 소유 경계를 정의한다. 이 Builder가 여러 Workspace에서 동시에 활성화되어야 한다는 요구는 Builder workflow 선택 시에만 해당하며 Core의 보편적 의무가 아니다. 실행·데이터 분리, Workspace별 중지·복구, 비밀 원문·파일 접근 경계는 현행 저장소 코드와 테스트로 검증해야 한다. 격리가 검증되지 않으면 고객 기밀을 안전하게 처리할 수 있다고 표시하지 않는다.
 
 ---
 
@@ -356,7 +383,7 @@ type ConversationBatchImport = {
 5. **미결정사항:** CTO는 단일 세션에서 모호성을 **CTO 질문 수신 전용 Lead 세션**에 전달 → 그 Lead 세션이 기존 명세로 해결 가능한지 판단하고 사용자 결정이 필요할 때 질문 생성 → 오른쪽 미결정 목록 → 중앙은 **질문 전용 Lead 세션**에서 사용자와 대화. **사용자가 답하면 추가 승인 질문 없이 Lead 공유 기억·설계 Revision에 반영**하고 필요한 CTO 명세 개정을 전파한다. 고객 상담에서 드러난 설계 모호성은 별도 미결정 큐를 거치지 않고 **메인 Lead 대화**에서 처리한다.
 6. **설계 시각화:** **Lead만 설계 구조·기술 선택·의존성·CTO 담당 Scope를 편집하며 사용자는 조회 및 Lead에게 자연어로 수정 요청만 할 수 있다. 사용자용 수동 노드 편집 UI는 필수 기능이 아니다.** 기능/의존성 기반 그래프를 유지하되 CTO별 담당 범위를 '영역 지도'처럼 구분하고, 현재 수행 중인 기능 위에 CTO 아이콘·작업명을 표시한다. CTO 아이콘 클릭 시 해당 CTO의 **세션 대화 기록은 보이되 사용자 입력은 불가능한 조회 전용 화면**으로 연결한다. 설계 노드/작업 실행/QA 결과의 데이터 원본은 분리한다.
 7. **시스템:** **현재 Workspace에 종속되지 않는 Host 공통 화면**이다. GitHub Self-hosted Runner에 등록된 컴퓨터, 온라인/오프라인, 작업 중(`busy`), OS, 라벨, Runner/그룹 식별, 최근 작업 및 최종 조회 시각을 보여준다. `status=online`과 `busy=true`를 구분하며, API 조회 실패/권한 부재/오래된 데이터는 별도 상태로 표현한다. 이는 실제 컴퓨터의 CPU/GPU 사용률을 자동으로 제공한다는 주장이 아니다. 필요시 호스트/노드 텔레메트리를 검증된 별도 소스로 연동한다.
-8. **Core 설정:** 좌측 하단 사용자 프로필에서 **SPS Core SDK가 실제 제공하는 Core 설정 진입 기능**을 호출한다. Builder가 Core 설정 관리자 화면을 자체 모방하거나 임의로 권한을 취득하지 않는다.
+8. **Core 설정:** Builder 플러그인 안에 필요한 자체 설정을 둔다. SDK가 공개하는 Core Settings 진입 API가 있으면 선택적 바로가기로 연결할 수 있지만, Core 메뉴 삽입이나 Builder 내부에서 Core 설정을 반드시 노출하는 것은 요구하지 않는다. Core Native Settings와 시스템 관리는 독립적으로 동작한다.
 9. **모바일/iPad:** 상단 바 제거 후에도 오른쪽 기록/질문 목록을 닫힌 드로어에서 열 수 있도록 **각 화면 제목 영역에 열기 버튼**을 둔다. 링크/해시 기반 화면 전환과 터치 선택을 유지한다.
 
 **UI–데이터 연결 및 책임:** (1) 설계 그래프와 CTO 담당 Scope는 **SPS Core Workspace별** 데이터를 읽고, CTO 생성·Worker 상태에 따라 실시간 재구성한다. (2) 기존 Builder 파일 가져오기 기능이 대화를 **Lead에게 직접 인계**하며, **설계 문서의 작성·관리 주체는 Lead**다. (3) `QA Worker`는 **CTO의 TestPlan을 실행·결과 회신**한다. (4) CTO 미결정 질문은 오른쪽 목록에서 선택지·장단점·Lead 추천·자유 입력으로 다루고, 사용자 결정이 확정되면 별도 승인 없이 **Lead의 Revision/관련 CTO 지시**로 연결한다. (5) HTML 시제품의 상태·그래프·Revision 변경은 **데모 메모리만** 수정하고 실제 SPS/GitHub 기록을 바꾸지 않는다.
@@ -680,15 +707,15 @@ workstream_spec:
 
 ## 3A. 2026-10-29 기술 스택 선정 명세 — 공식 문서 조사 결과 (v15)
 
-> **용도:** 개인 전용 Builder *자체 구현*에 적용할 기술 선정 명세. 고객에게 납품할 S/M/L/XL 제품의 스택을 하나로 강제하지 않는다. 이 표의 `required`는 설계상의 목표이며 **SPS Core/SDK와 실제 버전 호환성 검증을 거쳐서 확정 구현**한다. `allowed`는 CTO가 범위 안에서 판단한다. `prohibited`는 본 제품의 기본 구현에서 사용하지 않는다는 뜻이며 특정 고객 계약이 요구하면 별도 기술 결정/명세 개정 후 검토한다.
+> **용도:** 공개·선택형 일반 목적 Builder plugin 구현을 위한 기술 후보 명세다. 고객 납품 제품의 S/M/L/XL 스택을 제한하지 않는다. 표의 `required`는 Builder가 이 워크플로를 채택할 경우의 설계 목표이지 Core 전체의 의무가 아니다. **SPS Core/공개 SDK 호환성을 검증한 뒤 구현**한다. `allowed`는 프로젝트 범위에서 판단하고 `prohibited`는 Builder 기본 구현의 비채택을 뜻한다.
 
 ### 3A.1 우선 채택 기술 (필수 / 구현 검증 조건부)
 
 | 영역 | 프로그램·스택 | 선정 상태 | 선택 이유·구현 경계 | 검증·위험 |
 | --- | --- | --- | --- | --- |
-| 호스트 / 플러그인 | **SPS Core + `@sonparkserver/plugin-sdk` Extension Profile v2** | **required** | Core를 수정하는 별도 앱이 아니라 Host에서 Workspace별로 활성화되는 사설 Builder 플러그인. SDK의 Manifest·Worker·Runtime·UI Bridge·Test Kit·Preview·Packaging 활용 | 공개 SDK가 Profile v2·도구/실행/상태·패키징 계약을 제공함을 확인. Host가 필요한 UI Shell/Primary/메모리 계약을 실제 지원하는지는 **Core CI 및 현행 Host에서 재확인** |
+| 호스트 / 플러그인 | **SPS Core + 공개 `@sonparkserver/plugin-sdk` Extension Profile v2** | **Builder 선택 시 required** | Host에 Plugin 단위 설치, Workspace별 activation/config/data는 선택. 공개 일반 목적 Builder plugin이며 Preview는 필요 시 선택 재사용 | SDK 공개 계약과 실제 Core 호환성은 별도 검증. Builder를 필수 Primary로 강제하지 않으며 Primary 0개도 유효 |
 | 언어 / 런타임 | **Node.js 22+ / TypeScript / ESM** | **required** | 공개 SDK의 Node 22 이상 및 ESM Worker 번들에 맞춤. 새 백엔드 런타임을 추가하지 않음 | SDK 템플릿·현재 Core 빌드 구성과 버전 범위를 맞춘 뒤 잠금 파일로 고정. TS·Node 최신 버전 무조건 추종 금지 |
-| 플러그인 UI | **기존 SPS UI Bridge + Host가 지원하는 React UI** | **required (호환성 조건)** | 기존 Core 화면·좌측 메뉴·설정 진입을 재사용. v9 UI 레이아웃 유지, 중복 React Runtime/독립 Electron 창 생성 금지 | 공개 SDK UI Bridge는 제공되나 실제 Host UI ABI 및 React 주입·번들 방식 확인 필요 |
+| 플러그인 UI | **SPS UI Bridge + Host가 지원하는 React UI** | **Builder UI 선택 시 required** | Builder plugin이 화면 전체를 소유하고 v9 레이아웃은 plugin surface 내부에 둔다. Core 메뉴/sidebar 강제 삽입 금지. Core Native Settings는 독립, SDK 설정 링크는 선택 사항 | 공개 SDK UI Bridge와 실제 Host UI ABI·React 주입·번들 호환성을 별도 검증. 중복 React Runtime/독립 Electron 앱 금지 |
 | 설계 지도 | **`@xyflow/react` (React Flow)** | **required** | 사용자 조회/줌/이동/기능 선택·Lead 수정 결과의 렌더링. **사용자 수동 Graph 편집 비활성** | MIT. 기존 UI의 3가지 설계 관점만 표시, Graph 데이터 원본으로 사용하지 않음 |
 | 그래프 자동 배치 | **`elkjs` (ELK.js)** | **required (라이선스 확인)** | 기능 DAG·CTO 영역 배치. 편집 UI 대신 Lead Graph Patch의 시각적 위치 계산 | **EPL-2.0** 라이선스 고지·변경/재배포 의무 확인 후 의존성 고정; React Flow Pro 유료 예제 코드는 무단 복제 금지 |
 | AI 실행 / 세션 | **Codex CLI + 공식 `@openai/codex-sdk` 또는 Codex app-server** | **required 기능 / 어댑터 선택 조건부** | Codex Harness 재사용, Lead 세 대화 세션·CTO 한 세션·Worker/QA 실행. **기본 초기 검증은 SDK**, 앱 내부의 전체 메시지·상태·승인/취소·실시간 이벤트가 필요하면 **app-server 우선 검증·채택** | TypeScript SDK는 시작/이어하기/재개 가능. app-server는 thread/read·turn/items/events 제공. 프로토콜/버전 성숙도와 Core의 기존 Codex Adapter 중복 여부 검증. **구현에서는 한 주 실행 경로만 선택** |
@@ -702,7 +729,7 @@ workstream_spec:
 | 범위 | 기본 선택 | 결정 | 새로 만들지 않을 것 |
 | --- | --- | --- | --- |
 | 작업·Graph·Revision·질문·승인 기록 | **Builder 고유 타입/데이터 + SPS SDK `platform`의 scoped state/events 등 검증된 저장·이벤트 원시 기능** | **required (저장 어댑터 조건부)** | 범용 Graph DB·Redis·PostgreSQL·이벤트 버스·작업 서버. **SDK가 Task/Role/Memory를 직접 제공하는 것은 아님** |
-| Lead 공유 기억 / CTO별 기억 / Worker 격리 | Core 기본 Memory가 실제 제공하는 scope·권한이면 재사용, 아니면 SDK 범위 내 Builder 전용 구조화 상태로 최소 구현 | **required 경계 / 구현 undecided** | 고객별 데이터를 합친 글로벌 메모리 DB·학습 서버·자동 공유 |
+| Builder 워크플로 기억 / CTO별 기억 / Worker 격리 | 공개 계약이 필요한 권한을 제공하면 Core scope 재사용, 아니면 Builder 소유 구조화 상태를 최소 구현 | **Builder 워크플로 목표 / 구현 미정** | Core 전체에 강제되는 Lead/CTO/Worker 구성, 고객별 데이터를 합친 글로벌 기억 DB·학습 서버·자동 공유 |
 | Schema 검증 | SDK의 공식 타입·검증 함수를 먼저 활용, 프로젝트 추가 Schema는 JSON Schema/TypeScript 검증; **Zod는 기존 Core 의존성 및 보안·호환성 확인 후에만 allowed** | **allowed** | 동일 계약을 검증하는 중복 스키마 엔진. Zod 필수 종속화 |
 | 번들 / 테스트 / 패키징 | SPS SDK `sps-plugin` CLI (`build`/`validate`/`test`/`pack`), 기존 `npm`/Node `node:test`; UI E2E는 현행 Playwright 경로 확인 | **required / allowed** | 신규 패키저·자체 Release 서버. SDK `test`를 실제 E2E 또는 Core compatibility의 대체로 오해 금지 |
 | 고객 상담 입력 | 사용자가 선택해 제공한 파일·붙여넣기 → Builder parser → Lead. 크몽 공식 내보내기 확인 시만 API/Export 연동 | **required 최소 기능 / 외부 연동 undecided** | Document Worker·상시 크롤러·무허가 대화 추출·브라우저 로그인 우회 |
@@ -1070,7 +1097,7 @@ REQ → ACC(완료 기준) → Feature/Component → Git commit / PR
 - [ ] AC-36. CTO별 PR은 그룹 단위 검증 후 Lead의 계약·전체 통합 기준에 따라 증분 병합되며, 기능 그룹 간 불일치는 통합 실패로 표시한다.
 - [ ] AC-37. CTO가 정의한 Test Plan에 따라 CTO 또는 QA Worker가 GitHub Actions의 적합한 Runner에서 테스트를 수행하고 실제 로그·Check를 증거로 연결한다. QA 권한으로 운영 SSH 관리자 권한을 취득하지 않는다.
 - [ ] AC-38. 사용자 피드백·질문 답변은 Lead의 명세 Revision·Graph 영향 분석·해당 CTO 변경 전파로 추적하며 **설계 변경 자체에는 중복 사용자 승인을 요구하지 않는다**. 대외 계약·배포 등 독립 권한 행위만 해당 승인을 요구한다. 변경된 Workstream의 작업 중단·계속·재작업은 CTO가 판단한다.
-- [ ] AC-39. 하나의 Host에 Plugin Builder 패키지를 한 번 설치하고, 프로젝트 A/B의 서로 다른 SPS Workspace에서 각 Primary로 활성화하며 데이터·설정·세션이 독립적으로 동작한다. Core의 현재 지원 여부를 실증한다.
+- [ ] AC-39. Builder workflow를 선택한 경우 Host에 플러그인을 설치하고 필요한 Workspace에서만 활성화해 데이터·설정·세션 경계를 검증한다. Builder 활성화와 Primary 지정은 선택 사항이며 Primary 0개 Workspace도 정상이다.
 - [ ] AC-40. Workspace A의 Builder 상담 입력·Lead·CTO·Worker·QA 및 검색 인덱스/캐시가 Workspace B의 비공개 고객 자료·메모리·Secret을 읽거나 컨텍스트에 포함하지 못한다.
 - [ ] AC-41. Workspace A 일시정지·중단·재개·초기화·백업 동작이 Workspace B의 실행·데이터에 영향을 주지 않는다. 외부 Actions 실행의 실제 중단/재개 상태도 확인한다.
 - [ ] AC-42. 동시 Workspace 수 증가에 따른 Core·Plugin Worker·Agent 세션·UI·스토리지의 CPU/RAM 비용을 측정하고, Workspace당 Core/Builder 전체 프로세스의 불필요한 복제가 없음을 확인한다.
@@ -1094,7 +1121,7 @@ REQ → ACC(완료 기준) → Feature/Component → Git commit / PR
 
 ## 11C. 추가 인수 테스트 — UI·시스템·CLI 인증 프로필 (v4)
 
-- [ ] AC-53. Builder UI의 상단 가로 헤더가 없어도 Lead 대화와 각 작업 화면이 최대 높이를 사용하며, SPS Core Workspace 전환·왼쪽 메뉴·프로필 Core 설정 진입은 유지된다.
+- [ ] AC-53. Builder plugin surface 안에서 v9의 Workspace 전환·왼쪽 메뉴·프로필 위치를 유지한다. Builder 화면 안에 Core chrome을 강제 주입하지 않으며 Core Native Settings는 독립한다. SDK 설정 진입 API가 있으면 선택적으로 연결할 수 있다.
 - [ ] AC-54. 왼쪽 현재 활성 AI 목록은 선택 Workspace에서 실제 실행 중인 CTO/Worker 등만 포함하며, **Lead는 목록에서 제외**된다. 메인 Lead 대화와 조직도 기능은 그대로 동작한다.
 - [ ] AC-55. CTO/Worker 세션 화면은 중앙에 독립된 실제 대화 이력을 **읽기 전용**으로 표시하고 오른쪽에 해당 AI의 수정·지시·작업 기록을 연결한다.
 - [ ] AC-56. 미결정사항의 CTO 질문 수신 Lead와 질문 전용 Lead는 메인 Lead와 별개의 세션이지만 같은 프로젝트 Lead 기억을 공유한다. 사용자 답변은 별도 재승인 없이 설계 Revision에 반영되고 이력이 남는다.
@@ -1254,7 +1281,7 @@ REQ → ACC(완료 기준) → Feature/Component → Git commit / PR
 - 모든 기술을 하나의 만능 API로 변환하는 대규모 범용 Adapter 플랫폼.
 - 자체 코딩 모델·코딩 Agent Runtime·AI Observability 플랫폼 재구축.
 - 16개 상품 각각을 위한 독립 제작 엔진 개발.
-- 고객용 공개 마켓플레이스, 타인용 범용 Builder, 의무적인 SaaS 호스팅·구독·자동판매 운영.
+- Builder를 유일한 제작 경로로 만들기, 의무적인 SaaS 호스팅·구독·자동판매 운영. Marketplace는 별도 결정이며 여기서 라이선스·결제 정책을 정하지 않는다.
 - 실제 고객 데이터·계정·운영 서버에 승인 없는 자동 배포/삭제/접근.
 - 크몽 대화의 상시 감시·자동 동기화·무허가 일괄 크롤링 또는 인증·보안 우회.
 
@@ -1289,4 +1316,4 @@ REQ → ACC(완료 기준) → Feature/Component → Git commit / PR
 
 ---
 
-**Codex 전달용 한 줄 목표:** *"기존 SPS 코어/빌더와 외부 프로그램을 최대한 재사용하여, React Flow에서 고객 워크스테이션을 설계하고 Codex·GitHub Actions로 필요한 부분만 개발·검증한 뒤 사용자 승인과 함께 납품할 수 있는 개인 전용 Plugin Builder를 완성한다. 자체 Runner·스케줄러·네트워크·코딩 엔진은 새로 만들지 않는다."*
+**Codex 전달용 한 줄 목표:** *"공개 SDK와 기존 SPS Core·외부 프로그램을 최대한 재사용하는 선택형 범용 Plugin Builder를 제공한다. Builder를 선택한 프로젝트는 React Flow에서 솔루션을 설계하고 Codex·GitHub Actions로 필요한 부분을 개발·검증한다. Lead3/프로젝트 CTO 단일 세션/독립 Dev·QA와 Runner는 이 Builder의 솔루션 제작 설계이며 Core나 다른 Builder의 필수 요구사항은 아니다. 배포·판매·라이선스 조건은 별도 결정한다."*
