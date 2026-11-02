@@ -16,5 +16,7 @@ test("Workspace Shell routes match the declared page route rather than a package
   assert.equal(manifest.entrypoints.workspaceWorker, manifest.entrypoints.worker);
   assert.ok(manifest.capabilities.includes("ui.workspaceShell.provide"));
   assert.ok(manifest.capabilities.includes("agent.sessions.create"));
-  assert.equal(manifest.capabilities.includes("agent.sessions.send"), false);
+  for (const capability of ["agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel"]) {
+    assert.ok(manifest.capabilities.includes(capability));
+  }
 });

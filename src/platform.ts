@@ -5,6 +5,8 @@ import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
 import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agent.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
+import type { LeadChannel } from "./domain/model.ts";
+import { createLeadConversationStore } from "./lead-conversations.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -180,6 +182,66 @@ export async function prepareLeadSessions(companyId: string, params: Record<stri
   });
 }
 
+function conversationInput(params: Record<string, unknown>, extra: readonly string[] = []) {
+  const keys = ["channel", ...extra];
+  if (Object.keys(params).sort().join(",") !== [...keys].sort().join(",")
+    || typeof params.channel !== "string" || !LEAD_CHANNELS.includes(params.channel as LeadChannel)) {
+    throw new TypeError("Lead conversation requires a supported channel and exact fields.");
+  }
+  return params.channel as LeadChannel;
+}
+
+async function withConversation<T>(companyId: string, platform: SpsPlatformInvocationContext,
+  action: (store: ReturnType<typeof createLeadConversationStore>) => Promise<T>) {
+  workspaceId(companyId);
+  return serialize(companyId, async () => {
+    const binding = await readLeadAgentBinding(companyId, platform);
+    const sessions = await leadSessionsFor(companyId, binding, platform);
+    const check = async () => {
+      await assertLeadSelection(companyId, binding, platform);
+      const current = await leadSessionsFor(companyId, binding, platform);
+      if (LEAD_CHANNELS.some(channel => current.sessions[channel] !== sessions.sessions[channel])) {
+        throw new Error("Lead session binding changed. Refresh without automatically resending.");
+      }
+    };
+    await check();
+    const beforeDispatch = async () => {
+      await check();
+      const options = await readLeadAgentOptions(companyId, platform);
+      if (!options.agents.some(agent => agent.id === binding.selectedAgentId && ["idle", "running"].includes(agent.status))) {
+        throw new Error("The selected Lead Agent is unavailable. Existing history has been kept.");
+      }
+      await check();
+    };
+    return action(createLeadConversationStore(platform, sessions, check, beforeDispatch));
+  });
+}
+
+export async function readLeadConversation(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  const channel = conversationInput(params, ["cursor"]);
+  if (params.cursor !== null && (typeof params.cursor !== "string" || !UUID.test(params.cursor))) throw new TypeError("Invalid conversation cursor.");
+  return withConversation(companyId, platform, store => store.page(channel, params.cursor as string | null));
+}
+export async function sendLeadMessage(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  const channel = conversationInput(params, ["requestId", "text"]);
+  if (channel === "cto-inbox") throw new Error("The internal Lead intake channel does not accept user messages.");
+  if (typeof params.requestId !== "string" || !UUID.test(params.requestId) || typeof params.text !== "string") throw new TypeError("Invalid Lead message.");
+  return withConversation(companyId, platform, store => store.send(channel, params.requestId as string, params.text as string));
+}
+export async function refreshLeadConversation(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  const channel = conversationInput(params);
+  return withConversation(companyId, platform, store => store.refresh(channel));
+}
+export async function cancelLeadMessage(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  const channel = conversationInput(params);
+  return withConversation(companyId, platform, store => store.cancel(channel));
+}
+export async function resumePreparedLeadMessage(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  const channel = conversationInput(params, ["requestId"]);
+  if (channel === "cto-inbox" || typeof params.requestId !== "string" || !UUID.test(params.requestId)) throw new TypeError("Invalid prepared message.");
+  return withConversation(companyId, platform, store => store.resumePrepared(channel, params.requestId as string));
+}
+
 function userActionInput(params: Record<string, unknown>, context: { companyId: string; actor: { type: string; companyId: string } }) {
   if (context.actor.type !== "user" || context.actor.companyId !== context.companyId) {
     throw new Error("Builder settings and input require an authenticated user action.");
@@ -194,13 +256,20 @@ function userActionInput(params: Record<string, unknown>, context: { companyId: 
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
-    capabilities: ["plugin.state.read", "plugin.state.write", "agents.read", "agent.sessions.create"],
+    capabilities: ["plugin.state.read", "plugin.state.write", "agents.read", "agent.sessions.create",
+      "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel"],
     data: [{ key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>
       await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-sessions", handler: async (params, platform) =>
-      await readLeadSessions(workspaceId(params.companyId), platform) as unknown as JsonValue }],
+      await readLeadSessions(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.lead-conversation", handler: async (params, platform) => {
+      // renderEnvironment is Host UI envelope metadata, not conversation input
+      // or authority. It must not enter the strict domain payload or storage.
+      const { companyId, renderEnvironment: _renderEnvironment, ...input } = params;
+      return await readLeadConversation(workspaceId(companyId), input, platform) as unknown as JsonValue;
+    } }],
     actions: [{ key: "builder.import-consultation", handler: async (params, context) => {
       // Core includes its authorized companyId in action parameters. It is
       // envelope metadata, never a user-selected destination or domain field.
@@ -208,6 +277,14 @@ export function createBuilderPlatform() {
     } }, { key: "builder.select-lead-agent", handler: async (params, context) =>
       selectLeadAgent(context.companyId, userActionInput(params, context), context) },
     { key: "builder.prepare-lead-sessions", handler: async (params, context) =>
-      prepareLeadSessions(context.companyId, userActionInput(params, context), context) }],
+      prepareLeadSessions(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.send-lead-message", handler: async (params, context) =>
+      sendLeadMessage(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.refresh-lead-conversation", handler: async (params, context) =>
+      refreshLeadConversation(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.cancel-lead-message", handler: async (params, context) =>
+      cancelLeadMessage(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.resume-prepared-lead-message", handler: async (params, context) =>
+      resumePreparedLeadMessage(context.companyId, userActionInput(params, context), context) }],
   });
 }

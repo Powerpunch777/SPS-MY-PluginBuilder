@@ -240,7 +240,36 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
   if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-lead-agent-host.png"));
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to unchanged consultation");
-  assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]').disabled`), true);
+  await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled === false`),
+    Boolean, "explicit Lead send readiness after session preparation (no execution requested)");
+  const conversation = () => request(`/api/plugins/${plugin.id}/data/builder.lead-conversation`, {
+    method: "POST", body: { companyId: company.id, params: { channel: "main", cursor: null } },
+  }).then(value => value.data);
+  const runsForLead = () => request(`/api/companies/${company.id}/heartbeat-runs?agentId=${leadAgent.id}&limit=100`);
+  assert.deepEqual(await runsForLead(), []);
+  const dispatchText = "Builder durable dispatch probe: no AI or process command is configured.";
+  await workspace.evaluate(`(() => { const input=document.querySelector('textarea[aria-label="Lead에게 메시지"]');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(dispatchText)});
+    input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="메시지 보내기"]')?.disabled === false`), Boolean, "send button for fixed non-AI probe");
+  await click(workspace, 'button[aria-label="메시지 보내기"]', "Send one explicit probe to the unconfigured Process adapter");
+  const failedConversation = await eventually(conversation,
+    value => value.totalTurns === 1 && value.active === null && value.turns[0]?.state === "failed", "durable failed run and completed UI observation");
+  const failedTurn = failedConversation.turns[0];
+  assert.equal(failedTurn.text, dispatchText);
+  assert.equal(failedTurn.answer, null, "A Process adapter failure must not invent an AI answer.");
+  assert.ok(failedTurn.runId);
+  assert.equal((await runsForLead()).length, 1);
+  await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes('실행 실패')`), Boolean, "actual failure state in transcript");
+  const duplicate = await request(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`, {
+    method: "POST", body: { companyId: company.id, params: { channel: "main", requestId: failedTurn.requestId, text: dispatchText } },
+  });
+  assert.equal(duplicate.data.saved, true);
+  assert.equal((await runsForLead()).length, 1, "A repeated request must not schedule another run.");
+  assert.deepEqual(await data(company.id), saved, "Conversation turns must not enlarge the initial snapshot.");
+  const leadAfterDispatch = await leadOptions(company.id);
+  assert.equal(leadAfterDispatch.selectedAgentId, savedLead.selectedAgentId);
+  assert.equal(leadAfterDispatch.revision, savedLead.revision);
   const fit = await workspace.evaluate(`(() => {const shell=document.querySelector('.builder-shell');
     const main=document.querySelector('.builder-message-main');const rail=document.querySelector('.builder-activity-rail');
     return {width:shell.clientWidth,mainWidth:main.clientWidth,overflow:shell.scrollWidth>shell.clientWidth,
@@ -257,8 +286,10 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   workspace = await restart({ companyPrefix: company.issuePrefix, pluginId: plugin.id, readySelector: ".builder-shell" });
   assert.deepEqual(await data(company.id), saved, "Host restart lost Builder state.");
   assert.deepEqual((await data(secondCompany.id)).messages, []);
-  assert.deepEqual(await leadOptions(company.id), savedLead, "Host restart lost the separate Lead binding.");
+  assert.deepEqual(await leadOptions(company.id), leadAfterDispatch, "Host restart lost the Lead binding or actual post-dispatch Agent status.");
   assert.deepEqual(await leadSessions(company.id), preparedSessions, "Host restart lost Lead sessions.");
+  assert.deepEqual(await conversation(), failedConversation, "Host restart lost the exact turn/run identity.");
+  assert.equal((await runsForLead()).length, 1);
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
   assert.deepEqual((await request(`/api/agents/${leadAgent.id}`)).adapterConfig, leadAgent.adapterConfig,
     "Host restart or Lead binding changed the original Agent configuration.");
@@ -271,6 +302,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   console.log(JSON.stringify({ builderCoreHost: true, realUiBridge: true, actualWorkspaceState: true,
     workspaceIsolation: true, explicitShell: true, idempotentInput: true, hostRestart: true,
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
+    actualNonAiFailedDispatch: true, duplicateDispatchPrevented: true, conversationRunRestart: true,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
@@ -281,4 +313,5 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
       leadSelectCount: systemView.leadSelectCount, leadSaveCount: systemView.leadSaveCount,
       savedAgentId: savedLead.selectedAgentId },
     cleanupQualificationPending: true }));
+  return { workspace, plugin, preparedSessions, savedLead };
 }

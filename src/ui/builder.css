@@ -319,3 +319,5 @@
 .builder-shell :where(button, a, input, select, textarea) { max-width: 100%; }
 .builder-shell :where(p, strong, small, span, label) { overflow-wrap: anywhere; }
 .builder-page-actions > * { min-width: 0; }
+.builder-conversation-controls { flex-shrink: 0; padding: 8px 18px; border-bottom: 1px solid var(--builder-border); }
+.builder-conversation-controls p { margin: 5px 0 0; }

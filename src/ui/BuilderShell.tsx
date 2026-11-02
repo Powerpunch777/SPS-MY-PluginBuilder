@@ -146,6 +146,55 @@ function MessageList({ messages, actor, actors = [] }: { messages: readonly Buil
   </div>;
 }
 
+function conversationMessages(props: BuilderShellProps, channel: LeadChannel): BuilderMessage[] {
+  const page = props.conversation;
+  if (!page || page.channel !== channel) return [];
+  return [...page.turns].reverse().flatMap(turn => [
+    { id: `${turn.requestId}:user`, channel, actorId: null, role: "user" as const, text: turn.text, createdAt: turn.createdAt, runId: turn.runId },
+    ...(turn.answer === null ? [] : [{ id: `${turn.requestId}:assistant`, channel, actorId: null, role: "assistant" as const,
+      text: turn.answer, createdAt: turn.createdAt, runId: turn.runId }]),
+    ...(turn.state === "succeeded" && turn.answer === null ? [{ id: `${turn.requestId}:unavailable`, channel, actorId: null,
+      role: "system" as const, text: "실행은 끝났지만 확인 가능한 답변을 제공하지 않았습니다.", createdAt: turn.createdAt, runId: turn.runId }] : []),
+    ...(["failed", "cancelled", "interrupted", "timed_out"].includes(turn.state) ? [{ id: `${turn.requestId}:terminal`, channel, actorId: null,
+      role: "system" as const, text: ({ failed: "실행 실패", cancelled: "실행 중단", interrupted: "실행 끊김", timed_out: "실행 시간 초과" } as Record<string, string>)[turn.state]!,
+      createdAt: turn.createdAt, runId: turn.runId }] : []),
+  ]);
+}
+
+function ConversationControls({ props, channel }: { props: BuilderShellProps; channel: LeadChannel }) {
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  if (props.conversation === undefined || props.conversationChannel !== channel) return null;
+  const current = props.conversation?.active;
+  const labels = { prepared: "저장됨 · 전송 준비 중", dispatching: "접수 확인 중", uncertain: "접수 불명확 · 자동 재전송하지 않음",
+    submitted: "실행 중 · 응답 확인 가능", succeeded: "실행 완료", failed: "실행 실패", cancelled: "중단됨", interrupted: "실행 끊김", timed_out: "시간 초과" };
+  async function perform(action: (() => Promise<void>) | undefined) {
+    if (!action || busy) return;
+    setBusy(true); setFeedback("");
+    try { await action(); }
+    catch { setFeedback("결과를 확인하지 못했습니다. 같은 실행의 상태를 다시 확인해 주세요."); }
+    finally { setBusy(false); }
+  }
+  return <div className="builder-conversation-controls">
+    <div className="builder-header-actions">
+      <button className="builder-quiet-button" disabled={busy || props.conversationLoading || !props.onRefreshConversation}
+        onClick={() => void perform(props.onRefreshConversation)} type="button"><RefreshCw size={14} />응답 확인</button>
+      {current?.state === "prepared" && <button className="builder-quiet-button" disabled={busy || props.conversationLoading || !props.onResumePreparedLeadMessage}
+        onClick={() => void perform(props.onResumePreparedLeadMessage)} type="button">저장된 메시지 전송</button>}
+      {current && <button className="builder-quiet-button" disabled={busy || props.conversationLoading || !props.onCancelLeadMessage || current.cancellationRequested}
+        onClick={() => void perform(props.onCancelLeadMessage)} type="button">실행 중단</button>}
+      {props.onOlderConversation && <button className="builder-quiet-button" disabled={busy || props.conversationLoading}
+        onClick={props.onOlderConversation} type="button">이전 대화</button>}
+      {props.conversationHasNewer && <button className="builder-quiet-button" disabled={busy || props.conversationLoading}
+        onClick={props.onLatestConversation} type="button">최신 대화</button>}
+    </div>
+    {(current || props.conversationLoading || props.conversationError || feedback) && <p className="builder-composer-note" role="status">
+      {props.conversationLoading ? "대화 상태 확인 중" : props.conversationError ?? (feedback
+        || (current ? `${labels[current.state]}${current.cancellationRequested && current.termination !== "confirmed" ? " · 종료 확인 대기" : ""}` : ""))}
+    </p>}
+  </div>;
+}
+
 function MessageComposer({
   enabled, channel, onSend,
 }: { enabled: boolean; channel: LeadChannel; onSend?: BuilderShellProps["onSendMessage"] }) {
@@ -159,12 +208,12 @@ function MessageComposer({
     setSending(true);
     setFeedback("");
     try { await onSend(value, channel); setText(""); }
-    catch { setFeedback("메시지를 저장하지 못했습니다. 다시 시도해 주세요."); }
+    catch { setFeedback("전송 결과를 확인하지 못했습니다. 응답 확인으로 기존 실행을 확인해 주세요."); }
     finally { setSending(false); }
   }
   return <div className="builder-composer">
     <form className="builder-compose-form" onSubmit={submit}>
-      <textarea aria-label="Lead에게 메시지" disabled={!enabled || sending} onChange={event => setText(event.target.value)}
+      <textarea aria-label="Lead에게 메시지" maxLength={16_384} disabled={!enabled || sending} onChange={event => setText(event.target.value)}
         placeholder={enabled ? "Lead에게 메시지 보내기" : "메시지 전송을 사용할 수 없습니다"} value={text} />
       <button aria-label={sending ? "메시지 전송 중" : "메시지 보내기"} className="builder-primary-button builder-send" disabled={!enabled || sending || !text.trim()} title="메시지 보내기" type="submit">
         {sending ? <LoaderCircle aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
@@ -188,7 +237,8 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
   const [importOpen, setImportOpen] = useState(false);
   const readOnly = Boolean(actor);
   const channel: LeadChannel = actor ? "cto-inbox" : "main";
-  const enabled = !readOnly && props.snapshot.integrations.ai === "ready" && Boolean(props.onSendMessage);
+  const enabled = !readOnly && Boolean(props.onSendMessage)
+    && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === channel && !props.conversation.active);
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
     <button aria-label="작업 기록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section aria-label={actor ? `${actor.label} 세션` : "Lead 대화"} className="builder-message-main">
@@ -197,13 +247,14 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
           <p>{actor ? `${ACTOR_STATUS[actor.status]} · 읽기 전용 세션` : "전체 설계와 기능 통합을 담당하는 AI"}</p></div>
         <div className="builder-header-actions">
           {actions}<span className="builder-agent-dot">{actor ? actorInitial(actor) : "LEAD"}</span>
-          <span className={`builder-lead-status${enabled ? " is-ready" : ""}`}>{actor ? "읽기 전용" : enabled ? "대화 가능" : "미연결"}</span>
+          <span className={`builder-lead-status${enabled ? " is-ready" : ""}`}>{actor ? "읽기 전용" : enabled ? "전송 준비됨" : props.conversation?.active ? "실행 확인 중" : "미연결"}</span>
           {!readOnly && props.onImportConsultation && <button aria-expanded={importOpen} aria-label="상담 텍스트 가져오기" className="builder-icon-button" onClick={() => setImportOpen(open => !open)} type="button"><Upload /><span className="builder-refresh-label">상담 가져오기</span></button>}
           <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">작업 기록</span></button>
         </div>
       </div>
       {props.loading && <div className="builder-status-strip"><LoaderCircle /> Workspace 상태를 불러오는 중입니다.</div>}
       {props.error && <div className="builder-status-strip is-error" role="alert"><AlertCircle /> Workspace 상태를 불러오지 못했습니다.</div>}
+      {!readOnly && <ConversationControls channel={channel} props={props} />}
       <MessageList actor={actor} messages={messages} />
       {readOnly ? <div className="builder-composer-note" style={{ padding: 13 }}>이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.</div> : <>
         {importOpen && props.onImportConsultation && <ConsultationImport onImport={props.onImportConsultation} />}
@@ -357,13 +408,14 @@ function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
   const openQuestions = props.snapshot.questions.filter(question => question.status === "open");
   const [selectedId, setSelectedId] = useState<string | null>(openQuestions[0]?.id ?? props.snapshot.questions[0]?.id ?? null);
   const selected = props.snapshot.questions.find(question => question.id === selectedId) ?? openQuestions[0] ?? props.snapshot.questions[0] ?? null;
-  const messages = selectLeadDecisionTranscript(props.snapshot);
+  const messages = [...selectLeadDecisionTranscript(props.snapshot), ...conversationMessages(props, "decisions")];
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
     <button aria-label="질문 목록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section className="builder-message-main">
       <div className="builder-chat-context"><div className="builder-chat-heading"><h1>미결정사항</h1><p>질문 전용 Lead 대화 · Builder에 저장된 기록</p></div>
         <button aria-label="미결정사항 목록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">질문 목록</span></button>
       </div>
+      <ConversationControls channel="decisions" props={props} />
       {selected ? <><div className="builder-question-detail" style={{ padding: "12px 18px 0" }}>
         <StatusLabel status={selected.status} /><h2 style={{ margin: "7px 0", fontSize: 14 }}>{selected.title}</h2><p>{selected.text}</p>
         {selected.options.map(option => <div className="builder-option" key={option.id}><strong>{option.label}</strong><small>{option.tradeoff}</small></div>)}
@@ -372,7 +424,8 @@ function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
       </div></>
         : <EmptyState icon={CircleHelp} title="미결정사항이 없습니다" detail="Lead가 사용자 결정을 요청하면 여기에 표시됩니다." />}
       {(selected || messages.length > 0) && <MessageList actors={props.snapshot.actors} messages={messages} />}
-      {selected && <MessageComposer channel="decisions" enabled={Boolean(props.onSendMessage) && props.snapshot.integrations.ai === "ready" && selected.status === "open"} onSend={props.onSendMessage} />}
+      {selected && <MessageComposer channel="decisions" enabled={Boolean(props.onSendMessage) && selected.status === "open"
+        && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === "decisions" && !props.conversation.active)} onSend={props.onSendMessage} />}
     </section>
     <ActivityRail onClose={onDrawerClose} onSelectQuestion={setSelectedId} props={props} selectedQuestion={selected} view="decisions" />
   </div>;
@@ -487,11 +540,14 @@ export function BuilderShell(props: BuilderShellProps) {
   const activeActor = actorId ? props.snapshot.actors.find(actor => actor.id === actorId) ?? null : null;
   const current = VIEW_TITLES[view];
   const leadIds = new Set(props.snapshot.actors.filter(actor => actor.role === "lead").map(actor => actor.id));
-  const mainMessages = props.snapshot.messages.filter(message => message.channel === "main"
-    && (message.actorId === null || leadIds.has(message.actorId)));
+  const mainMessages = [...props.snapshot.messages.filter(message => message.channel === "main"
+    && (message.actorId === null || leadIds.has(message.actorId))), ...conversationMessages(props, "main")];
   const openQuestionCount = props.snapshot.questions.filter(question => question.status === "open").length;
 
-  function selectView(next: BuilderView) { setView(next); setActorId(null); setDrawerOpen(false); }
+  function selectView(next: BuilderView) {
+    setView(next); setActorId(null); setDrawerOpen(false);
+    if (next === "lead" || next === "decisions") props.onLeadChannelChange?.(next === "lead" ? "main" : "decisions");
+  }
   function openActor(id: string) {
     if (props.snapshot.actors.find(actor => actor.id === id)?.role === "lead") selectView("lead");
     else { setActorId(id); setDrawerOpen(false); }

@@ -106,6 +106,17 @@ export interface BuilderShellProps {
   error?: string | null;
   onRefresh(): void;
   onSendMessage?(text: string, channel: LeadChannel): Promise<void>;
+  conversation?: import("../lead-conversations.ts").LeadConversationPage | null;
+  conversationChannel?: LeadChannel;
+  conversationLoading?: boolean;
+  conversationError?: string | null;
+  onLeadChannelChange?(channel: LeadChannel): void;
+  onRefreshConversation?(): Promise<void>;
+  onCancelLeadMessage?(): Promise<void>;
+  onResumePreparedLeadMessage?(): Promise<void>;
+  onOlderConversation?(): void;
+  onLatestConversation?(): void;
+  conversationHasNewer?: boolean;
   onImportConsultation?(text: string): Promise<void>;
   onOpenCoreSettings?(): void;
   onOpenHtmlPreview?(): void;
