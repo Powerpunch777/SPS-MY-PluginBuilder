@@ -54,6 +54,7 @@ export interface BuilderQuestion {
   recommendation: string | null;
   answer: string | null;
   revisionId: string | null;
+  questionContext?: import("./question-context.ts").QuestionContext;
 }
 
 export interface BuilderGraphEntity {
@@ -108,7 +109,7 @@ export interface BuilderShellProps {
   loading?: boolean;
   error?: string | null;
   onRefresh(): void;
-  onSendMessage?(text: string, channel: LeadChannel): Promise<void>;
+  onSendMessage?(text: string, channel: LeadChannel, questionContext?: import("./question-context.ts").QuestionContext): Promise<void>;
   conversation?: import("../lead-conversations.ts").LeadConversationPage | null;
   conversationChannel?: LeadChannel;
   conversationLoading?: boolean;

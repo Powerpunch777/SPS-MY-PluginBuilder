@@ -101,3 +101,16 @@ test("keeps empty, loading, and error states free of stale draft content", async
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+test("resolved question history stays visible but no longer inflates the unresolved count", async () => {
+  const { DesignDraftSummary, temporary } = await loadComponent();
+  try {
+    const html = renderToStaticMarkup(createElement(DesignDraftSummary, { draft, loading: false, error: null,
+      resolvedQuestionIds: ["question-1", "not-in-this-draft"] }));
+    assert.match(html, /미결정질문 0개/);
+    assert.match(html, /답변 완료/);
+    assert.match(html, /출력 형식/);
+    assert.match(html, /설계 초안 · 승인·실행 전/);
+    assert.doesNotMatch(html, /미결정질문 1개/);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});

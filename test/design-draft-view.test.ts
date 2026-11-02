@@ -53,3 +53,18 @@ test("view rejects stale selection, cross-Workspace/project/Agent and malformed 
   assert.throws(() => projectDesignDraft(createEmptyBuilderSnapshot(agentId),
     parseDesignDraftView(payload(), workspaceId, 1, agentId)), /different Workspace/);
 });
+
+test("stored answer interpretation projects answered status and exact current revision context, not approval", () => {
+  const input = payload();
+  const decisions = [{ questionId: "Q-1", questionDigest: "a".repeat(64),
+    answerSourceId: "lead-turn:44444444-4444-4444-8444-444444444444", answerSourceSha256: "b".repeat(64),
+    answerText: "Use the first option.", fromDraftRevisionId: "draft-0", appliedDraftRevisionId: "draft-1" }];
+  const view = parseDesignDraftView({ ...input, decisions }, workspaceId, 1, agentId);
+  decisions[0]!.answerText = "caller mutation";
+  const projected = projectDesignDraft(createEmptyBuilderSnapshot(workspaceId), view);
+  assert.equal(projected.questions[0]?.status, "answered");
+  assert.equal(projected.questions[0]?.answer, "Use the first option.");
+  assert.deepEqual(projected.questions[0]?.questionContext, { projectId: workspaceId, draftRevisionId: "draft-1", questionId: "Q-1" });
+  assert.equal(projected.graph.entities[0]?.status, "planned");
+  assert.match(projected.documents[0]!.title, /승인 전/);
+});

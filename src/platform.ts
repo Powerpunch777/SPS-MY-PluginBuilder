@@ -8,7 +8,9 @@ import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
 import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
 import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
-import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL } from "./tool-declarations.mjs";
+import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL } from "./tool-declarations.mjs";
+import { parseQuestionContext } from "./domain/question-context.ts";
+import { resolveDesignQuestion } from "./design-decision-tools.ts";
 import { readLeadMemory, updateLeadMemory } from "./lead-memory-tools.ts";
 import { createLeadMemoryStore } from "./lead-memory-store.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
@@ -213,9 +215,9 @@ export async function prepareLeadSessions(companyId: string, params: Record<stri
   });
 }
 
-function conversationInput(params: Record<string, unknown>, extra: readonly string[] = []) {
+function conversationInput(params: Record<string, unknown>, extra: readonly string[] = [], optional: readonly string[] = []) {
   const keys = ["channel", ...extra];
-  if (Object.keys(params).sort().join(",") !== [...keys].sort().join(",")
+  if (keys.some(key => !Object.hasOwn(params, key)) || Object.keys(params).some(key => ![...keys, ...optional].includes(key))
     || typeof params.channel !== "string" || !LEAD_CHANNELS.includes(params.channel as LeadChannel)) {
     throw new TypeError("Lead conversation requires a supported channel and exact fields.");
   }
@@ -236,11 +238,19 @@ async function withConversation<T>(companyId: string, platform: SpsPlatformInvoc
       }
     };
     await check();
-    const beforeDispatch = async () => {
+    const beforeDispatch = async (questionContext?: import("./domain/question-context.ts").QuestionContext) => {
       await check();
       const options = await readLeadAgentOptions(companyId, platform);
       if (!options.agents.some(agent => agent.id === binding.selectedAgentId && ["idle", "running"].includes(agent.status))) {
         throw new Error("The selected Lead Agent is unavailable. Existing history has been kept.");
+      }
+      if (questionContext) {
+        const current = await readCurrentDesignDraft(companyId, questionContext.projectId, platform);
+        if (!current || current.revision.draft.revisionId !== questionContext.draftRevisionId
+          || !current.revision.draft.questions.some(question => question.id === questionContext.questionId)
+          || current.revision.decisions?.some(decision => decision.questionId === questionContext.questionId)) {
+          throw new Error("The selected question or design revision changed. Refresh before answering.");
+        }
       }
       await check();
     };
@@ -254,10 +264,12 @@ export async function readLeadConversation(companyId: string, params: Record<str
   return withConversation(companyId, platform, store => store.page(channel, params.cursor as string | null));
 }
 export async function sendLeadMessage(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
-  const channel = conversationInput(params, ["requestId", "text"]);
+  const channel = conversationInput(params, ["requestId", "text"], ["questionContext"]);
   if (channel === "cto-inbox") throw new Error("The internal Lead intake channel does not accept user messages.");
+  const questionContext = Object.hasOwn(params, "questionContext") ? parseQuestionContext(params.questionContext) : undefined;
+  if (questionContext && channel !== "decisions") throw new Error("Question-associated answers use the decisions channel.");
   if (typeof params.requestId !== "string" || !UUID.test(params.requestId) || typeof params.text !== "string") throw new TypeError("Invalid Lead message.");
-  return withConversation(companyId, platform, store => store.send(channel, params.requestId as string, params.text as string));
+  return withConversation(companyId, platform, store => store.send(channel, params.requestId as string, params.text as string, questionContext));
 }
 export async function refreshLeadConversation(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
   const channel = conversationInput(params);
@@ -345,7 +357,9 @@ export async function proposeLeadDesign(params: unknown, runContext: unknown, pl
       sourceDigests, createdAt: new Date().toISOString(), draft };
     const store = createDesignDraftStore(context.companyId, draft.projectId,
       { selectionRevision: authority.selectionRevision, agentId: context.agentId }, guardedState);
-    const result = await store.publish({ expectedBaseRevisionId, revision: authored });
+    const current = await store.current();
+    const result = await store.publish({ expectedBaseRevisionId, revision: { ...authored,
+      ...(current?.revision.decisions ? { decisions: current.revision.decisions } : {}) } });
     await authority.check();
     return { content: result.status === "published" ? "Design draft stored. It is not customer approval, execution authorization, QA acceptance or delivery."
       : "Design draft changed. Read the current draft before proposing a new revision; do not automatically retry.",
@@ -389,7 +403,7 @@ export async function readLeadDesignSources(params: unknown, runContext: unknown
   return serialize(context.companyId, async () => {
     const authority = await resolveLeadToolAuthority(context, platform);
     await authority.check();
-    let source: { id: string; text: string } | null = null;
+    let source: { id: string; text: string; questionContext?: import("./domain/question-context.ts").QuestionContext } | null = null;
     let nextCursor: string | null = null;
     if (channel === "consultation") {
       const snapshot = await readBuilderSnapshot(context.companyId, platform);
@@ -405,7 +419,8 @@ export async function readLeadDesignSources(params: unknown, runContext: unknown
       if (!authority.sessions.sessions[channel]) throw new Error("This Lead input session is not prepared.");
       const page = await createLeadConversationStore(platform, authority.sessions, authority.check).page(channel, cursor);
       const turn = page.turns[0];
-      source = turn ? { id: `lead-turn:${turn.requestId}`, text: turn.text } : null;
+      source = turn ? { id: `lead-turn:${turn.requestId}`, text: turn.text,
+        ...(turn.questionContext ? { questionContext: turn.questionContext } : {}) } : null;
       nextCursor = turn?.previousRequestId ?? null;
     }
     await authority.check();
@@ -423,6 +438,11 @@ export async function readSharedLeadMemory(params: unknown, runContext: unknown,
 export async function updateSharedLeadMemory(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => updateLeadMemory(params, context, platform, readBuilderSnapshot));
+}
+
+export async function resolveLeadDesignQuestion(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => resolveDesignQuestion(params, context, platform, readBuilderSnapshot));
 }
 
 export function createBuilderPlatform() {
@@ -446,7 +466,10 @@ export function createBuilderPlatform() {
     handler: (params, context, platform) => readSharedLeadMemory(params, context, platform) },
     { name: UPDATE_LEAD_MEMORY_TOOL.name, declaration: { displayName: UPDATE_LEAD_MEMORY_TOOL.displayName,
       description: UPDATE_LEAD_MEMORY_TOOL.description, parametersSchema: UPDATE_LEAD_MEMORY_TOOL.parametersSchema },
-    handler: (params, context, platform) => updateSharedLeadMemory(params, context, platform) }],
+    handler: (params, context, platform) => updateSharedLeadMemory(params, context, platform) },
+    { name: RESOLVE_DESIGN_QUESTION_TOOL.name, declaration: { displayName: RESOLVE_DESIGN_QUESTION_TOOL.displayName,
+      description: RESOLVE_DESIGN_QUESTION_TOOL.description, parametersSchema: RESOLVE_DESIGN_QUESTION_TOOL.parametersSchema },
+    handler: (params, context, platform) => resolveLeadDesignQuestion(params, context, platform) }],
     data: [{ key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>
@@ -466,7 +489,8 @@ export function createBuilderPlatform() {
       const current = await readCurrentDesignDraft(companyId, params.projectId, platform);
       return current && { workspaceId: companyId, projectId: params.projectId, selectionRevision: current.revision.selectionRevision,
         agentId: current.revision.author.agentId, sequence: current.sequence, createdAt: current.revision.createdAt,
-        draft: current.revision.draft } as unknown as JsonValue;
+        draft: current.revision.draft,
+        ...(current.revision.decisions ? { decisions: current.revision.decisions } : {}) } as unknown as JsonValue;
     } },
     { key: "builder.lead-conversation", handler: async (params, platform) => {
       // renderEnvironment is Host UI envelope metadata, not conversation input

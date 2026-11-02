@@ -1,6 +1,8 @@
 import { parseDesignDraft, type DesignDraft } from "./domain/design-drafts.ts";
 import { exactToolRecord } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
+import { createHash } from "node:crypto";
+import { parseDesignDecisions, type DesignDecision } from "./domain/design-decisions.ts";
 
 export type AuthoredDesignDraft = Readonly<{
   status: "draft";
@@ -9,6 +11,7 @@ export type AuthoredDesignDraft = Readonly<{
   sourceDigests: readonly Readonly<{ id: string; sha256: string }>[];
   createdAt: string;
   draft: DesignDraft;
+  decisions?: readonly DesignDecision[];
 }>;
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -22,13 +25,20 @@ export function createDesignDraftStore(workspaceId: string, projectId: string,
   const selectionRevision = owner.selectionRevision;
   const agentId = owner.agentId;
   const parse = (value: unknown): AuthoredDesignDraft => {
-    const row = exactToolRecord(value, ["status", "selectionRevision", "author", "sourceDigests", "createdAt", "draft"]);
+    const row = exactToolRecord(value, ["status", "selectionRevision", "author", "sourceDigests", "createdAt", "draft"], ["decisions"]);
     if (row.status !== "draft" || row.selectionRevision !== selectionRevision) throw new TypeError("Invalid draft selection or approval claim.");
     const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId"]);
     if (author.agentId !== agentId || Object.values(author).some(id => typeof id !== "string" || !UUID.test(id))) {
       throw new TypeError("Invalid design draft author.");
     }
     const draft = parseDesignDraft(row.draft, projectId);
+    const decisions = parseDesignDecisions(row.decisions, draft);
+    for (const decision of decisions) {
+      const question = draft.questions.find(question => question.id === decision.questionId)!;
+      if (createHash("sha256").update(JSON.stringify(question), "utf8").digest("hex") !== decision.questionDigest) {
+        throw new TypeError("A resolved question cannot silently change its meaning.");
+      }
+    }
     if (!Array.isArray(row.sourceDigests) || Object.getPrototypeOf(row.sourceDigests) !== Array.prototype
       || row.sourceDigests.length !== draft.sourceIds.length || Reflect.ownKeys(row.sourceDigests).length !== row.sourceDigests.length + 1) {
       throw new TypeError("Invalid design draft source digests.");
@@ -46,7 +56,8 @@ export function createDesignDraftStore(workspaceId: string, projectId: string,
       || new Date(row.createdAt).toISOString() !== row.createdAt) throw new TypeError("Invalid draft creation time.");
     return Object.freeze({ status: "draft", selectionRevision,
       author: Object.freeze({ agentId, sessionId: author.sessionId as string, runId: author.runId as string }),
-      sourceDigests: Object.freeze(sourceDigests), createdAt: row.createdAt, draft });
+      sourceDigests: Object.freeze(sourceDigests), createdAt: row.createdAt, draft,
+      ...(Object.hasOwn(row, "decisions") ? { decisions } : {}) });
   };
   return createRevisionJournal(workspaceId, projectId, state, {
     prefix: `design-draft-lead-${selectionRevision}`, parse, revisionId: value => value.draft.revisionId,

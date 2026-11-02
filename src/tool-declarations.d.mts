@@ -40,3 +40,9 @@ export const UPDATE_LEAD_MEMORY_TOOL: Readonly<{
   description: string;
   parametersSchema: JsonObject;
 }>;
+export const RESOLVE_DESIGN_QUESTION_TOOL: Readonly<{
+  name: "builder.resolve-design-question";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;

@@ -5,6 +5,7 @@ export type DesignDraftSummaryProps = Readonly<{
   draft: DesignDraft | null;
   loading: boolean;
   error: string | null;
+  resolvedQuestionIds?: readonly string[];
 }>;
 
 const contentStyle: CSSProperties = {
@@ -28,7 +29,7 @@ const listStyle: CSSProperties = {
   paddingLeft: 20,
 };
 
-export function DesignDraftSummary({ draft, loading, error }: DesignDraftSummaryProps) {
+export function DesignDraftSummary({ draft, loading, error, resolvedQuestionIds = [] }: DesignDraftSummaryProps) {
   if (loading) {
     return <p role="status" style={mutedStyle}>설계 초안을 불러오는 중입니다.</p>;
   }
@@ -38,6 +39,8 @@ export function DesignDraftSummary({ draft, loading, error }: DesignDraftSummary
   }
 
   if (draft === null) return null;
+  const resolved = new Set(resolvedQuestionIds);
+  const unresolvedCount = draft.questions.filter(question => !resolved.has(question.id)).length;
 
   return (
     <section aria-label="Lead 설계 초안" style={{ ...contentStyle, flexShrink: 0, maxHeight: "32vh", overflow: "auto",
@@ -48,8 +51,8 @@ export function DesignDraftSummary({ draft, loading, error }: DesignDraftSummary
         <span aria-label={`요구사항 ${draft.specification.requirements.length}개`} style={mutedStyle}>
           요구사항 {draft.specification.requirements.length}개
         </span>
-        <span aria-label={`미결정질문 ${draft.questions.length}개`} style={mutedStyle}>
-          미결정질문 {draft.questions.length}개
+        <span aria-label={`미결정질문 ${unresolvedCount}개`} style={mutedStyle}>
+          미결정질문 {unresolvedCount}개
         </span>
       </div>
 
@@ -71,13 +74,14 @@ export function DesignDraftSummary({ draft, loading, error }: DesignDraftSummary
             ) : <p style={mutedStyle}>요구사항이 없습니다.</p>}
           </section>
 
-          <section aria-label="미결정질문">
-            <h3 style={{ margin: 0, fontSize: 13 }}>미결정질문</h3>
+          <section aria-label="설계 질문">
+            <h3 style={{ margin: 0, fontSize: 13 }}>설계 질문</h3>
             {draft.questions.length > 0 ? (
               <ul style={listStyle}>
                 {draft.questions.map(question => (
                   <li key={question.id} style={contentStyle}>
                     <strong>{question.title}</strong>
+                    <span style={mutedStyle}> · {resolved.has(question.id) ? "답변 완료" : "답변 필요"}</span>
                     <div>{question.text}</div>
                     {question.options.length > 0 && (
                       <ul style={listStyle}>

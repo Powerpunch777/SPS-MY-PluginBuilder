@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createEmptyBuilderSnapshot } from "../src/domain/snapshot.ts";
-import { proposeLeadDesign, readCurrentDesignDraft, readLeadDesignDraft } from "../src/platform.ts";
+import { proposeLeadDesign, readCurrentDesignDraft, readLeadDesignDraft, resolveLeadDesignQuestion, sendLeadMessage } from "../src/platform.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const OTHER_WORKSPACE = "22222222-2222-4222-8222-222222222222";
@@ -156,6 +156,136 @@ function persistLeadTurn(f: ReturnType<typeof fixture>, requestId: string, chann
 }
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+const designQuestion = () => ({ id: "question-1", title: "Choose a target", text: "Which target should the draft use?",
+  options: [{ id: "desktop", label: "Desktop", tradeoff: "Local installation" }], recommendation: "desktop" });
+async function questionFixture() {
+  const f = fixture({ sessionId: SESSIONS.decisions });
+  await proposeLeadDesign({ ...params("question-base"), draft: { ...draft("question-base"), questions: [designQuestion()] } }, f.context, f.platform);
+  const turn = persistLeadTurn(f, TURN_IDS.decisions, "decisions", { text: "Use the desktop target.",
+    questionContext: { projectId: PROJECT, draftRevisionId: "question-base", questionId: "question-1" } });
+  const input = { projectId: PROJECT, expectedBaseRevisionId: "question-base", questionId: "question-1",
+    answerSourceId: `lead-turn:${TURN_IDS.decisions}`, answerText: "The user selected a desktop product.",
+    draft: { ...draft("question-applied", [CONSULTATION_ID, `lead-turn:${TURN_IDS.decisions}`]), questions: [designQuestion()] } };
+  return { ...f, f, turn, input };
+}
+
+test("a bound decisions answer publishes interpretation and new specification/Graph in one head, surviving restart", async () => {
+  const { f, turn, input } = await questionFixture();
+  const writes = f.successfulWrites;
+  const result = await resolveLeadDesignQuestion(input, f.context, f.platform);
+  assert.equal((result.data as { status: string }).status, "published");
+  assert.match(result.content, /not customer contract approval/);
+  const stored = await readCurrentDesignDraft(WORKSPACE, PROJECT, f.platform);
+  assert.equal(stored?.sequence, 2);
+  assert.equal(stored?.revision.status, "draft");
+  assert.equal(stored?.revision.draft.specification.revisionId, "spec-question-applied");
+  assert.equal(stored?.revision.draft.graph.graphRevisionId, "graph-question-applied");
+  assert.deepEqual(stored?.revision.decisions, [{ questionId: "question-1", questionDigest: sha256(JSON.stringify(designQuestion())),
+    answerSourceId: input.answerSourceId, answerSourceSha256: sha256(turn.text), answerText: input.answerText,
+    fromDraftRevisionId: "question-base", appliedDraftRevisionId: "question-applied" }]);
+  assert.equal(f.successfulWrites - writes, 2);
+  assert.equal(f.setCalls, 0);
+  assert.deepEqual(await readCurrentDesignDraft(WORKSPACE, PROJECT, f.platform), stored);
+  const repeated = await resolveLeadDesignQuestion(input, f.context, f.platform);
+  assert.equal((repeated.data as { status: string }).status, "conflict");
+  assert.equal(f.successfulWrites - writes, 2);
+});
+
+test("question resolution rejects wrong Lead/session, missing association, stale context and forged approval without writes", async () => {
+  for (const variation of ["worker", "main", "cto", "unbound", "wrong-question", "wrong-base", "wrong-project", "approval"] as const) {
+    const { f, input, turn } = await questionFixture();
+    const context = { ...f.context };
+    if (variation === "worker") context.agentId = WORKER;
+    if (variation === "main") context.sessionId = SESSIONS.main;
+    if (variation === "cto") context.sessionId = SESSIONS["cto-inbox"];
+    if (["unbound", "wrong-question", "wrong-base", "wrong-project"].includes(variation)) {
+      const modified: Record<string, unknown> = { ...turn };
+      if (variation === "unbound") delete modified.questionContext;
+      else modified.questionContext = { projectId: PROJECT, draftRevisionId: "question-base", questionId: "question-1",
+        ...(variation === "wrong-question" ? { questionId: "another" } : variation === "wrong-base"
+          ? { draftRevisionId: "old" } : { projectId: "another" }) };
+      f.values.set(fullKey(f.key(`lead-chat.turn.v1.${TURN_IDS.decisions}`)), modified as JsonValue);
+    }
+    const writes = f.successfulWrites;
+    await assert.rejects(resolveLeadDesignQuestion(variation === "approval" ? { ...input, approved: true } : input, context, f.platform), variation);
+    assert.equal(f.successfulWrites, writes, variation);
+  }
+});
+
+test("resolved questions cannot be erased or rewritten through the ordinary proposal tool", async () => {
+  const { f, input } = await questionFixture();
+  await resolveLeadDesignQuestion(input, f.context, f.platform);
+  const stored = await readCurrentDesignDraft(WORKSPACE, PROJECT, f.platform);
+  for (const questions of [[], [{ ...designQuestion(), text: "Different meaning" }]]) {
+    await assert.rejects(proposeLeadDesign({ projectId: PROJECT, expectedBaseRevisionId: "question-applied",
+      draft: { ...draft("question-next"), questions } }, f.context, f.platform));
+  }
+  await proposeLeadDesign({ projectId: PROJECT, expectedBaseRevisionId: "question-applied",
+    draft: { ...draft("question-next"), questions: [designQuestion()] } }, f.context, f.platform);
+  assert.deepEqual((await readCurrentDesignDraft(WORKSPACE, PROJECT, f.platform))?.revision.decisions, stored?.revision.decisions);
+});
+
+test("lost question-publication response is recovered by reading, never by automatically publishing again", async () => {
+  const { f, input } = await questionFixture();
+  const original = f.state.compareAndSet;
+  f.state.compareAndSet = async (key, expected, value) => {
+    const result = await original(key, expected, value);
+    if (result.swapped && key.stateKey.startsWith("design-draft-lead-1-head")) throw new Error("response lost after commit");
+    return result;
+  };
+  await assert.rejects(resolveLeadDesignQuestion(input, f.context, f.platform), /response lost/);
+  const stored = await readCurrentDesignDraft(WORKSPACE, PROJECT, f.platform);
+  assert.equal(stored?.revision.draft.revisionId, "question-applied");
+  assert.equal(stored?.revision.decisions?.length, 1);
+  const writes = f.successfulWrites;
+  assert.equal(((await resolveLeadDesignQuestion(input, f.context, f.platform)).data as { status: string }).status, "conflict");
+  assert.equal(f.successfulWrites, writes);
+});
+
+test("question resolution requires new draft/specification/Graph IDs, answer citation and unchanged question", async () => {
+  for (const variation of ["draft", "spec", "graph", "citation", "meaning"] as const) {
+    const { f, input } = await questionFixture();
+    if (variation === "draft") input.draft.revisionId = "question-base";
+    if (variation === "spec") input.draft.specification.revisionId = "spec-question-base";
+    if (variation === "graph") input.draft.graph.graphRevisionId = "graph-question-base";
+    if (variation === "citation") input.draft.sourceIds = [CONSULTATION_ID];
+    if (variation === "meaning") input.draft.questions[0]!.text = "Changed question";
+    const writes = f.successfulWrites;
+    await assert.rejects(resolveLeadDesignQuestion(input, f.context, f.platform), variation);
+    assert.equal(f.successfulWrites, writes);
+  }
+});
+
+test("normal user send validates the current question before dispatch, but completed duplicate acknowledgement still works after resolution", async () => {
+  const { f, input } = await questionFixture();
+  const requestId = "61616161-6161-4161-8161-616161616161";
+  let sends = 0;
+  const userPlatform = { ...f.platform, agents: {
+    async list() { return [{ id: LEAD, companyId: WORKSPACE, name: "Lead", status: "idle" }]; },
+    sessions: {
+      async getRequest() { return sends ? { requestId, state: "submitted", runId: RUN } : null; },
+      async sendMessage() { sends += 1; return { runId: RUN }; },
+      async getRun() { return { runId: RUN, status: "succeeded", cancellationRequested: false, termination: "not_applicable",
+        output: { state: "available", text: "Stored design interpretation." } }; },
+    },
+  } } as unknown as SpsPlatformInvocationContext;
+  const questionContext = { projectId: PROJECT, draftRevisionId: "question-base", questionId: "question-1" };
+  const params = { channel: "decisions", requestId, text: "Use desktop.", questionContext };
+  const writes = f.successfulWrites;
+  await assert.rejects(sendLeadMessage(WORKSPACE, { ...params, questionContext: { ...questionContext, draftRevisionId: "stale" } }, userPlatform), /question or design revision changed/);
+  await assert.rejects(sendLeadMessage(WORKSPACE, { ...params, questionContext: { ...questionContext, questionId: "missing" } }, userPlatform), /question or design revision changed/);
+  assert.equal(sends, 0);
+  assert.equal(f.successfulWrites, writes);
+  await sendLeadMessage(WORKSPACE, params, userPlatform);
+  const answerSourceId = `lead-turn:${requestId}`;
+  await resolveLeadDesignQuestion({ ...input, answerSourceId,
+    draft: { ...input.draft, sourceIds: [CONSULTATION_ID, answerSourceId] } }, f.context, f.platform);
+  assert.deepEqual(await sendLeadMessage(WORKSPACE, params, userPlatform), { saved: true, requestId });
+  assert.equal(sends, 1);
+  await assert.rejects(sendLeadMessage(WORKSPACE, { ...params, requestId: TURN_IDS.otherScope }, userPlatform), /question or design revision changed/);
+  assert.equal(sends, 1);
+});
 
 test("current Lead stores a draft without claiming approval or execution; current reads survive restart", async () => {
   const f = fixture();

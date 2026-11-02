@@ -5,6 +5,7 @@ import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snap
 import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
 import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import type { LeadChannel } from "../domain/model.ts";
+import { parseQuestionContext, type QuestionContext } from "../domain/question-context.ts";
 import { parseLeadConversationPage } from "../lead-conversations.ts";
 import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
 import { projectLeadMemory } from "../domain/lead-memory-view.ts";
@@ -19,7 +20,7 @@ export function BuilderPage() {
   const [channel, setChannel] = useState<LeadChannel>("main");
   const [cursor, setCursor] = useState<string | null>(null);
   const conversation = usePluginData<unknown>("builder.lead-conversation", { channel, cursor });
-  const send = usePluginAction<{ channel: LeadChannel; requestId: string; text: string }, { saved: boolean; requestId: string }>("builder.send-lead-message");
+  const send = usePluginAction<{ channel: LeadChannel; requestId: string; text: string; questionContext?: QuestionContext }, { saved: boolean; requestId: string }>("builder.send-lead-message");
   const refreshConversation = usePluginAction<{ channel: LeadChannel }, { refreshed: boolean }>("builder.refresh-lead-conversation");
   const cancelMessage = usePluginAction<{ channel: LeadChannel }, { cancellationRequested: boolean }>("builder.cancel-lead-message");
   const resumeMessage = usePluginAction<{ channel: LeadChannel; requestId: string }, { saved: boolean; requestId: string }>("builder.resume-prepared-lead-message");
@@ -27,7 +28,7 @@ export function BuilderPage() {
   const prepareLead = usePluginAction<{ agentId: string; expectedRevision: number }, { saved: boolean; executionStarted: boolean; sessionsReady: boolean }>("builder.prepare-lead-sessions");
   const importText = usePluginAction<{ requestId: string; text: string }, { saved: boolean; analysisStarted: boolean }>("builder.import-consultation");
   const pending = useRef<{ workspaceId: string; text: string; requestId: string } | null>(null);
-  const pendingMessage = useRef<{ workspaceId: string; channel: LeadChannel; text: string; requestId: string } | null>(null);
+  const pendingMessage = useRef<{ workspaceId: string; channel: LeadChannel; text: string; questionContext: QuestionContext | null; requestId: string } | null>(null);
   const liveScope = useRef("");
   const current = useMemo(() => {
     if (!context.companyId) return null;
@@ -121,15 +122,19 @@ export function BuilderPage() {
     } : undefined}
     onSendMessage={conversationPage && !conversationPage.active && !conversation.loading && !conversation.error
       && !current.error && !state.loading && !state.error && !lead.error && leadOptions
-      && leadOptions.agents.some(agent => agent.id === leadOptions.selectedAgentId && ["idle", "running"].includes(agent.status)) ? async (text, selectedChannel) => {
+      && leadOptions.agents.some(agent => agent.id === leadOptions.selectedAgentId && ["idle", "running"].includes(agent.status)) ? async (text, selectedChannel, questionContext) => {
       if (selectedChannel !== channel || selectedChannel === "cto-inbox") throw new Error("Conversation changed.");
+      if (questionContext && selectedChannel !== "decisions") throw new Error("Question context is only valid for decisions.");
+      const contextSnapshot = questionContext ? parseQuestionContext(questionContext) : null;
       if (!pendingMessage.current || pendingMessage.current.workspaceId !== workspaceId
-        || pendingMessage.current.channel !== channel || pendingMessage.current.text !== text) {
-        pendingMessage.current = { workspaceId, channel, text, requestId: crypto.randomUUID() };
+        || pendingMessage.current.channel !== channel || pendingMessage.current.text !== text
+        || JSON.stringify(pendingMessage.current.questionContext) !== JSON.stringify(contextSnapshot)) {
+        pendingMessage.current = { workspaceId, channel, text, questionContext: contextSnapshot, requestId: crypto.randomUUID() };
       }
       const request = pendingMessage.current;
       try {
-        const result = await send({ channel, text, requestId: request.requestId });
+        const result = await send({ channel, text, requestId: request.requestId,
+          ...(request.questionContext ? { questionContext: request.questionContext } : {}) });
         if (liveScope.current !== scope) throw new Error("Conversation changed while sending.");
         if (result.saved !== true || result.requestId !== request.requestId) throw new Error("Unexpected send result.");
         pendingMessage.current = null;

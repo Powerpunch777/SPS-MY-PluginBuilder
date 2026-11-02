@@ -1,6 +1,7 @@
 import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderLeadSessions, LeadChannel } from "./domain/model.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
+import { parseQuestionContext, type QuestionContext } from "./domain/question-context.ts";
 
 type Scope = { workspaceId: string; selectionRevision: number; agentId: string; sessionId: string; channel: LeadChannel };
 type TurnState = "prepared" | "dispatching" | "submitted" | "uncertain" | "succeeded" | "failed" | "cancelled" | "interrupted" | "timed_out";
@@ -9,6 +10,7 @@ export type LeadTurn = Scope & {
   text: string; createdAt: string; state: TurnState; runId: string | null;
   answer: string | null; outputState: "not_ready" | "available" | "withheld" | "unsupported";
   cancellationRequested: boolean; termination: "not_applicable" | "pending" | "confirmed";
+  questionContext?: QuestionContext;
 };
 type Head = Scope & { schemaVersion: 1; totalTurns: number; lastRequestId: string | null; activeRequestId: string | null };
 export type LeadConversationActivity = Pick<LeadTurn, "requestId" | "state" | "runId" | "cancellationRequested" | "termination">;
@@ -25,12 +27,15 @@ const MAX_TURNS = 1_000_000;
 const byteLength = (value: string) => new TextEncoder().encode(value).length;
 const error = () => new Error("Lead conversation is unavailable or changed. Refresh without automatically resending.");
 
-function record(value: unknown, keys: readonly string[]) {
+function record(value: unknown, keys: readonly string[], optional: readonly string[] = []) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw error();
   const fields = Object.getOwnPropertyDescriptors(value);
-  if (Reflect.ownKeys(fields).length !== keys.length || keys.some(key => !fields[key]?.enumerable || !("value" in fields[key]))) throw error();
-  return Object.fromEntries(keys.map(key => [key, fields[key]!.value])) as Record<string, unknown>;
+  const own = Reflect.ownKeys(fields);
+  if (own.some(key => typeof key !== "string" || ![...keys, ...optional].includes(key))
+    || keys.some(key => !fields[key]?.enumerable || !("value" in fields[key]))
+    || optional.some(key => Object.hasOwn(fields, key) && (!fields[key]?.enumerable || !("value" in fields[key])))) throw error();
+  return Object.fromEntries((own as string[]).map(key => [key, fields[key]!.value])) as Record<string, unknown>;
 }
 function id(value: unknown): string {
   if (typeof value !== "string" || !UUID.test(value)) throw error();
@@ -70,7 +75,9 @@ function parseHead(value: unknown, scope: Scope): Head {
   return { ...scope, schemaVersion: 1, totalTurns: row.totalTurns as number, lastRequestId, activeRequestId };
 }
 function parseTurn(value: unknown, scope: Scope): LeadTurn {
-  const row = record(value, TURN_KEYS); matches(row, scope);
+  const row = record(value, TURN_KEYS, ["questionContext"]); matches(row, scope);
+  const questionContext = Object.hasOwn(row, "questionContext") ? parseQuestionContext(row.questionContext) : undefined;
+  if (questionContext && scope.channel !== "decisions") throw error();
   const requestId = id(row.requestId), previousRequestId = nullableId(row.previousRequestId), runId = nullableId(row.runId);
   if (requestId === previousRequestId || !Number.isSafeInteger(row.sequence) || (row.sequence as number) < 0
     || (row.sequence as number) >= MAX_TURNS || (row.sequence === 0) !== (previousRequestId === null)
@@ -85,7 +92,8 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
   return { ...scope, schemaVersion: 1, requestId, previousRequestId, sequence: row.sequence as number,
     text: text(row.text, MAX_TEXT_BYTES), createdAt: row.createdAt, state: row.state as TurnState, runId,
     answer: row.answer === null ? null : text(row.answer, 65_536), outputState: row.outputState as LeadTurn["outputState"],
-    cancellationRequested: row.cancellationRequested, termination: row.termination as LeadTurn["termination"] };
+    cancellationRequested: row.cancellationRequested, termination: row.termination as LeadTurn["termination"],
+    ...(questionContext ? { questionContext } : {}) };
 }
 const active = (turn: LeadTurn) => !TERMINAL.has(turn.state) || turn.cancellationRequested && turn.termination !== "confirmed";
 async function save(platform: SpsPlatformInvocationContext, scope: Scope, key: string, value: unknown, check: () => Promise<void>) {
@@ -112,12 +120,13 @@ async function loadTurn(platform: SpsPlatformInvocationContext, scope: Scope, re
 export async function readLeadUserSource(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
   const raw = await platform.state.get({ scopeKind: "company", scopeId: sessions.workspaceId,
     namespace: "sonpark.my-builder", stateKey: `lead-chat.turn.v1.${id(requestId)}` });
-  const row = record(raw, TURN_KEYS);
+  const row = record(raw, TURN_KEYS, ["questionContext"]);
   if (row.channel !== "main" && row.channel !== "decisions") throw error();
   const scope = scopeFor(sessions, row.channel);
   const turn = parseTurn(raw, scope);
   if (turn.requestId !== requestId) throw error();
-  return Object.freeze({ id: `lead-turn:${requestId}`, text: turn.text });
+  return Object.freeze({ id: `lead-turn:${requestId}`, text: turn.text,
+    ...(turn.questionContext ? { questionContext: turn.questionContext } : {}) });
 }
 function runProjection(turn: LeadTurn, result: SpsAgentSessionRunResult): LeadTurn {
   if (!result || result.runId !== turn.runId || !["queued", "running", "cancelling", ...TERMINAL].includes(result.status)
@@ -168,7 +177,7 @@ export function parseLeadConversationPage(value: unknown, sessions: BuilderLeadS
  * Per-turn records plus a linked head avoid an ever-growing snapshot. This is
  * not cross-process CAS; Core must fence retired Worker invocations. */
 export function createLeadConversationStore(platform: SpsPlatformInvocationContext, sessions: BuilderLeadSessions,
-  check: () => Promise<void>, beforeDispatch: () => Promise<void> = check) {
+  check: () => Promise<void>, beforeDispatch: (questionContext?: QuestionContext) => Promise<void> = check) {
   async function refreshTurn(scope: Scope, turn: LeadTurn): Promise<LeadTurn> {
     await check();
     let current = turn;
@@ -234,8 +243,10 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       await check();
       return { refreshed: true };
     },
-    async send(channel: LeadChannel, requestId: string, value: string) {
+    async send(channel: LeadChannel, requestId: string, value: string, questionValue?: QuestionContext) {
       const scope = scopeFor(sessions, channel);
+      const questionContext = questionValue === undefined ? undefined : parseQuestionContext(questionValue);
+      if (questionContext && channel !== "decisions") throw error();
       id(requestId); text(value, MAX_TEXT_BYTES);
       await check();
       let head = parseHead(await platform.state.get(headKey(scope)), scope);
@@ -244,7 +255,8 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       let turn: LeadTurn;
       if (existing !== null) {
         turn = parseTurn(existing, scope);
-        if (turn.requestId !== requestId || turn.text !== value) throw error();
+        if (turn.requestId !== requestId || turn.text !== value
+          || JSON.stringify(turn.questionContext) !== JSON.stringify(questionContext)) throw error();
         if (turn.state !== "prepared") {
           if (head.lastRequestId !== requestId && turn.sequence >= head.totalTurns) throw error();
           await reconcile(scope, head);
@@ -254,11 +266,11 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
         // execution has been attempted before the dispatching record is saved.
         if (head.lastRequestId !== requestId
           && (turn.previousRequestId !== head.lastRequestId || turn.sequence !== head.totalTurns)) throw error();
-        await beforeDispatch();
+        await beforeDispatch(questionContext);
       } else {
         head = await reconcile(scope, head);
         if (head.activeRequestId !== null || head.totalTurns >= MAX_TURNS) throw error();
-        await beforeDispatch();
+        await beforeDispatch(questionContext);
         // Probe the explicit receipt contract before ever sending. Older Hosts
         // must not silently ignore requestId and fall back to unkeyed execution.
         const prior = await platform.agents.sessions.getRequest(scope.sessionId, scope.workspaceId, requestId);
@@ -267,7 +279,8 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
         turn = await writeTurn(platform, scope, { ...scope, schemaVersion: 1, requestId,
           previousRequestId: head.lastRequestId, sequence: head.totalTurns, text: value, createdAt: new Date().toISOString(),
           state: "prepared", runId: null, answer: null, outputState: "not_ready",
-          cancellationRequested: false, termination: "not_applicable" }, check);
+          cancellationRequested: false, termination: "not_applicable",
+          ...(questionContext ? { questionContext } : {}) }, check);
       }
       if (head.lastRequestId !== requestId) {
         if (head.activeRequestId !== null) throw error();
@@ -279,7 +292,9 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       turn = await writeTurn(platform, scope, { ...turn, state: "dispatching" }, check);
       await check();
       try {
-        const result = await platform.agents.sessions.sendMessage(scope.sessionId, scope.workspaceId, { prompt: value, requestId });
+        const prompt = turn.questionContext
+          ? `Builder question association (not approval or execution authority): ${JSON.stringify(turn.questionContext)}\nUser message:\n${value}` : value;
+        const result = await platform.agents.sessions.sendMessage(scope.sessionId, scope.workspaceId, { prompt, requestId });
         await check();
         await writeTurn(platform, scope, { ...turn, state: "submitted", runId: id(result.runId) }, check);
       } catch {
@@ -311,7 +326,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       if (head.activeRequestId !== id(requestId)) throw error();
       const turn = await loadTurn(platform, scope, requestId);
       if (turn.state !== "prepared") throw error();
-      return this.send(channel, requestId, turn.text);
+      return this.send(channel, requestId, turn.text, turn.questionContext);
     },
   };
 }

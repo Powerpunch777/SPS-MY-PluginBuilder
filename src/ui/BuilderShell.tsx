@@ -224,8 +224,9 @@ function ConversationControls({ props, channel }: { props: BuilderShellProps; ch
 }
 
 function MessageComposer({
-  enabled, channel, onSend,
-}: { enabled: boolean; channel: LeadChannel; onSend?: BuilderShellProps["onSendMessage"] }) {
+  enabled, channel, onSend, questionContext, disabledReason,
+}: { enabled: boolean; channel: LeadChannel; onSend?: BuilderShellProps["onSendMessage"];
+  questionContext?: BuilderQuestion["questionContext"]; disabledReason?: string }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -235,19 +236,19 @@ function MessageComposer({
     if (!value || !enabled || !onSend || sending) return;
     setSending(true);
     setFeedback("");
-    try { await onSend(value, channel); setText(""); }
+    try { await onSend(value, channel, questionContext); setText(""); }
     catch { setFeedback("전송 결과를 확인하지 못했습니다. 응답 확인으로 기존 실행을 확인해 주세요."); }
     finally { setSending(false); }
   }
   return <div className="builder-composer">
     <form className="builder-compose-form" onSubmit={submit}>
       <textarea aria-label="Lead에게 메시지" maxLength={16_384} disabled={!enabled || sending} onChange={event => setText(event.target.value)}
-        placeholder={enabled ? "Lead에게 메시지 보내기" : "메시지 전송을 사용할 수 없습니다"} value={text} />
+        placeholder={enabled ? "Lead에게 메시지 보내기" : disabledReason ?? "메시지 전송을 사용할 수 없습니다"} value={text} />
       <button aria-label={sending ? "메시지 전송 중" : "메시지 보내기"} className="builder-primary-button builder-send" disabled={!enabled || sending || !text.trim()} title="메시지 보내기" type="submit">
         {sending ? <LoaderCircle aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
       </button>
     </form>
-    <div className="builder-composer-note">{enabled ? "Lead 대화는 현재 Workspace에 저장됩니다." : "AI 메시지 연결을 사용할 수 없어 입력이 비활성화되었습니다."}</div>
+    <div className="builder-composer-note">{enabled ? "Lead 대화는 현재 Workspace에 저장됩니다." : disabledReason ?? "AI 메시지 연결을 사용할 수 없어 입력이 비활성화되었습니다."}</div>
     {feedback && <p className="builder-feedback" role="status">{feedback}</p>}
   </div>;
 }
@@ -430,7 +431,7 @@ function DocumentsView({ props }: { props: BuilderShellProps }) {
     </div></div>;
 }
 
-function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
+export function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
   props: BuilderShellProps; drawerOpen: boolean; onDrawerToggle(): void; onDrawerClose(): void;
 }) {
   const openQuestions = props.snapshot.questions.filter(question => question.status === "open");
@@ -452,8 +453,10 @@ function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
       </div></>
         : <EmptyState icon={CircleHelp} title="미결정사항이 없습니다" detail="Lead가 사용자 결정을 요청하면 여기에 표시됩니다." />}
       {(selected || messages.length > 0) && <MessageList actors={props.snapshot.actors} messages={messages} followLatest={!props.conversationHasNewer} />}
-      {selected && <MessageComposer channel="decisions" enabled={Boolean(props.onSendMessage) && selected.status === "open"
-        && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === "decisions" && !props.conversation.active)} onSend={props.onSendMessage} />}
+      {selected && <MessageComposer key={selected.id} channel="decisions" enabled={Boolean(props.onSendMessage) && selected.status === "open"
+        && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === "decisions" && !props.conversation.active)}
+        onSend={props.onSendMessage} questionContext={selected.questionContext}
+        disabledReason={selected.status === "answered" ? "이 질문의 답변이 설계에 반영되었습니다." : undefined} />}
     </section>
     <ActivityRail onClose={onDrawerClose} onSelectQuestion={setSelectedId} props={props} selectedQuestion={selected} view="decisions" />
   </div>;
@@ -633,7 +636,10 @@ export function BuilderShell(props: BuilderShellProps) {
         </div>
       </aside>
       <main className="builder-main">
-        <DesignDraftSummary draft={props.designDraft ?? null} loading={props.designDraftLoading ?? false} error={props.designDraftError ?? null} />
+        <DesignDraftSummary draft={props.designDraft ?? null} loading={props.designDraftLoading ?? false} error={props.designDraftError ?? null}
+          resolvedQuestionIds={props.snapshot.questions.filter(question => question.status === "answered"
+            && question.questionContext?.projectId === props.designDraft?.projectId
+            && question.questionContext?.draftRevisionId === props.designDraft?.revisionId).map(question => question.questionContext!.questionId)} />
         {view !== "lead" && view !== "decisions" && !activeActor
           ? <div className="builder-view-body"><div className="builder-page-actions"><h1>{current.title}</h1>{headerActions}</div>{content}</div>
           : <div className="builder-view-body">{content}</div>}

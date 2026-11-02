@@ -191,6 +191,7 @@
 .builder-question-button small { display: block; margin-top: 4px; color: var(--builder-muted); font-size: 10px; }
 .builder-tag { display: inline-flex; align-items: center; border: 1px solid var(--builder-border); border-radius: 4px; padding: 2px 6px; color: var(--builder-muted); font-size: 9px; }
 .builder-tag.is-open { border-color: #e5cb8e; background: var(--builder-warning-soft); color: var(--builder-warning); }
+.builder-question-detail { flex-shrink: 0; max-height: 40%; overflow: auto; }
 .builder-question-detail p { color: var(--builder-muted); font-size: 11px; white-space: pre-wrap; }
 .builder-option { margin-top: 7px; border: 1px solid var(--builder-border); border-radius: 5px; padding: 9px; background: var(--builder-panel-soft); }
 .builder-option strong { display: block; font-size: 11px; }

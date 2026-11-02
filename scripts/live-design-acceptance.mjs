@@ -17,9 +17,10 @@ async function eventually(read, check, label, timeout = 45_000) {
 
 // Explicitly authorized operator only. No arbitrary code, shell, user profile
 // changes or provider substitution; real account usage is never the default.
-export async function runAcceptance(context) {
+export async function runDesignAcceptance(context, questionAnswers = false) {
   assert.equal(process.env.SPS_BUILDER_LIVE_CODEX, "1");
-  assert.equal(process.env.SPS_BUILDER_LIVE_DESIGN, "1");
+  assert.equal(questionAnswers ? process.env.SPS_BUILDER_LIVE_QUESTION : process.env.SPS_BUILDER_LIVE_DESIGN, "1");
+  assert.ok(questionAnswers ? !process.env.SPS_BUILDER_LIVE_DESIGN : !process.env.SPS_BUILDER_LIVE_QUESTION);
   assert.ok(!process.env.OPENAI_API_KEY && !process.env.PAPERCLIP_CODEX_PROVIDERS);
   const baseline = await baselineAcceptance(context);
   let workspace = baseline.workspace;
@@ -51,7 +52,7 @@ export async function runAcceptance(context) {
     name: "Isolated authorized design Lead", role: "engineer", adapterType: "codex_local",
     adapterConfig: { engine: "cli", cwd: workingDirectory, timeoutSec: 180, graceSec: 3,
       dangerouslyBypassApprovalsAndSandbox: false, extraArgs },
-    instructionsBundle: { files: { "AGENTS.md": "Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft and propose-design operations. Never run commands, edit/read files, generate code, search the web, create Agents or contact other services. Prepare only an unapproved draft from user input. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim approval, implementation or delivery." } },
+    instructionsBundle: { files: { "AGENTS.md": `Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft, propose-design${questionAnswers ? " and resolve-design-question" : ""} operations. Never run commands, edit/read files, generate code, search the web, create Agents or contact other services. Prepare only an unapproved draft from user input. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim approval, implementation or delivery.` } },
   } });
   const data = (key, params = {}, companyId = company.id) => request(`/api/plugins/${plugin.id}/data/${key}`, {
     method: "POST", body: { companyId, params },
@@ -157,4 +158,7 @@ export async function runAcceptance(context) {
     restartRetainedDraft: true, otherWorkspaceUnchanged: true, writeCalls: 1,
     commandsOrCodeExecuted: false, installedProfileChanged: false,
     draftSha256: createHash("sha256").update(JSON.stringify(saved.draft)).digest("hex"), cleanupQualificationPending: true }));
+  return { workspace, plugin, agent, prepared, saved, sourceId, beforeOther, workingDirectory, mainConversation: finished };
 }
+
+export async function runAcceptance(context) { await runDesignAcceptance(context); }

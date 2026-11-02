@@ -11,7 +11,9 @@ import { access, stat } from "node:fs/promises";
 const workspaceA = "11111111-1111-4111-8111-111111111111";
 const leadId = "33333333-3333-4333-8333-333333333333";
 const sessionId = "66666666-6666-4666-8666-666666666666";
+const decisionsSessionId = "88888888-8888-4888-8888-888888888888";
 const runId = "55555555-5555-4555-8555-555555555555";
+const answerTurnId = "20202020-2020-4020-8020-202020202020";
 const invocationId = "design-draft-rpc-invocation-a";
 const requestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const consultationId = `consultation-${requestId}`;
@@ -20,6 +22,9 @@ const stateKey = name => ({ scopeKind: "company", scopeId: workspaceA, namespace
 const clone = value => value === undefined ? null : JSON.parse(JSON.stringify(value));
 const sha256 = value => createHash("sha256").update(value, "utf8").digest("hex");
 
+const designQuestion = { id: "question-1", title: "Choose a target", text: "Which target should the draft use?",
+  options: [{ id: "desktop", label: "Desktop", tradeoff: "Local installation" }], recommendation: "desktop" };
+
 function createFakeHostState() {
   const values = new Map();
   values.set(JSON.stringify(stateKey("lead-agent.v1")), {
@@ -27,11 +32,11 @@ function createFakeHostState() {
   });
   values.set(JSON.stringify(stateKey("lead-sessions.v1.1")), {
     workspaceId: workspaceA, selectionRevision: 1, agentId: leadId,
-    sessions: { main: sessionId, "cto-inbox": null, decisions: null },
+    sessions: { main: sessionId, "cto-inbox": null, decisions: decisionsSessionId },
   });
   values.set(JSON.stringify(stateKey("snapshot.v1")), {
     schemaVersion: 1, workspaceId: workspaceA, revision: 1,
-    leadSessions: { main: null, "cto-inbox": null, decisions: null },
+    leadSessions: { main: sessionId, "cto-inbox": null, decisions: decisionsSessionId },
     actors: [],
     messages: [{ id: consultationId, channel: "main", actorId: null, role: "user",
       text: "Build a private project tracker with clear ownership and an audit history.",
@@ -52,7 +57,7 @@ const draft = {
     targets: ["desktop"], dataPolicyRef: "policy-to-review",
   },
   graph: { graphRevisionId: "graph-1", entities: [], relations: [], viewLayoutRef: "layout-to-review" },
-  questions: [],
+  questions: [designQuestion],
 };
 
 test("built Worker routes design sources to an unapproved draft and back without implicit writes or Agent sends", { timeout: 20_000 }, async () => {
@@ -187,21 +192,79 @@ test("built Worker routes design sources to an unapproved draft and back without
     assert.equal(readReply.result.data.current.revision.status, "draft");
     assert.equal(readReply.result.data.current.revision.draft.revisionId, "design-draft-1");
     assert.match(readReply.result.content, /unapproved/);
+
+    const answerText = "The user selected a desktop product.";
+    const answerSourceId = `lead-turn:${answerTurnId}`;
+    hostState.set(JSON.stringify(stateKey(`lead-chat.turn.v1.${answerTurnId}`)), {
+      workspaceId: workspaceA, selectionRevision: 1, agentId: leadId, sessionId: decisionsSessionId,
+      channel: "decisions", schemaVersion: 1, requestId: answerTurnId, previousRequestId: null, sequence: 0,
+      text: "Use the desktop target.", createdAt: "2026-11-02T00:00:00.000Z", state: "prepared", runId: null,
+      answer: null, outputState: "not_ready", cancellationRequested: false, termination: "not_applicable",
+      questionContext: { projectId: workspaceA, draftRevisionId: draft.revisionId, questionId: designQuestion.id },
+    });
+    const resolvedDraft = {
+      ...draft,
+      revisionId: "design-draft-2",
+      sourceIds: [consultationId, answerSourceId],
+      specification: { ...draft.specification, revisionId: "spec-2" },
+      graph: { ...draft.graph, graphRevisionId: "graph-2" },
+    };
+    const resolution = { projectId: workspaceA, expectedBaseRevisionId: draft.revisionId, questionId: designQuestion.id,
+      answerSourceId, answerText, draft: resolvedDraft };
+    const writesBeforeMainAttempt = calls.filter(method => method === "state.compareAndSet").length;
+    invoke(7, "builder.resolve-design-question", resolution, runContext);
+    const mainResolution = await serviceUntil(7);
+    assert.ok(mainResolution.error, "main Lead session cannot apply a decisions answer");
+    assert.equal(calls.filter(method => method === "state.compareAndSet").length, writesBeforeMainAttempt,
+      "main-session rejection must happen without CAS");
+
+    const decisionsRunContext = { ...runContext, sessionId: decisionsSessionId };
+    const writesBeforeResolution = calls.filter(method => method === "state.compareAndSet").length;
+    invoke(8, "builder.resolve-design-question", resolution, decisionsRunContext);
+    const resolutionReply = await serviceUntil(8);
+    assert.equal(resolutionReply.error, undefined, JSON.stringify(resolutionReply.error));
+    assert.equal(resolutionReply.result.data.status, "published");
+    assert.equal(resolutionReply.result.data.revision.draft.specification.revisionId, "spec-2");
+    assert.equal(resolutionReply.result.data.revision.draft.graph.graphRevisionId, "graph-2");
+    assert.deepEqual(resolutionReply.result.data.revision.decisions, [{ questionId: designQuestion.id,
+      questionDigest: sha256(JSON.stringify(designQuestion)), answerSourceId,
+      answerSourceSha256: sha256("Use the desktop target."), answerText,
+      fromDraftRevisionId: draft.revisionId, appliedDraftRevisionId: resolvedDraft.revisionId }]);
+    assert.equal(calls.filter(method => method === "state.compareAndSet").length, writesBeforeResolution + 2,
+      "resolution publishes the revision and head with conditional writes");
+
+    send({ jsonrpc: "2.0", id: 9, method: "getData", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
+      params: { key: "builder.design-draft", companyId: workspaceA, params: { projectId: workspaceA } } });
+    const dto = await serviceUntil(9);
+    assert.equal(dto.error, undefined, JSON.stringify(dto.error));
+    assert.equal(dto.result.sequence, 2);
+    assert.equal(dto.result.draft.specification.revisionId, "spec-2");
+    assert.equal(dto.result.draft.graph.graphRevisionId, "graph-2");
+    assert.deepEqual(dto.result.decisions, resolutionReply.result.data.revision.decisions);
+
+    const writesBeforeDuplicate = calls.filter(method => method === "state.compareAndSet").length;
+    invoke(10, "builder.resolve-design-question", resolution, decisionsRunContext);
+    const duplicateResolution = await serviceUntil(10);
+    assert.equal(duplicateResolution.error, undefined, JSON.stringify(duplicateResolution.error));
+    assert.equal(duplicateResolution.result.data.status, "conflict", "the old base revision cannot be applied twice");
+    assert.equal(calls.filter(method => method === "state.compareAndSet").length, writesBeforeDuplicate,
+      "stale duplicate must not perform another CAS write");
+
     assert.ok(calls.includes("state.compareAndSet"), "proposal publication must use conditional state writes");
     assert.equal(hostState.get(JSON.stringify(stateKey("snapshot.v1"))).revision, 1,
       "design flow must not implicitly write the consultation snapshot");
     assert.equal(messages.some(message => typeof message.method === "string"), false);
 
     const casCount = calls.filter(method => method === "state.compareAndSet").length;
-    invoke(5, "builder.read-design-draft", { projectId: workspaceA }, { ...runContext,
+    invoke(11, "builder.read-design-draft", { projectId: workspaceA }, { ...runContext,
       sessionId: "77777777-7777-4777-8777-777777777777" });
-    const rejectedSession = await serviceUntil(5);
+    const rejectedSession = await serviceUntil(11);
     assert.ok(rejectedSession.error, "an unprepared session must not read the current draft");
     assert.equal(calls.filter(method => method === "state.compareAndSet").length, casCount,
       "a rejected session must not create or update draft state");
 
-    send({ jsonrpc: "2.0", id: 6, method: "shutdown", params: {} });
-    const shutdown = await response(6);
+    send({ jsonrpc: "2.0", id: 12, method: "shutdown", params: {} });
+    const shutdown = await response(12);
     assert.equal(shutdown.error, undefined);
     assert.equal(shutdown.result, null);
     child.stdin.end();

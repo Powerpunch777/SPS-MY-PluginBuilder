@@ -270,11 +270,17 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         text: "This UI fixture is not a customer decision.", options: [{ id: "A", label: "Fixture option", tradeoff: "Not executed" }], recommendation: "A" }] } };
   await workspace.evaluate(`(() => {
     if(globalThis.__spsBuilderSavedFetch) throw new Error('Unexpected existing fixture interceptor');
+    globalThis.__spsBuilderQuestionDraftFixture=${JSON.stringify(draftFixture)};
+    globalThis.__spsBuilderQuestionSends=[];
     const original=globalThis.fetch; globalThis.__spsBuilderSavedFetch=original;
     globalThis.fetch=function(input,init){
       const url=new URL(typeof input==='string'?input:input.url,location.href);
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.design-draft`)})
-        return Promise.resolve(new Response(JSON.stringify({data:${JSON.stringify(draftFixture)}}),{status:200,headers:{'content-type':'application/json'}}));
+        return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderQuestionDraftFixture}),{status:200,headers:{'content-type':'application/json'}}));
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`)}){
+        const body=JSON.parse(init.body);globalThis.__spsBuilderQuestionSends.push(body);
+        return Promise.resolve(new Response(JSON.stringify({data:{saved:true,requestId:body.params.requestId}}),{status:200,headers:{'content-type':'application/json'}}));
+      }
       return original.call(this,input,init);
     };
   })()`);
@@ -297,12 +303,42 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     await click(workspace, '.builder-nav [aria-label="미결정사항"]', "Read the draft question");
     await eventually(() => workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent`),
       value => value?.includes("Fixture question") && value.includes("답변 필요"), "draft question is unanswered");
+    await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled===false`), Boolean, "question fixture composer");
+    await workspace.evaluate(`(() => {const field=document.querySelector('textarea[aria-label="Lead에게 메시지"]');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'Fixture answer only');
+      field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="메시지 보내기"]')?.disabled===false`), Boolean, "question answer fixture send");
+    await click(workspace, 'button[aria-label="메시지 보내기"]', "Inspect question association using a UI-only intercepted action (no AI/Host write)");
+    const questionSends = await eventually(() => workspace.evaluate(`globalThis.__spsBuilderQuestionSends`), value => value.length === 1, "one fixture action");
+    assert.deepEqual(questionSends[0].params.questionContext, { projectId: company.id, draftRevisionId: "fixture-draft-1", questionId: "Q-FIXTURE" });
+    assert.equal(questionSends[0].params.channel, "decisions");
+    assert.equal(questionSends[0].params.text, "Fixture answer only");
+    assert.equal(questionSends[0].companyId, company.id);
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent.includes('답변 필요')`), Boolean,
+      "A send receipt alone cannot mark the question answered");
+    await workspace.evaluate(`(() => {const doc=globalThis.__spsBuilderQuestionDraftFixture;
+      doc.decisions=[{questionId:'Q-FIXTURE',questionDigest:${JSON.stringify(createHash("sha256").update(JSON.stringify(draftFixture.draft.questions[0])).digest("hex"))},
+        answerSourceId:'lead-turn:'+globalThis.__spsBuilderQuestionSends[0].params.requestId,answerSourceSha256:'a'.repeat(64),
+        answerText:'Fixture stored interpretation, not approval.',fromDraftRevisionId:'fixture-draft-0',appliedDraftRevisionId:'fixture-draft-1'}];})()`);
+    await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead to refresh marked question DTO");
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Load the marked answered-question presentation fixture");
+    await click(workspace, '.builder-nav [aria-label="미결정사항"]', "Inspect stored-answer presentation");
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent`),
+      value => value?.includes("Fixture stored interpretation, not approval.") && !value.includes("답변 필요"), "answered fixture projection");
+    assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled`), true);
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-composer .builder-composer-note')?.textContent`),
+      value => value === "이 질문의 답변이 설계에 반영되었습니다.", "answered composer reason, not an AI connection error");
+    assert.equal(await workspace.evaluate(`Boolean(document.querySelector('[aria-label="미결정질문 0개"]'))`), true);
+    assert.ok(await workspace.evaluate(`(() => {const question=document.querySelector('.builder-question-detail');const main=question.closest('.builder-message-main');
+      return question.getBoundingClientRect().height<=main.getBoundingClientRect().height*0.41;})()`));
+    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-question-answer-fixture.png"));
     const layout = await workspace.evaluate(`({overflow:document.querySelector('.builder-shell').scrollWidth>document.querySelector('.builder-shell').clientWidth,
       nodeEditable:document.querySelectorAll('.react-flow__node.draggable').length})`);
     assert.equal(layout.overflow, false);
     assert.equal(layout.nodeEditable, 0);
   } finally {
-    await workspace.evaluate(`(() => { if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;} })()`);
+    await workspace.evaluate(`(() => { if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;}
+      delete globalThis.__spsBuilderQuestionDraftFixture;delete globalThis.__spsBuilderQuestionSends;})()`);
   }
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead before using its refresh control");
   await click(workspace, '[aria-label="Workspace 새로고침"]', "Restore real Host data after UI-only fixture");
@@ -416,6 +452,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
+    questionAnswerAssociationPresentationFixture: true, sendReceiptDoesNotResolveQuestion: true, storedAnswerPresentationFixture: true,
     transcriptScrollPresentationFixture: true, olderReaderPositionPreserved: true, explicitJumpToLatest: true,
     localTxtPreview: true, invalidFilePreservesDraft: true, fileSelectionDoesNotSave: true,
     uiSha256, independentPluginSurface: true, blackNeutralTheme: true, singleLeadHeader: true, v9WorkPanelSlots: true, v9EmptyDocumentPanes: true, v9EmptyOrganization: true,

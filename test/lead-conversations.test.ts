@@ -69,6 +69,47 @@ test("writes bounded per-turn records, then reads persisted answers without grow
   assert.equal((await createLeadConversationStore(f.platform, sessions(B), f.check).page("main")).totalTurns, 0);
 });
 
+test("question association is persisted with raw answer text and sent explicitly to the decisions session", async () => {
+  const f = fixture();
+  const context = { projectId: A, draftRevisionId: "draft-1", questionId: "Q-1" };
+  await f.store.send("decisions", uuid(71), "Use a desktop app.", context);
+  context.questionId = "caller-mutated";
+  const page = await f.store.page("decisions");
+  assert.deepEqual(page.turns[0]?.questionContext, { projectId: A, draftRevisionId: "draft-1", questionId: "Q-1" });
+  assert.equal(page.turns[0]?.text, "Use a desktop app.");
+  assert.match(f.sends[0]!.prompt, /not approval or execution authority/);
+  assert.match(f.sends[0]!.prompt, /"questionId":"Q-1"/);
+  assert.equal(f.sends[0]!.sessionId, sessions().sessions.decisions);
+  await f.store.send("decisions", uuid(71), "Use a desktop app.", page.turns[0]!.questionContext);
+  await assert.rejects(f.store.send("decisions", uuid(71), "Use a desktop app.", context));
+  await assert.rejects(f.store.send("main", uuid(72), "Wrong channel", context));
+  assert.equal(f.sends.length, 1);
+});
+
+test("prepared question resume rechecks exact association, while submitted request recovery skips new-dispatch validation", async () => {
+  const f = fixture();
+  const original = f.platform.state.set;
+  let crash = true;
+  f.platform.state.set = async (key, value) => {
+    if (crash && (value as Record<string, JsonValue>).state === "dispatching") { crash = false; throw new Error("before dispatch"); }
+    return original(key, value);
+  };
+  const context = { projectId: A, draftRevisionId: "draft-1", questionId: "Q-1" };
+  await assert.rejects(f.store.send("decisions", uuid(73), "Desktop", context), /before dispatch/);
+  let fresh = false;
+  const store = createLeadConversationStore(f.platform, sessions(), f.check, async observed => {
+    assert.deepEqual(observed, context);
+    if (!fresh) throw new Error("stale question");
+  });
+  await assert.rejects(store.resumePrepared("decisions", uuid(73)), /stale question/);
+  assert.equal(f.sends.length, 0);
+  fresh = true;
+  await store.resumePrepared("decisions", uuid(73));
+  fresh = false;
+  await store.send("decisions", uuid(73), "Desktop", context);
+  assert.equal(f.sends.length, 1);
+});
+
 test("same request rechecks its run and never invokes a second send, including after a restart", async () => {
   const f = fixture();
   await f.store.send("main", uuid(1), "First question");

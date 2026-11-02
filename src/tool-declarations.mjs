@@ -92,3 +92,18 @@ export const UPDATE_LEAD_MEMORY_TOOL = Object.freeze({
             } } } } },
     } }),
 });
+
+export const RESOLVE_DESIGN_QUESTION_TOOL = Object.freeze({
+  name: "builder.resolve-design-question",
+  displayName: "Apply a user's answer to a design question",
+  description: "Only the prepared decisions Lead session may interpret a persisted user answer that is bound to this question/project/current draft revision. Read design sources and the current draft first. Keep the answered question and all earlier resolved questions unchanged; provide new design/specification/Graph revision IDs and cite the answer source in draft.sourceIds. Stores the answer interpretation and revised draft together, without another approval question. This does not approve customer contracts, execute code or deliver work. Update shared memory and downstream specs separately with their own receipts; never auto-retry uncertain writes.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
+    required: ["projectId", "expectedBaseRevisionId", "questionId", "answerSourceId", "answerText", "draft"],
+    properties: { projectId: { type: "string", minLength: 1, maxLength: 160 },
+      expectedBaseRevisionId: { type: "string", minLength: 1, maxLength: 160 },
+      questionId: { type: "string", minLength: 1, maxLength: 160 },
+      answerSourceId: { type: "string", minLength: 1, maxLength: 160 },
+      answerText: { type: "string", minLength: 1, maxLength: 8192 },
+      draft: PROPOSE_DESIGN_TOOL.parametersSchema.properties.draft },
+  }),
+});
