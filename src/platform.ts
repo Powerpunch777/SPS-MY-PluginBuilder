@@ -21,6 +21,8 @@ import { readCtoMemory, updateCtoMemory } from "./cto-memory-tools.ts";
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
 import { submitCtoQuestion, readCtoQuestions, readOwnCtoQuestion, readUserCtoQuestions, reviewCtoQuestion } from "./cto-question-tools.ts";
 import { dispatchQuestionToLead, readBoundCtoIntake } from "./cto-intake-delivery.ts";
+import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "./cto-question-reply-tool-declarations.mjs";
+import { answerCtoQuestion, readCtoQuestionAnswer, acknowledgeCtoQuestionAnswer } from "./cto-question-reply-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -552,6 +554,18 @@ export async function readBoundCtoQuestionIntake(params: unknown, runContext: un
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => readBoundCtoIntake(params, context, platform));
 }
+export async function answerCtoQuestionIntake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => answerCtoQuestion(params, context, platform));
+}
+export async function readCtoQuestionAnswerForCto(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readCtoQuestionAnswer(params, context, platform));
+}
+export async function acknowledgeCtoQuestionAnswerForCto(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => acknowledgeCtoQuestionAnswer(params, context, platform));
+}
 export async function reviewCtoQuestionIntake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => reviewCtoQuestion(params, context, platform));
@@ -639,6 +653,15 @@ export function createBuilderPlatform() {
     { name: READ_OWN_CTO_QUESTION_TOOL.name, declaration: { displayName: READ_OWN_CTO_QUESTION_TOOL.displayName,
       description: READ_OWN_CTO_QUESTION_TOOL.description, parametersSchema: READ_OWN_CTO_QUESTION_TOOL.parametersSchema },
       handler: (params, context, platform) => readOwnCtoQuestionReceipt(params, context, platform) },
+    { name: ANSWER_CTO_QUESTION_TOOL.name, declaration: { displayName: ANSWER_CTO_QUESTION_TOOL.displayName,
+      description: ANSWER_CTO_QUESTION_TOOL.description, parametersSchema: ANSWER_CTO_QUESTION_TOOL.parametersSchema },
+      handler: (params, context, platform) => answerCtoQuestionIntake(params, context, platform) },
+    { name: READ_CTO_QUESTION_ANSWER_TOOL.name, declaration: { displayName: READ_CTO_QUESTION_ANSWER_TOOL.displayName,
+      description: READ_CTO_QUESTION_ANSWER_TOOL.description, parametersSchema: READ_CTO_QUESTION_ANSWER_TOOL.parametersSchema },
+      handler: (params, context, platform) => readCtoQuestionAnswerForCto(params, context, platform) },
+    { name: ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL.name, declaration: { displayName: ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL.displayName,
+      description: ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL.description, parametersSchema: ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL.parametersSchema },
+      handler: (params, context, platform) => acknowledgeCtoQuestionAnswerForCto(params, context, platform) },
     { name: REVIEW_CTO_QUESTION_TOOL.name, declaration: { displayName: REVIEW_CTO_QUESTION_TOOL.displayName,
       description: REVIEW_CTO_QUESTION_TOOL.description, parametersSchema: REVIEW_CTO_QUESTION_TOOL.parametersSchema },
       handler: (params, context, platform) => reviewCtoQuestionIntake(params, context, platform) }],

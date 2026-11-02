@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CTO_INTAKE_EXECUTION_POLICY,
+  LEGACY_CTO_INTAKE_EXECUTION_POLICY,
   ctoIntakeRequestId,
   parseCtoIntakeDelivery,
   type CtoIntakeTarget,
@@ -67,14 +68,14 @@ function delivery(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test("exports an exact sorted nine-tool policy and parses detached deeply frozen delivery", () => {
+test("exports the exact sorted ten-tool policy and parses detached deeply frozen delivery", () => {
   const input = delivery();
   const parsed = parseCtoIntakeDelivery(input, workspaceId, projectId, questionId);
   assert.deepEqual(parsed, input);
   assert.deepEqual(parsed.executionPolicy.toolNames, [
-    "builder.read-cto-intake", "builder.read-design-baseline", "builder.read-design-draft", "builder.read-design-sources",
-    "builder.read-lead-memory", "builder.read-solution", "builder.read-technology-decisions", "builder.read-workstreams",
-    "builder.review-cto-question",
+    "builder.answer-cto-question", "builder.read-cto-intake", "builder.read-design-baseline", "builder.read-design-draft",
+    "builder.read-design-sources", "builder.read-lead-memory", "builder.read-solution", "builder.read-technology-decisions",
+    "builder.read-workstreams", "builder.review-cto-question",
   ]);
   assert.notEqual(parsed, input);
   assert.notEqual(parsed.question, input.question);
@@ -85,6 +86,20 @@ test("exports an exact sorted nine-tool policy and parses detached deeply frozen
   assert(Object.isFrozen(parsed.target));
   assert(Object.isFrozen(parsed.executionPolicy));
   assert(Object.isFrozen(parsed.executionPolicy.toolNames));
+});
+
+test("legacy nine-tool intents stay legacy and request identity is unchanged by profile expansion", () => {
+  const legacyInput = delivery({ executionPolicy: LEGACY_CTO_INTAKE_EXECUTION_POLICY });
+  const currentInput = delivery();
+  const legacy = parseCtoIntakeDelivery(legacyInput, workspaceId, projectId, questionId);
+  const current = parseCtoIntakeDelivery(currentInput, workspaceId, projectId, questionId);
+  assert.deepEqual(legacy.executionPolicy, LEGACY_CTO_INTAKE_EXECUTION_POLICY);
+  assert.equal(legacy.executionPolicy.toolNames.length, 9);
+  assert.equal(new Set<string>(legacy.executionPolicy.toolNames).has("builder.answer-cto-question"), false);
+  assert.equal(current.executionPolicy.toolNames.length, 10);
+  assert.equal(legacy.requestId, current.requestId);
+  assert.equal(legacyInput.executionPolicy.toolNames.length, 9);
+  assert(Object.isFrozen(legacy.executionPolicy.toolNames));
 });
 
 test("request identity is stable for canonical data and changes with question, scope, or target", () => {
@@ -116,7 +131,7 @@ test("requires exact workspace, project, question and matching embedded proposal
 test("requires the exact policy and rejects permutations, additions, accessors and symbols", () => {
   const reversed = [...CTO_INTAKE_EXECUTION_POLICY.toolNames].reverse();
   assert.throws(() => parseCtoIntakeDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: reversed } }),
-    workspaceId, projectId, questionId), /exact canonical sorted/);
+    workspaceId, projectId, questionId), /exactly match a supported canonical/);
   assert.throws(() => parseCtoIntakeDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1",
     toolNames: [...CTO_INTAKE_EXECUTION_POLICY.toolNames, "builder.dispatch"] } }), workspaceId, projectId, questionId), /exactly 9/);
   const getterNames = [...CTO_INTAKE_EXECUTION_POLICY.toolNames];
@@ -126,7 +141,13 @@ test("requires the exact policy and rejects permutations, additions, accessors a
   const symbolNames = [...CTO_INTAKE_EXECUTION_POLICY.toolNames];
   Object.defineProperty(symbolNames, Symbol("extra"), { value: true });
   assert.throws(() => parseCtoIntakeDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: symbolNames } }),
-    workspaceId, projectId, questionId), /exactly 9/);
+    workspaceId, projectId, questionId), /exactly 9 or 10/);
+  const mixed: string[] = [...LEGACY_CTO_INTAKE_EXECUTION_POLICY.toolNames];
+  mixed[0] = "builder.answer-cto-question";
+  assert.throws(() => parseCtoIntakeDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: mixed } }),
+    workspaceId, projectId, questionId), /exactly match a supported canonical/);
+  assert.throws(() => parseCtoIntakeDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1",
+    toolNames: LEGACY_CTO_INTAKE_EXECUTION_POLICY.toolNames.slice(0, 8) } }), workspaceId, projectId, questionId), /exactly 9 or 10/);
 });
 
 test("rejects malformed exact records, prototypes, symbols, accessors and output injection fields", () => {

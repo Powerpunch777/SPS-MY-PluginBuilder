@@ -5,7 +5,19 @@ const encoder = new TextEncoder();
 const MAX_ID_LENGTH = 160;
 const MAX_DELIVERY_BYTES = 96 * 1_024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const LEGACY_TOOL_NAMES = [
+  "builder.read-cto-intake",
+  "builder.read-design-baseline",
+  "builder.read-design-draft",
+  "builder.read-design-sources",
+  "builder.read-lead-memory",
+  "builder.read-solution",
+  "builder.read-technology-decisions",
+  "builder.read-workstreams",
+  "builder.review-cto-question",
+] as const;
 const TOOL_NAMES = [
+  "builder.answer-cto-question",
   "builder.read-cto-intake",
   "builder.read-design-baseline",
   "builder.read-design-draft",
@@ -22,7 +34,12 @@ const PHASES = ["prepared", "dispatching", "uncertain", "superseded", "submitted
 const EARLY_PHASES = new Set<string>(["prepared", "dispatching", "uncertain", "superseded"]);
 
 export type CtoIntakeTarget = Readonly<{ agentId: string; sessionId: string; selectionRevision: number }>;
-export type CtoIntakeExecutionPolicy = Readonly<{ mode: "plugin-tools-only-v1"; toolNames: typeof TOOL_NAMES }>;
+type IntakePolicy<T extends readonly string[]> = Readonly<{ mode: "plugin-tools-only-v1"; toolNames: T }>;
+export type CtoIntakeExecutionPolicy = IntakePolicy<typeof LEGACY_TOOL_NAMES> | IntakePolicy<typeof TOOL_NAMES>;
+export const LEGACY_CTO_INTAKE_EXECUTION_POLICY: IntakePolicy<typeof LEGACY_TOOL_NAMES> = Object.freeze({
+  mode: "plugin-tools-only-v1",
+  toolNames: Object.freeze([...LEGACY_TOOL_NAMES]) as unknown as typeof LEGACY_TOOL_NAMES,
+});
 export const CTO_INTAKE_EXECUTION_POLICY: CtoIntakeExecutionPolicy = Object.freeze({
   mode: "plugin-tools-only-v1",
   toolNames: Object.freeze([...TOOL_NAMES]) as unknown as typeof TOOL_NAMES,
@@ -123,15 +140,18 @@ function parseExecutionPolicy(value: unknown): CtoIntakeExecutionPolicy {
     throw new TypeError("executionPolicy.toolNames must be a standard array.");
   }
   const keys = Reflect.ownKeys(row.toolNames);
-  if (keys.length !== TOOL_NAMES.length + 1 || !keys.includes("length") || row.toolNames.length !== TOOL_NAMES.length) {
-    throw new TypeError(`executionPolicy.toolNames must contain exactly ${TOOL_NAMES.length} dense entries with no extra properties.`);
+  const length = row.toolNames.length;
+  if ((length !== LEGACY_TOOL_NAMES.length && length !== TOOL_NAMES.length)
+    || keys.length !== length + 1 || !keys.includes("length")) {
+    throw new TypeError(`executionPolicy.toolNames must contain exactly ${LEGACY_TOOL_NAMES.length} or ${TOOL_NAMES.length} dense entries with no extra properties.`);
   }
-  for (let index = 0; index < TOOL_NAMES.length; index += 1) {
+  const expected = length === LEGACY_TOOL_NAMES.length ? LEGACY_TOOL_NAMES : TOOL_NAMES;
+  for (let index = 0; index < expected.length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(row.toolNames, String(index));
     if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("executionPolicy.toolNames must contain enumerable data fields.");
-    if (descriptor.value !== TOOL_NAMES[index]) throw new TypeError("executionPolicy.toolNames must be the exact canonical sorted intake policy.");
+    if (descriptor.value !== expected[index]) throw new TypeError("executionPolicy.toolNames must exactly match a supported canonical intake policy.");
   }
-  return Object.freeze({ mode: "plugin-tools-only-v1", toolNames: Object.freeze([...TOOL_NAMES]) as unknown as typeof TOOL_NAMES });
+  return Object.freeze({ mode: "plugin-tools-only-v1", toolNames: Object.freeze([...expected]) }) as CtoIntakeExecutionPolicy;
 }
 
 function canonicalQuestionAndTarget(workspaceId: string, projectId: string, questionId: string,
