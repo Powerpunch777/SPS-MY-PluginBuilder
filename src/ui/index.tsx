@@ -7,6 +7,7 @@ import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import type { LeadChannel } from "../domain/model.ts";
 import { parseLeadConversationPage } from "../lead-conversations.ts";
 import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
+import { projectLeadMemory } from "../domain/lead-memory-view.ts";
 
 export function BuilderPage() {
   const context = useHostContext();
@@ -14,6 +15,7 @@ export function BuilderPage() {
   const lead = usePluginData<unknown>("builder.lead-agents");
   const sessions = usePluginData<unknown>("builder.lead-sessions");
   const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
+  const memory = usePluginData<unknown>("builder.lead-memory", { projectId: context.companyId ?? "" });
   const [channel, setChannel] = useState<LeadChannel>("main");
   const [cursor, setCursor] = useState<string | null>(null);
   const conversation = usePluginData<unknown>("builder.lead-conversation", { channel, cursor });
@@ -57,6 +59,11 @@ export function BuilderPage() {
     try { return { view: parseDesignDraftView(design.data, context.companyId, leadOptions.revision, leadOptions.selectedAgentId), error: null }; }
     catch { return { view: null, error: "설계 초안을 확인하지 못했습니다. 새로고침해 주세요." }; }
   }, [context.companyId, leadOptions, design.data, design.loading, design.error]);
+  const memoryView = useMemo(() => {
+    if (!current || memory.loading || memory.error) return { snapshot: current?.snapshot ?? null, error: null };
+    try { return { snapshot: projectLeadMemory(current.snapshot, memory.data), error: null }; }
+    catch { return { snapshot: current.snapshot, error: "Lead 공유 기억을 확인하지 못했습니다. 새로고침해 주세요." }; }
+  }, [current, memory.data, memory.loading, memory.error]);
   const scope = JSON.stringify([context.companyId, leadOptions?.revision ?? null, channel]);
   liveScope.current = scope;
   useEffect(() => { setCursor(null); pendingMessage.current = null; }, [context.companyId, leadOptions?.revision]);
@@ -71,7 +78,7 @@ export function BuilderPage() {
       if (document.visibilityState === "hidden") { timer = setTimeout(() => void poll(), 2_000); return; }
       try {
         await refreshConversation({ channel });
-        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); }
+        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); memory.refresh(); }
       } catch {
         // Polling only observes the exact saved request. Stop on error; the
         // explicit button remains available and no send is retried here.
@@ -82,10 +89,11 @@ export function BuilderPage() {
     timer = setTimeout(() => void poll(), 2_000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [conversationPage?.active?.requestId, conversationPage?.active?.runId, conversationPage?.active?.state,
-    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh]);
+    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, memory.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
-  return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(current.snapshot, draftView.view) : current.snapshot}
+  const presented = memoryView.snapshot ?? current.snapshot;
+  return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
     designDraft={draftView.view?.draft ?? null} designDraftLoading={design.loading}
     designDraftError={draftView.error ?? (design.error ? "설계 초안을 불러오지 못했습니다." : null)}
     workspaceLabel={context.companyPrefix ?? "Workspace"}
@@ -99,7 +107,7 @@ export function BuilderPage() {
       try {
         const result = await refreshConversation({ channel });
         if (result.refreshed !== true) throw new Error("Unexpected refresh result.");
-      } finally { conversation.refresh(); lead.refresh(); design.refresh(); }
+      } finally { conversation.refresh(); lead.refresh(); design.refresh(); memory.refresh(); }
     } : undefined}
     onCancelLeadMessage={conversationPage?.active?.runId ? async () => {
       try { await cancelMessage({ channel }); } finally { conversation.refresh(); }
@@ -138,6 +146,7 @@ export function BuilderPage() {
       if (result.saved !== true || result.executionStarted !== false) throw new Error("Unexpected Lead Agent selection result.");
       lead.refresh();
       design.refresh();
+      memory.refresh();
       sessions.refresh();
       conversation.refresh();
     }}
@@ -148,8 +157,8 @@ export function BuilderPage() {
         if (result.saved !== true || result.executionStarted !== false || result.sessionsReady !== true) throw new Error("Unexpected Lead session preparation result.");
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
-    loading={state.loading} error={current.error ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); }} onImportConsultation={async text => {
+    loading={state.loading} error={current.error ?? memoryView.error ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
+    onRefresh={() => { state.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); memory.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };

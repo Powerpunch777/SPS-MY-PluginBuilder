@@ -1,6 +1,6 @@
 import { defineSpsPluginManifest } from "@sonparkserver/plugin-sdk/manifest";
 import { defineSpsUiContributions } from "@sonparkserver/plugin-sdk/ui";
-import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL } from "./tool-declarations.mjs";
+import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL } from "./tool-declarations.mjs";
 
 const surface = defineSpsUiContributions({
   entrypoint: "./dist/ui-v0.1.0",
@@ -21,7 +21,7 @@ export default defineSpsPluginManifest({
     "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel"],
   entrypoints: { ...surface.entrypoints, worker: "./dist/worker.js", workspaceWorker: "./dist/worker.js" },
   companyActivation: { defaultEnabled: false },
-  tools: [READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL],
+  tools: [READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL],
   ui: {
     ...surface.ui,
     workspaceShell: {

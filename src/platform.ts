@@ -8,7 +8,9 @@ import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
 import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
 import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
-import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL } from "./tool-declarations.mjs";
+import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL } from "./tool-declarations.mjs";
+import { readLeadMemory, updateLeadMemory } from "./lead-memory-tools.ts";
+import { createLeadMemoryStore } from "./lead-memory-store.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { parseDesignDraft } from "./domain/design-drafts.ts";
 import { createDesignDraftStore, type AuthoredDesignDraft } from "./design-draft-store.ts";
@@ -413,6 +415,16 @@ export async function readLeadDesignSources(params: unknown, runContext: unknown
   });
 }
 
+export async function readSharedLeadMemory(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readLeadMemory(params, context, platform));
+}
+
+export async function updateSharedLeadMemory(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => updateLeadMemory(params, context, platform, readBuilderSnapshot));
+}
+
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
     capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
@@ -428,13 +440,26 @@ export function createBuilderPlatform() {
     handler: (params, context, platform) => readLeadDesignDraft(params, context, platform) },
     { name: READ_DESIGN_SOURCES_TOOL.name, declaration: { displayName: READ_DESIGN_SOURCES_TOOL.displayName,
       description: READ_DESIGN_SOURCES_TOOL.description, parametersSchema: READ_DESIGN_SOURCES_TOOL.parametersSchema },
-    handler: (params, context, platform) => readLeadDesignSources(params, context, platform) }],
+    handler: (params, context, platform) => readLeadDesignSources(params, context, platform) },
+    { name: READ_LEAD_MEMORY_TOOL.name, declaration: { displayName: READ_LEAD_MEMORY_TOOL.displayName,
+      description: READ_LEAD_MEMORY_TOOL.description, parametersSchema: READ_LEAD_MEMORY_TOOL.parametersSchema },
+    handler: (params, context, platform) => readSharedLeadMemory(params, context, platform) },
+    { name: UPDATE_LEAD_MEMORY_TOOL.name, declaration: { displayName: UPDATE_LEAD_MEMORY_TOOL.displayName,
+      description: UPDATE_LEAD_MEMORY_TOOL.description, parametersSchema: UPDATE_LEAD_MEMORY_TOOL.parametersSchema },
+    handler: (params, context, platform) => updateSharedLeadMemory(params, context, platform) }],
     data: [{ key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>
       await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-sessions", handler: async (params, platform) =>
       await readLeadSessions(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.lead-memory", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
+      const current = await createLeadMemoryStore(companyId, params.projectId, platform.state).current();
+      return current && { workspaceId: companyId, projectId: params.projectId, sequence: current.sequence,
+        createdAt: current.revision.createdAt, memory: current.revision.memory } as unknown as JsonValue;
+    } },
     { key: "builder.design-draft", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");

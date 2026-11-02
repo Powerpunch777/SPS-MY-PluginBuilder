@@ -27,3 +27,16 @@ export const READ_DESIGN_SOURCES_TOOL: Readonly<{
   description: string;
   parametersSchema: JsonObject;
 }>;
+
+export const READ_LEAD_MEMORY_TOOL: Readonly<{
+  name: "builder.read-lead-memory";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
+export const UPDATE_LEAD_MEMORY_TOOL: Readonly<{
+  name: "builder.update-lead-memory";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
