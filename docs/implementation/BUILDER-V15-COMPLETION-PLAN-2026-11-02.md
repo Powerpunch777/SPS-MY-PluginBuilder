@@ -33,6 +33,10 @@ The deliverable is a working Builder workflow, not a UI-only prototype. The init
 
 [Lead 선택 조건부 저장의 정확한 계약, 개발 Host 검증 결과와 한계](LEAD-CONDITIONAL-STATE-2026-11-02.md)를 추가했다. 선택 저장 경로에 한정된 증거이며 AC-02, 전체 Builder 완료 또는 보류 중인 Marketplace·Preview·Native LAN 범위의 완료를 뜻하지 않는다.
 
+[프로젝트별 Solution Revision 저장 기반](SOLUTION-REVISION-STORAGE-2026-11-02.md)도 추가했다.
+충돌·과거 기록·응답 유실을 검사한 내부 모듈이며 아직 Lead 권한 API나 UI에 연결하지 않았다.
+AC 상태는 변경하지 않는다.
+
 The code status labels used below are an initial source inspection, not test results:
 
 - `P` Partial behavior exists, but the full AC is not met.
