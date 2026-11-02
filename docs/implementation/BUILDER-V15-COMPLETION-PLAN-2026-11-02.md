@@ -372,3 +372,14 @@ These references inform integration investigation; they do not prove that Builde
 For each AC, replace the initial `P`/`S`/`M` baseline with `PASS`, `PARTIAL`, `BLOCKED` or `NOT STARTED` only when evidence is attached. Keep criterion wording and IDs intact. Include exact revision, test command and output reference; identify mocked versus real Host/provider paths; list security limitations and unresolved decisions. Do not report full v15 completion until every required AC is accepted and the end-to-end customer deliverable plus user acceptance gate is proven.
 
 Checklist authorship alone is not implementation evidence. Dated implementation records must identify their exact revisions, actual tests and remaining scope before changing any AC's acceptance status.
+
+### 2026-11-02 추가 기록: Lead 실제 앱 live-design 시험
+
+[Lead 실제 앱 live-design 시험의 범위와 증거](LEAD-LIVE-DESIGN-2026-11-02.md)를 기록했다. Builder `12ba623` / Source `3c1eb21` 기준으로, 명시적 사용자 동의와 `SPS_BUILDER_LIVE_CODEX=1`, `SPS_BUILDER_LIVE_DESIGN=1` 설정을 사용한 운영자 시험에서 실제 Source Desktop/Host와 실제 Codex CLI의 응답 및 Host 초안 쓰기·재조회·재시작 후 보존이 확인됐다. Node 24 전체 160/160 테스트와 타입·빌드·SDK/CLI 검증도 통과했다. 최종 시험의 출력 10건은 모두 `ended`, `failed`는 0건이었다.
+
+이는 일반 Agent 기본 권한으로 성공했다는 뜻이 아니다. 최종 TrialAgent에는 MCP 도구 승인 재정의가 있었고 mock identity를 사용했다. 첫 시험의 AI 답변은 도구 취소를 보고했지만, 실제 도구 로그를 확인하지 않아 취소 여부나 원인은 확정할 수 없다. 플러그인은 임시 Host에 설치해 시험했으나 사용자 환경의 정식 설치본이나 두 컴퓨터(2PC) 검증은 확인하지 않았다. 실제 Google OAuth도 사용하지 않았다. 당시 화면 캡처에서 마지막 답변이 보이는 영역 아래에 있어 사용자에게 보였다고 주장하지 않는다. 공유 Lead 메모리·handoff·승인/질문 흐름과 CTO/Worker/QA/provider 증거 및 전달은 남아 있다. AC 체크와 상태는 변경하지 않는다.
+
+후속 `dcaecb3`은 위에서 발견한 대화 스크롤을 고쳤다. no-AI source 앱에서 긴 메시지
+fixture의 처음 끝 위치·과거 기록 독자 위치 보존·직접 최근 메시지 이동을 확인했다.
+전체163/163·타입/빌드·SDK CLI가 통과했지만 이 UI 변경에서 실계정 AI를 다시 실행한
+것은 아니다. 일반 Agent의 도구 승인·Lead 공유 기억과 나머지 v15 범위는 계속 미완료다.
