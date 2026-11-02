@@ -36,16 +36,10 @@ export async function runAcceptance(context) {
   const conversation = channel => data("builder.lead-conversation", { channel, cursor: null });
   const directory = path.join(temporaryRoot, "live-lead-memory");
   await mkdir(directory);
-  const args = ["--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-    "-c", 'web_search="disabled"',
-    "-c", 'mcp_servers.sps-plugin-session.enabled_tools=["list_plugin_tools","execute_plugin_tool"]',
-    "-c", 'mcp_servers.sps-plugin-session.tools.execute_plugin_tool.approval_mode="approve"'];
-  for (const feature of ["shell_tool", "multi_agent", "plugins", "apps", "hooks", "computer_use", "browser_use",
-    "in_app_browser", "code_mode_host", "image_generation", "workspace_dependencies"]) args.push("--disable", feature);
   const agent = await request(`/api/companies/${company.id}/agents`, { method: "POST", body: {
     name: "Isolated authorized shared-memory Lead", role: "engineer", adapterType: "codex_local",
     adapterConfig: { engine: "cli", cwd: directory, timeoutSec: 180, graceSec: 3,
-      dangerouslyBypassApprovalsAndSandbox: false, extraArgs: args },
+      dangerouslyBypassApprovalsAndSandbox: false },
     instructionsBundle: { files: { "AGENTS.md": "Authorized memory-only trial. Use only sps-plugin-session list_plugin_tools and execute_plugin_tool for Builder read-design-sources, read-lead-memory, update-lead-memory. Never run commands, read/edit files, generate code, use web/apps/subagents or contact other services. Memory is interpretation, not customer approval or execution authority. Unknown write outcomes require read reconciliation and must not be resent." } },
   } });
   await click(workspace, '.builder-nav [aria-label="시스템"]', "Select temporary memory trial Lead");

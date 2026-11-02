@@ -446,25 +446,41 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   }).then(value => value.data);
   const runsForLead = () => request(`/api/companies/${company.id}/heartbeat-runs?agentId=${leadAgent.id}&limit=100`);
   assert.deepEqual(await runsForLead(), []);
-  const dispatchText = "Builder durable dispatch probe: no AI or process command is configured.";
+  const beforeRejectedSend = await conversation();
+  const dispatchText = "Builder policy probe: this Process adapter must be rejected before any run.";
+  await workspace.evaluate(`(() => {
+    globalThis.__spsPolicyProbeFetch=globalThis.fetch;
+    globalThis.__spsPolicyProbeResult=null;
+    globalThis.fetch=async (...args)=>{
+      const response=await globalThis.__spsPolicyProbeFetch(...args);
+      const url=new URL(typeof args[0]==='string'?args[0]:args[0].url,location.href);
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`)}){
+        globalThis.__spsPolicyProbeResult={status:response.status,body:await response.clone().json(),
+          input:JSON.parse(args[1].body)};
+      }
+      return response;
+    };
+  })()`);
   await workspace.evaluate(`(() => { const input=document.querySelector('textarea[aria-label="Lead에게 메시지"]');
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(dispatchText)});
     input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
   await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="메시지 보내기"]')?.disabled === false`), Boolean, "send button for fixed non-AI probe");
-  await click(workspace, 'button[aria-label="메시지 보내기"]', "Send one explicit probe to the unconfigured Process adapter");
-  const failedConversation = await eventually(conversation,
-    value => value.totalTurns === 1 && value.active === null && value.turns[0]?.state === "failed", "durable failed run and completed UI observation");
-  const failedTurn = failedConversation.turns[0];
-  assert.equal(failedTurn.text, dispatchText);
-  assert.equal(failedTurn.answer, null, "A Process adapter failure must not invent an AI answer.");
-  assert.ok(failedTurn.runId);
-  assert.equal((await runsForLead()).length, 1);
-  await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes('실행 실패')`), Boolean, "actual failure state in transcript");
-  const duplicate = await request(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`, {
-    method: "POST", body: { companyId: company.id, params: { channel: "main", requestId: failedTurn.requestId, text: dispatchText } },
-  });
-  assert.equal(duplicate.data.saved, true);
-  assert.equal((await runsForLead()).length, 1, "A repeated request must not schedule another run.");
+  await click(workspace, 'button[aria-label="메시지 보내기"]', "Reject one explicit request to an unsupported Process adapter before execution");
+  const deniedSend = await eventually(() => workspace.evaluate(`globalThis.__spsPolicyProbeResult`),
+    value => value?.status >= 400, "real unsupported-policy HTTP response");
+  assert.match(JSON.stringify(deniedSend.body), /SPS_BUILDER_PROTECTED_SEND_UNAVAILABLE/);
+  await workspace.evaluate(`globalThis.fetch=globalThis.__spsPolicyProbeFetch;delete globalThis.__spsPolicyProbeFetch;delete globalThis.__spsPolicyProbeResult`);
+  await eventually(() => workspace.evaluate(`document.querySelector('.builder-composer .builder-feedback')?.textContent`),
+    value => value?.includes('보호 실행을 확인하지 못해 전송하지 않았습니다.'), "specific pre-dispatch feedback without fabricated activity");
+  assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.value`), dispatchText);
+  assert.deepEqual(await conversation(), beforeRejectedSend, "Unsupported policy must not create a saved or active turn.");
+  const duplicate = await workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.send-lead-message`)}, {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:${JSON.stringify(JSON.stringify(deniedSend.input))}
+  }).then(async response=>({status:response.status,body:await response.json()}))`, true);
+  assert.ok(duplicate.status >= 400);
+  assert.match(JSON.stringify(duplicate.body), /SPS_BUILDER_PROTECTED_SEND_UNAVAILABLE/);
+  assert.deepEqual(await conversation(), beforeRejectedSend);
+  assert.equal((await runsForLead()).length, 0, "Neither the rejected request nor a repeated ID may schedule a run.");
   assert.deepEqual(await data(company.id), saved, "Conversation turns must not enlarge the initial snapshot.");
   const leadAfterDispatch = await leadOptions(company.id);
   assert.equal(leadAfterDispatch.selectedAgentId, savedLead.selectedAgentId);
@@ -487,8 +503,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual((await data(secondCompany.id)).messages, []);
   assert.deepEqual(await leadOptions(company.id), leadAfterDispatch, "Host restart lost the Lead binding or actual post-dispatch Agent status.");
   assert.deepEqual(await leadSessions(company.id), preparedSessions, "Host restart lost Lead sessions.");
-  assert.deepEqual(await conversation(), failedConversation, "Host restart lost the exact turn/run identity.");
-  assert.equal((await runsForLead()).length, 1);
+  assert.deepEqual(await conversation(), beforeRejectedSend, "Host restart changed rejected-send history.");
+  assert.equal((await runsForLead()).length, 0);
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
   assert.deepEqual((await request(`/api/agents/${leadAgent.id}`)).adapterConfig, leadAgent.adapterConfig,
     "Host restart or Lead binding changed the original Agent configuration.");
@@ -540,7 +556,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   console.log(JSON.stringify({ builderCoreHost: true, realUiBridge: true, actualWorkspaceState: true,
     workspaceIsolation: true, explicitShell: true, idempotentInput: true, hostRestart: true,
     aiExecuted: false, installedPackageTested: false, physicalTwoPcTested: false,
-    actualNonAiFailedDispatch: true, duplicateDispatchPrevented: true, conversationRunRestart: true,
+    actualNonAiFailedDispatch: false, unsupportedPolicyRejectedBeforeDispatch: true, rejectedSendPreservedDraft: true,
+    repeatedRejectedRequestScheduledNoRun: true, conversationRestart: true,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,

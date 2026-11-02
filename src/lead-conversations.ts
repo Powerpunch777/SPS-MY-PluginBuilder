@@ -2,6 +2,8 @@ import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult 
 import type { BuilderLeadSessions, LeadChannel } from "./domain/model.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import { parseQuestionContext, type QuestionContext } from "./domain/question-context.ts";
+import { assertSessionExecutionPolicySupport, LEAD_SESSION_EXECUTION_POLICY, type SessionExecutionPolicy } from "./session-execution-policy.ts";
+import { PROTECTED_SEND_UNAVAILABLE } from "./lead-send-feedback.ts";
 
 type Scope = { workspaceId: string; selectionRevision: number; agentId: string; sessionId: string; channel: LeadChannel };
 type TurnState = "prepared" | "dispatching" | "submitted" | "uncertain" | "succeeded" | "failed" | "cancelled" | "interrupted" | "timed_out";
@@ -11,6 +13,7 @@ export type LeadTurn = Scope & {
   answer: string | null; outputState: "not_ready" | "available" | "withheld" | "unsupported";
   cancellationRequested: boolean; termination: "not_applicable" | "pending" | "confirmed";
   questionContext?: QuestionContext;
+  executionPolicy?: SessionExecutionPolicy;
 };
 type Head = Scope & { schemaVersion: 1; totalTurns: number; lastRequestId: string | null; activeRequestId: string | null };
 export type LeadConversationActivity = Pick<LeadTurn, "requestId" | "state" | "runId" | "cancellationRequested" | "termination">;
@@ -75,8 +78,9 @@ function parseHead(value: unknown, scope: Scope): Head {
   return { ...scope, schemaVersion: 1, totalTurns: row.totalTurns as number, lastRequestId, activeRequestId };
 }
 function parseTurn(value: unknown, scope: Scope): LeadTurn {
-  const row = record(value, TURN_KEYS, ["questionContext"]); matches(row, scope);
+  const row = record(value, TURN_KEYS, ["questionContext", "executionPolicy"]); matches(row, scope);
   const questionContext = Object.hasOwn(row, "questionContext") ? parseQuestionContext(row.questionContext) : undefined;
+  const executionPolicy = Object.hasOwn(row, "executionPolicy") ? parseStoredPolicy(row.executionPolicy) : undefined;
   if (questionContext && scope.channel !== "decisions") throw error();
   const requestId = id(row.requestId), previousRequestId = nullableId(row.previousRequestId), runId = nullableId(row.runId);
   if (requestId === previousRequestId || !Number.isSafeInteger(row.sequence) || (row.sequence as number) < 0
@@ -93,7 +97,21 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
     text: text(row.text, MAX_TEXT_BYTES), createdAt: row.createdAt, state: row.state as TurnState, runId,
     answer: row.answer === null ? null : text(row.answer, 65_536), outputState: row.outputState as LeadTurn["outputState"],
     cancellationRequested: row.cancellationRequested, termination: row.termination as LeadTurn["termination"],
-    ...(questionContext ? { questionContext } : {}) };
+    ...(questionContext ? { questionContext } : {}), ...(executionPolicy ? { executionPolicy } : {}) };
+}
+function parseStoredPolicy(value: unknown): SessionExecutionPolicy {
+  const row = record(value, ["mode", "toolNames"]);
+  if (row.mode !== "plugin-tools-only-v1" || !Array.isArray(row.toolNames) || Object.getPrototypeOf(row.toolNames) !== Array.prototype
+    || row.toolNames.length < 1 || row.toolNames.length > 32 || Reflect.ownKeys(row.toolNames).length !== row.toolNames.length + 1) throw error();
+  const names: string[] = [];
+  for (let n = 0; n < row.toolNames.length; n++) {
+    const field = Object.getOwnPropertyDescriptor(row.toolNames, String(n));
+    if (!field?.enumerable || !Object.hasOwn(field, "value") || typeof field.value !== "string"
+      || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(field.value)) throw error();
+    names.push(field.value);
+  }
+  if (new Set(names).size !== names.length) throw error();
+  return Object.freeze({ mode: "plugin-tools-only-v1", toolNames: Object.freeze(names.sort()) });
 }
 const active = (turn: LeadTurn) => !TERMINAL.has(turn.state) || turn.cancellationRequested && turn.termination !== "confirmed";
 async function save(platform: SpsPlatformInvocationContext, scope: Scope, key: string, value: unknown, check: () => Promise<void>) {
@@ -120,7 +138,7 @@ async function loadTurn(platform: SpsPlatformInvocationContext, scope: Scope, re
 export async function readLeadUserTurn(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
   const raw = await platform.state.get({ scopeKind: "company", scopeId: sessions.workspaceId,
     namespace: "sonpark.my-builder", stateKey: `lead-chat.turn.v1.${id(requestId)}` });
-  const row = record(raw, TURN_KEYS, ["questionContext"]);
+  const row = record(raw, TURN_KEYS, ["questionContext", "executionPolicy"]);
   if (row.channel !== "main" && row.channel !== "decisions") throw error();
   const scope = scopeFor(sessions, row.channel);
   const turn = parseTurn(raw, scope);
@@ -184,6 +202,11 @@ export function parseLeadConversationPage(value: unknown, sessions: BuilderLeadS
  * not cross-process CAS; Core must fence retired Worker invocations. */
 export function createLeadConversationStore(platform: SpsPlatformInvocationContext, sessions: BuilderLeadSessions,
   check: () => Promise<void>, beforeDispatch: (questionContext?: QuestionContext) => Promise<void> = check) {
+  async function requireSupportedPolicy(scope: Scope) {
+    try { await assertSessionExecutionPolicySupport(platform, scope.sessionId, scope.workspaceId); }
+    catch { throw new Error(PROTECTED_SEND_UNAVAILABLE); }
+    await check();
+  }
   async function refreshTurn(scope: Scope, turn: LeadTurn): Promise<LeadTurn> {
     await check();
     let current = turn;
@@ -273,10 +296,13 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
         if (head.lastRequestId !== requestId
           && (turn.previousRequestId !== head.lastRequestId || turn.sequence !== head.totalTurns)) throw error();
         await beforeDispatch(questionContext);
+        if (!turn.executionPolicy) throw new Error("This historical prepared turn has no execution restriction. Review it without resending.");
+        await requireSupportedPolicy(scope);
       } else {
         head = await reconcile(scope, head);
         if (head.activeRequestId !== null || head.totalTurns >= MAX_TURNS) throw error();
         await beforeDispatch(questionContext);
+        await requireSupportedPolicy(scope);
         // Probe the explicit receipt contract before ever sending. Older Hosts
         // must not silently ignore requestId and fall back to unkeyed execution.
         const prior = await platform.agents.sessions.getRequest(scope.sessionId, scope.workspaceId, requestId);
@@ -286,6 +312,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
           previousRequestId: head.lastRequestId, sequence: head.totalTurns, text: value, createdAt: new Date().toISOString(),
           state: "prepared", runId: null, answer: null, outputState: "not_ready",
           cancellationRequested: false, termination: "not_applicable",
+          executionPolicy: LEAD_SESSION_EXECUTION_POLICY,
           ...(questionContext ? { questionContext } : {}) }, check);
       }
       if (head.lastRequestId !== requestId) {
@@ -300,7 +327,9 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       try {
         const prompt = turn.questionContext
           ? `Builder question association (not approval or execution authority): ${JSON.stringify(turn.questionContext)}\nUser message:\n${value}` : value;
-        const result = await platform.agents.sessions.sendMessage(scope.sessionId, scope.workspaceId, { prompt, requestId });
+        if (!turn.executionPolicy) throw error();
+        const result = await platform.agents.sessions.sendMessage(scope.sessionId, scope.workspaceId,
+          { prompt, requestId, executionPolicy: turn.executionPolicy });
         await check();
         await writeTurn(platform, scope, { ...turn, state: "submitted", runId: id(result.runId) }, check);
       } catch {

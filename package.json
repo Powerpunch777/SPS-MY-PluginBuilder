@@ -19,7 +19,7 @@
   "spsPlugin": { "manifest": "./dist/manifest.js", "worker": "./dist/worker.js", "ui": "./dist/ui-v0.1.0" },
   "devDependencies": {
     "@playwright/test": "1.64.1",
-    "@sonparkserver/plugin-sdk": "github:Powerpunch777/sps-plugin-sdk#316c56f247813e3ec19037b3a3f079d1caa7b739",
+    "@sonparkserver/plugin-sdk": "github:Powerpunch777/sps-plugin-sdk#c69915a518f0eb600f0ace8238144059911f8d04",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

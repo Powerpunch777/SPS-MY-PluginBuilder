@@ -4,6 +4,7 @@ import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult 
 import { createLeadConversationStore, parseLeadConversationPage } from "../src/lead-conversations.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import type { BuilderLeadSessions } from "../src/domain/model.ts";
+import { LEAD_SESSION_EXECUTION_POLICY } from "../src/session-execution-policy.ts";
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
@@ -25,6 +26,8 @@ function fixture() {
       async set(input: { scopeId?: string; stateKey: string }, value: JsonValue) { state.set(key(input), structuredClone(value)); },
       async delete() { throw new Error("Chat must not delete history"); },
     }, agents: { sessions: {
+      async describePolicySupport() { return { schemaVersion: 1, modes: ["plugin-tools-only-v1"], enforcement: "dispatch-and-run",
+        readiness: "unknown", osIsolation: "not-certified" }; },
       async sendMessage(sessionId: string, workspaceId: string, opts: { requestId: string; prompt: string }) {
         sends.push({ sessionId, workspaceId, ...opts });
         if (noAcceptance) throw new Error("unknown admission");
@@ -57,6 +60,7 @@ test("writes bounded per-turn records, then reads persisted answers without grow
   const f = fixture();
   await f.store.send("main", uuid(1), "First question");
   assert.equal(f.sends.length, 1);
+  assert.deepEqual((f.sends[0] as unknown as { executionPolicy: unknown }).executionPolicy, LEAD_SESSION_EXECUTION_POLICY);
   assert.equal(f.state.has(`${A}:snapshot.v1`), false);
   let page = await f.store.page("main");
   assert.equal(page.totalTurns, 1); assert.equal(page.active?.state, "submitted");
@@ -67,6 +71,32 @@ test("writes bounded per-turn records, then reads persisted answers without grow
   assert.equal(page.turns[0]?.state, "succeeded");
   assert.equal((await f.store.page("decisions")).totalTurns, 0);
   assert.equal((await createLeadConversationStore(f.platform, sessions(B), f.check).page("main")).totalTurns, 0);
+});
+
+test("unsupported policy discovery prevents writes and never falls back to an unrestricted send", async () => {
+  for (const support of [undefined, async () => ({ schemaVersion: 1, modes: [], enforcement: "dispatch-and-run",
+    readiness: "unknown", osIsolation: "not-certified" })]) {
+    const f = fixture();
+    f.platform.agents.sessions.describePolicySupport = support as typeof f.platform.agents.sessions.describePolicySupport;
+    await assert.rejects(f.store.send("main", uuid(91), "Plan only"), /SPS_BUILDER_PROTECTED_SEND_UNAVAILABLE/);
+    assert.equal(f.state.size, 0);
+    assert.equal(f.sends.length, 0);
+  }
+});
+
+test("historical prepared turns remain readable but cannot be silently resent without a pinned policy", async () => {
+  const f = fixture(); const original = f.platform.state.set;
+  f.platform.state.set = async (key, value) => {
+    if ((value as Record<string, JsonValue>).state === "dispatching") throw new Error("pre-dispatch crash");
+    return original(key, value);
+  };
+  await assert.rejects(f.store.send("main", uuid(92), "Plan only"), /pre-dispatch/);
+  const [key, value] = [...f.state].find(([, value]) => (value as Record<string, JsonValue>).state === "prepared")!;
+  const legacy = { ...(value as Record<string, JsonValue>) }; delete legacy.executionPolicy;
+  f.state.set(key, legacy);
+  assert.equal((await f.store.page("main")).turns[0]!.text, "Plan only");
+  await assert.rejects(f.store.resumePrepared("main", uuid(92)), /historical prepared turn/);
+  assert.equal(f.sends.length, 0);
 });
 
 test("question association is persisted with raw answer text and sent explicitly to the decisions session", async () => {
@@ -164,7 +194,8 @@ test("a persisted prepared turn resumes after a pre-dispatch crash and sends exa
   assert.deepEqual(await restarted.resumePrepared("main", uuid(1)), { saved: true, requestId: uuid(1) });
   await assert.rejects(restarted.resumePrepared("main", uuid(1)));
   assert.equal(f.sends.length, 1);
-  assert.deepEqual(f.sends[0], { sessionId: MAIN, workspaceId: A, requestId: uuid(1), prompt: "First question" });
+  assert.deepEqual(f.sends[0], { sessionId: MAIN, workspaceId: A, requestId: uuid(1), prompt: "First question",
+    executionPolicy: LEAD_SESSION_EXECUTION_POLICY });
 });
 
 test("unknown admission stays blocked and does not turn a null receipt into replay permission", async () => {

@@ -34,14 +34,6 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
   const stage = value => console.log(JSON.stringify({ liveDesignStage: value }));
   const workingDirectory = path.join(temporaryRoot, "live-lead-design");
   await mkdir(workingDirectory);
-  const extraArgs = ["--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-    "-c", 'web_search="disabled"',
-    "-c", 'mcp_servers.sps-plugin-session.enabled_tools=["list_plugin_tools","execute_plugin_tool"]',
-    "-c", 'mcp_servers.sps-plugin-session.tools.execute_plugin_tool.approval_mode="approve"'];
-  for (const feature of ["shell_tool", "multi_agent", "plugins", "apps", "hooks", "computer_use",
-    "browser_use", "in_app_browser", "code_mode_host", "image_generation", "workspace_dependencies"]) {
-    extraArgs.push("--disable", feature);
-  }
   const sourceText = "Design-only trial: a read-only list of notes in a desktop application. Keep note content local. Ask whether a search field is needed. Do not implement or execute anything. This is not customer approval.";
   const sourceRequestId = randomUUID();
   await request(`/api/plugins/${plugin.id}/actions/builder.import-consultation`, { method: "POST", body: {
@@ -55,7 +47,7 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
   const agent = await request(`/api/companies/${company.id}/agents`, { method: "POST", body: {
     name: "Isolated authorized design Lead", role: "engineer", adapterType: "codex_local",
     adapterConfig: { engine: "cli", cwd: workingDirectory, timeoutSec: 180, graceSec: 3,
-      dangerouslyBypassApprovalsAndSandbox: false, extraArgs },
+      dangerouslyBypassApprovalsAndSandbox: false },
     instructionsBundle: { files: { "AGENTS.md": `Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft, propose-design${questionAnswers ? " and resolve-design-question" : ctoRegistrations ? ", create-cto and list-ctos (logical identity/session registration only, never execution)" : recordBaseline ? ", read-design-baseline, publish-design-baseline and read-solution (internal design decision record only)" : ""} operations. Never run commands, edit/read files, generate code, search the web, create Core Agents or contact other services. Prepare only an unapproved draft from user input unless the user explicitly provides a planning decision to record as an internal baseline. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim external legal approval, implementation or delivery.` } },
   } });
   const data = (key, params = {}, companyId = company.id) => request(`/api/plugins/${plugin.id}/data/${key}`, {

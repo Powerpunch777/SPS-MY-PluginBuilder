@@ -9,6 +9,7 @@ import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
 import { DesignDraftSummary } from "./DesignDraftSummary.tsx";
+import { leadSendFailureMessage } from "../lead-send-feedback.ts";
 import { isNearTranscriptBottom, transcriptScrollAction, type TranscriptPage } from "./transcript-scroll.ts";
 import { selectLeadDecisionTranscript } from "../domain/selectors.ts";
 import { assertConsultationRequestSize, decodeConsultationFile, MAX_CONSULTATION_REQUEST_BYTES } from "../domain/consultation-file.js";
@@ -237,7 +238,7 @@ function MessageComposer({
     setSending(true);
     setFeedback("");
     try { await onSend(value, channel, questionContext); setText(""); }
-    catch { setFeedback("전송 결과를 확인하지 못했습니다. 응답 확인으로 기존 실행을 확인해 주세요."); }
+    catch (error) { setFeedback(leadSendFailureMessage(error)); }
     finally { setSending(false); }
   }
   return <div className="builder-composer">

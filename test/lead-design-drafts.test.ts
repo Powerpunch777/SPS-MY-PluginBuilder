@@ -264,6 +264,8 @@ test("normal user send validates the current question before dispatch, but compl
   const userPlatform = { ...f.platform, agents: {
     async list() { return [{ id: LEAD, companyId: WORKSPACE, name: "Lead", status: "idle" }]; },
     sessions: {
+      async describePolicySupport() { return { schemaVersion: 1, modes: ["plugin-tools-only-v1"], enforcement: "dispatch-and-run",
+        readiness: "unknown", osIsolation: "not-certified" }; },
       async getRequest() { return sends ? { requestId, state: "submitted", runId: RUN } : null; },
       async sendMessage() { sends += 1; return { runId: RUN }; },
       async getRun() { return { runId: RUN, status: "succeeded", cancellationRequested: false, termination: "not_applicable",

@@ -27,14 +27,8 @@ export async function runAcceptance(context) {
   const stage = value => console.log(JSON.stringify({ liveLeadStage: value }));
   const workingDirectory = path.join(temporaryRoot, "live-lead-chat");
   await mkdir(workingDirectory);
-  const extraArgs = ["--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-    "-c", 'web_search="disabled"'];
-  for (const feature of ["shell_tool", "multi_agent", "plugins", "apps", "hooks", "computer_use",
-    "browser_use", "in_app_browser", "code_mode_host", "image_generation", "workspace_dependencies"]) {
-    extraArgs.push("--disable", feature);
-  }
   const adapterConfig = { engine: "cli", cwd: workingDirectory, timeoutSec: 120, graceSec: 3,
-    dangerouslyBypassApprovalsAndSandbox: false, extraArgs };
+    dangerouslyBypassApprovalsAndSandbox: false };
   stage("create_temporary_agent");
   const agent = await request(`/api/companies/${company.id}/agents`, { method: "POST", body: {
     name: "Isolated authorized Lead chat", role: "engineer", adapterType: "codex_local", adapterConfig,
