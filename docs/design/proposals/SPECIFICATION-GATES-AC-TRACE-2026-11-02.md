@@ -1,8 +1,11 @@
 # 명세 검증 Gate와 SG 추적 제안
 
-> **문서 ID:** SPS-PB-SG-TRACE-2026-11-02  
-> **상태:** 설계 검토용 제안. v15를 개정하거나 구현·AC 통과를 승인하지 않는다.  
-> **작성 기준:** Builder v15 및 현재 공개 Builder 소스의 읽기 전용 대조.  
+> **문서 ID:** SPS-PB-SG-TRACE-2026-11-02
+>
+> **상태:** 설계 검토용 제안. v15를 개정하거나 구현·AC 통과를 승인하지 않는다.
+>
+> **작성 기준:** Builder v15 및 현재 공개 Builder 소스의 읽기 전용 대조.
+>
 > **원문:** 사용자 제공 `SPS_Builder_Specification_Validation_Design_Addendum_2026-11-02.zip` 안 Markdown 1개(40,554 bytes)를 .NET `ZipFile`/`StreamReader`로 직접 읽었다. 압축 해제하지 않았다.
 
 ## 관계와 범위
