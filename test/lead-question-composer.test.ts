@@ -10,7 +10,7 @@ import type { BuilderSnapshot, BuilderShellProps } from "../src/domain/model.ts"
 
 const root = path.resolve(import.meta.dirname, "..");
 
-test("a question context remains an association, not an answer or approval", async () => {
+test("a CTO intake decision question is visibly read-only until answer binding exists", async () => {
   const temporary = await mkdtemp(path.join(root, "node_modules", ".question-composer-test-"));
   try {
     const output = path.join(temporary, "BuilderShell.mjs");
@@ -54,9 +54,13 @@ test("a question context remains an association, not an answer or approval", asy
         status: "open",
         options: [],
         recommendation: null,
+        decisionOrigin: "cto-intake",
+        ctoRecommendation: "desktop",
+        answerUnavailableReason: "이 CTO 질문의 답변 연결은 아직 준비되지 않았습니다.",
+        originQuestionId: "proposal-1",
+        originWorkstreamId: "workstream-1",
         answer: null,
         revisionId: null,
-        questionContext: { projectId: "project-1", draftRevisionId: "draft-2", questionId: "question-1" },
       }],
       graph: { revisionId: null, entities: [], relations: [] },
       activity: [],
@@ -72,13 +76,13 @@ test("a question context remains an association, not an answer or approval", asy
 
     assert.match(html, /Choose a deployment target/);
     assert.match(html, /답변 필요/);
+    assert.match(html, /CTO 작업 질문 · Lead 검토 완료 · 부분 지원, 읽기 전용/);
+    assert.match(html, /CTO 권고\(Lead 추천 아님\): desktop/);
+    assert.match(html, /이 CTO 질문의 답변 연결은 아직 준비되지 않았습니다\./);
+    assert.match(html, /<textarea[^>]*disabled/);
+    assert.match(html, /<button[^>]*disabled[^>]*type="submit"/);
     assert.doesNotMatch(html, /project-1|draft-2/);
     assert.doesNotMatch(html, /결정된 답변|승인됨|approved/);
-    snapshot.questions[0]!.status = "answered";
-    snapshot.questions[0]!.answer = "Use desktop.";
-    const answered = renderToStaticMarkup(createElement(DecisionsView, { props, drawerOpen: false, onDrawerToggle() {}, onDrawerClose() {} }));
-    assert.match(answered, /이 질문의 답변이 설계에 반영되었습니다/);
-    assert.doesNotMatch(answered, /AI 메시지 연결을 사용할 수 없어/);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

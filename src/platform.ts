@@ -18,6 +18,8 @@ import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL
 import { dispatchCtoWorkstream, inspectCtoWorkstreamDelivery } from "./cto-workstream-delivery.ts";
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
 import { readCtoMemory, updateCtoMemory } from "./cto-memory-tools.ts";
+import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
+import { submitCtoQuestion, readCtoQuestions, readOwnCtoQuestion, readUserCtoQuestions, reviewCtoQuestion } from "./cto-question-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -517,6 +519,22 @@ export async function updateAssignedCtoMemory(params: unknown, runContext: unkno
   const context = parseLeadToolContext(runContext);
   return serialize(context.companyId, () => updateCtoMemory(params, context, platform));
 }
+export async function submitAssignedCtoQuestion(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => submitCtoQuestion(params, context, platform));
+}
+export async function readCtoQuestionIntake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readCtoQuestions(params, context, platform));
+}
+export async function readOwnCtoQuestionReceipt(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => readOwnCtoQuestion(params, context, platform));
+}
+export async function reviewCtoQuestionIntake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(runContext);
+  return serialize(context.companyId, () => reviewCtoQuestion(params, context, platform));
+}
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
@@ -587,7 +605,19 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => readAssignedCtoMemory(params, context, platform) },
     { name: UPDATE_CTO_MEMORY_TOOL.name, declaration: { displayName: UPDATE_CTO_MEMORY_TOOL.displayName,
       description: UPDATE_CTO_MEMORY_TOOL.description, parametersSchema: UPDATE_CTO_MEMORY_TOOL.parametersSchema },
-      handler: (params, context, platform) => updateAssignedCtoMemory(params, context, platform) }],
+      handler: (params, context, platform) => updateAssignedCtoMemory(params, context, platform) },
+    { name: SUBMIT_CTO_QUESTION_TOOL.name, declaration: { displayName: SUBMIT_CTO_QUESTION_TOOL.displayName,
+      description: SUBMIT_CTO_QUESTION_TOOL.description, parametersSchema: SUBMIT_CTO_QUESTION_TOOL.parametersSchema },
+      handler: (params, context, platform) => submitAssignedCtoQuestion(params, context, platform) },
+    { name: READ_CTO_QUESTIONS_TOOL.name, declaration: { displayName: READ_CTO_QUESTIONS_TOOL.displayName,
+      description: READ_CTO_QUESTIONS_TOOL.description, parametersSchema: READ_CTO_QUESTIONS_TOOL.parametersSchema },
+      handler: (params, context, platform) => readCtoQuestionIntake(params, context, platform) },
+    { name: READ_OWN_CTO_QUESTION_TOOL.name, declaration: { displayName: READ_OWN_CTO_QUESTION_TOOL.displayName,
+      description: READ_OWN_CTO_QUESTION_TOOL.description, parametersSchema: READ_OWN_CTO_QUESTION_TOOL.parametersSchema },
+      handler: (params, context, platform) => readOwnCtoQuestionReceipt(params, context, platform) },
+    { name: REVIEW_CTO_QUESTION_TOOL.name, declaration: { displayName: REVIEW_CTO_QUESTION_TOOL.displayName,
+      description: REVIEW_CTO_QUESTION_TOOL.description, parametersSchema: REVIEW_CTO_QUESTION_TOOL.parametersSchema },
+      handler: (params, context, platform) => reviewCtoQuestionIntake(params, context, platform) }],
     data: [{ key: "builder.workstreams", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
@@ -610,6 +640,10 @@ export function createBuilderPlatform() {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
       return await readProjectCtos(companyId, params.projectId, platform) as unknown as JsonValue;
+    } }, { key: "builder.cto-user-decisions", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
+      return await readUserCtoQuestions(companyId, params.projectId, platform) as unknown as JsonValue;
     } }, { key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>

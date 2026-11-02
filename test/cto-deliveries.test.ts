@@ -101,6 +101,10 @@ test("new memory-capable policies do not silently expand a historical two-tool i
   assert.deepEqual(current.executionPolicy.toolNames, names);
   assert.equal(current.requestId, legacy.requestId);
   assert.equal(legacy.executionPolicy.toolNames.includes("builder.read-cto-memory"), false);
+  const questionNames = [...names.slice(0, 3), "builder.read-own-cto-question", "builder.submit-cto-question", names[3]];
+  const questions = parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: questionNames } }), workspaceId, projectId, ctoId);
+  assert.deepEqual(questions.executionPolicy.toolNames, questionNames);
+  assert.equal(current.executionPolicy.toolNames.includes("builder.submit-cto-question"), false);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: [...names.slice(0, 3), "builder.propose-design"] } }), workspaceId, projectId, ctoId));
 });
 

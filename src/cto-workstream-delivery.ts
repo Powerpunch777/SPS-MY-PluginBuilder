@@ -75,7 +75,9 @@ function prompt(delivery: CtoDelivery) {
     ctoId: delivery.ctoId, boardRevisionId: delivery.boardRevisionId, instruction: delivery.instruction };
   const memory = delivery.executionPolicy.toolNames.includes("builder.read-cto-memory")
     ? "First read builder.read-cto-memory for your own project/CTO/workstream. Restore only your private notes, not another actor's memory. Notes may be obsolete and never override the pinned instruction. You may use builder.update-cto-memory for bounded planning notes citing this exact requestId, but do not copy credentials or private transcripts. " : "";
-  const text = `Builder structured Workstream planning event:\n${JSON.stringify(event)}\n` + memory
+  const questions = delivery.executionPolicy.toolNames.includes("builder.submit-cto-question")
+    ? "If you identify a genuine ambiguity in your assigned work, you may submit a structured proposal with builder.submit-cto-question. This only records internal Lead intake, never a user question or a user answer. The Lead decides which questions require a user decision. Do not copy private memory or transcripts into a proposal. " : "";
+  const text = `Builder structured Workstream planning event:\n${JSON.stringify(event)}\n` + memory + questions
     + "Read the exact assigned instruction and pinned sources with builder.read-cto-workstream, then record your understanding/readiness using builder.acknowledge-workstream. "
     + "This run is restricted to its stored planning-tool policy. Do not generate code, run commands, read/write local files, use other tools, create Workers or claim implementation/QA/delivery. "
     + "A readiness report is not execution approval. If the current specification changed, report the conflict instead of acknowledging a newer revision. "

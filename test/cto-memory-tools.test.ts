@@ -171,3 +171,17 @@ test("another CTO using the same Agent receives a separate empty private memory"
   await assert.rejects(readCtoMemory(params, ctx(sessionId, runId), x.platform));
   assert.equal((await x.store.current())!.revision.memory.entries[0]!.text, x.entry.text);
 });
+
+test("a still-active old run may organize only its old-source private notes, never claim the new revision", async () => {
+  const x = await activeFixture();
+  await createWorkstreamStore(W, P, x.state).publish({ expectedBaseRevisionId: "board-1", revision: {
+    projectId: P, revisionId: "board-2", workstreams: [{ ...x.instruction,
+      spec: { ...x.instruction.spec, revision: 2, goal: "Updated instruction pending reconciliation" },
+      change: { ...x.instruction.change, previousRevision: 1 } }],
+  } });
+  const read = await x.read();
+  assert.equal((read.data as { currentSource: { specRevision: number } }).currentSource.specRevision, 1);
+  await x.write();
+  assert.equal((await x.store.current())!.revision.sourceDigests[0]!.specRevision, 1);
+  assert.equal(x.f.sends, 1);
+});

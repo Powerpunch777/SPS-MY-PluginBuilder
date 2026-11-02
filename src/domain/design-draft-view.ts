@@ -40,15 +40,6 @@ export function projectDesignDraft(snapshot: BuilderSnapshot, view: DesignDraftV
   return { ...snapshot,
     documents: [...snapshot.documents, { id: `draft:${draft.revisionId}`, title: "설계 초안 · 승인 전",
       revisionId: draft.revisionId, createdAt: view.createdAt, text: JSON.stringify(draft.specification, null, 2) }],
-    questions: [...snapshot.questions, ...draft.questions.map(question => {
-      const decision = view.decisions?.find(decision => decision.questionId === question.id);
-      return { id: `draft:${draft.revisionId}:${question.id}`,
-      title: question.title, text: question.text, status: decision ? "answered" as const : "open" as const,
-      options: question.options.map(option => ({ ...option })),
-      recommendation: question.options.find(option => option.id === question.recommendation)?.label ?? null,
-      answer: decision?.answerText ?? null, revisionId: decision?.appliedDraftRevisionId ?? draft.revisionId,
-      questionContext: { projectId: draft.projectId, draftRevisionId: draft.revisionId, questionId: question.id } };
-    })],
     graph: { revisionId: draft.graph.graphRevisionId,
       entities: draft.graph.entities.map(entity => ({ id: entity.id, kind: entity.kind,
         label: entity.specRef ? labels.get(entity.specRef) ?? entity.id : entity.id,

@@ -464,3 +464,26 @@ Workspace/project/CTO별 불변 기록, 정확한 Core 요청/활성 run/세션 
 전체357/357·격리 타입/빌드·SDK CLI 및 compiled Worker JSONL fake Host 왕복은
 통과했다. 실제 CTO가 기억을 사용한 증거나 OS 격리, 질문 intake/Worker/QA/Task
 Packet/Runner/납품까지 완료한 것은 아니다. 전체 AC 상태는 근거 없이 올리지 않는다.
+
+### 2026-11-02 추가 확정: CTO 질문 분류 경로
+
+[통합 설계 v15의 질문 라우팅 clarification](../design/01_Design/SPS_Plugin_Builder_Codex_Final_Design_v15.md#2026-11-02-추가-확정-cto-작업-질문-분류)에 따라,
+CTO 작업 중 질문은 기존 Lead `question_intake` 수신 세션으로 전달한다. Intake Lead가
+현재 설계·결정으로 답할 수 있는 것은 CTO에 직접 회신하고, 사용자 고유 결정이 필요한
+것만 미결정사항에 중복 없이 게시한다. 메인 Lead의 일반 고객 상담 질문은 해당 목록에
+넣지 않는다. 모호성 및 재질문 판단은 Lead의 AI 업무이며 키워드 하드코딩으로 대체하지
+않는다. 기존 Lead 3세션·CTO 단일 세션, 사용자 답변의 설계 반영과 중복 승인 금지 원칙은
+유지한다.
+
+이 경로의 구현 제안/triage는 진행 중이다. 미결정사항 UI와 실제 사용자 질문·답변을 설계
+Revision 및 CTO 응답에 연결하는 기능은 아직 미완료다. 이번 문서 기록은 기존 테스트 결과나
+개수, AC 상태를 변경하지 않으며 새 구현·앱·AI 검증 증거를 추가하지 않는다.
+
+### 2026-11-02 후속 구현: 내부 접수와 사용자 목록 분리
+
+[CTO 질문 접수와 검토](CTO-QUESTION-INTAKE-2026-11-02.md)에 실제 변경과 검증을
+기록했다. 불변 내부 proposal, 지정된 intake Lead의 검토, 자기 질문 조회와 현재 명세에
+결속된 사용자 결정 목록을 연결했다. 일반 초안 질문은 메인에 남고 CTO 사용자 질문은
+현재 읽기 전용이다. 전체383/383·타입/빌드·SDK CLI와 마지막 no-AI source 앱 검사는
+통과했다. 앞선 앱 시험2회 실패도 같은 기록에서 구분한다. 실제 AI 분류/자동 Lead 호출,
+CTO 회신·사용자 답변/설계 개정/재전달은 미완료이며 전체 AC를 PASS로 바꾸지 않는다.

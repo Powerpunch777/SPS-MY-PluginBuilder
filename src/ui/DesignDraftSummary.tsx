@@ -51,8 +51,8 @@ export function DesignDraftSummary({ draft, loading, error, resolvedQuestionIds 
         <span aria-label={`요구사항 ${draft.specification.requirements.length}개`} style={mutedStyle}>
           요구사항 {draft.specification.requirements.length}개
         </span>
-        <span aria-label={`미결정질문 ${unresolvedCount}개`} style={mutedStyle}>
-          미결정질문 {unresolvedCount}개
+        <span aria-label={`설계 질문 ${unresolvedCount}개`} style={mutedStyle}>
+          설계 질문 {unresolvedCount}개
         </span>
       </div>
 
@@ -97,7 +97,7 @@ export function DesignDraftSummary({ draft, loading, error, resolvedQuestionIds 
                   </li>
                 ))}
               </ul>
-            ) : <p style={mutedStyle}>미결정질문이 없습니다.</p>}
+            ) : <p style={mutedStyle}>설계 질문이 없습니다.</p>}
           </section>
 
           <section aria-label="상담근거">

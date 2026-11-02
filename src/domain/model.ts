@@ -55,6 +55,11 @@ export interface BuilderQuestion {
   answer: string | null;
   revisionId: string | null;
   questionContext?: import("./question-context.ts").QuestionContext;
+  decisionOrigin?: "cto-intake";
+  ctoRecommendation?: string | null;
+  answerUnavailableReason?: string;
+  originQuestionId?: string;
+  originWorkstreamId?: string;
 }
 
 export interface BuilderGraphEntity {
@@ -102,6 +107,7 @@ export interface BuilderSnapshot {
 
 export interface BuilderShellProps {
   designDraft?: import("./design-drafts.ts").DesignDraft | null;
+  designDraftResolvedQuestionIds?: readonly string[];
   designDraftLoading?: boolean;
   designDraftError?: string | null;
   snapshot: BuilderSnapshot;

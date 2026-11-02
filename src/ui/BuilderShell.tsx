@@ -442,22 +442,25 @@ export function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
     <button aria-label="질문 목록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section className="builder-message-main">
-      <div className="builder-chat-context"><div className="builder-chat-heading"><h1>미결정사항</h1><p>질문 전용 Lead 대화 · Builder에 저장된 기록</p></div>
+      <div className="builder-chat-context"><div className="builder-chat-heading"><h1>미결정사항</h1><p>CTO 제안 중 Lead가 사용자 결정 필요로 분류한 항목만 표시합니다. 기존 저장 질문과 답변 기록은 삭제되지 않습니다.</p></div>
         <button aria-label="미결정사항 목록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">질문 목록</span></button>
       </div>
       <ConversationControls channel="decisions" props={props} />
       {selected ? <><div className="builder-question-detail" style={{ padding: "12px 18px 0" }}>
         <StatusLabel status={selected.status} /><h2 style={{ margin: "7px 0", fontSize: 14 }}>{selected.title}</h2><p>{selected.text}</p>
         {selected.options.map(option => <div className="builder-option" key={option.id}><strong>{option.label}</strong><small>{option.tradeoff}</small></div>)}
+        {selected.decisionOrigin === "cto-intake" && <div className="builder-composer-note">CTO 작업 질문 · Lead 검토 완료 · 부분 지원, 읽기 전용</div>}
+        {selected.ctoRecommendation && <div className="builder-recommendation">CTO 권고(Lead 추천 아님): {selected.ctoRecommendation}</div>}
         {selected.recommendation && <div className="builder-recommendation">Lead 추천: {selected.recommendation}</div>}
         {selected.answer && <div className="builder-recommendation"><Check aria-hidden="true" size={14} /> 결정된 답변: {selected.answer}{selected.revisionId ? ` · ${selected.revisionId}` : ""}</div>}
       </div></>
         : <EmptyState icon={CircleHelp} title="미결정사항이 없습니다" detail="Lead가 사용자 결정을 요청하면 여기에 표시됩니다." />}
       {(selected || messages.length > 0) && <MessageList actors={props.snapshot.actors} messages={messages} followLatest={!props.conversationHasNewer} />}
       {selected && <MessageComposer key={selected.id} channel="decisions" enabled={Boolean(props.onSendMessage) && selected.status === "open"
+        && !selected.answerUnavailableReason
         && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === "decisions" && !props.conversation.active)}
-        onSend={props.onSendMessage} questionContext={selected.questionContext}
-        disabledReason={selected.status === "answered" ? "이 질문의 답변이 설계에 반영되었습니다." : undefined} />}
+        onSend={selected.answerUnavailableReason ? undefined : props.onSendMessage} questionContext={selected.questionContext}
+        disabledReason={selected.answerUnavailableReason ?? (selected.status === "answered" ? "이 질문의 답변이 설계에 반영되었습니다." : undefined)} />}
     </section>
     <ActivityRail onClose={onDrawerClose} onSelectQuestion={setSelectedId} props={props} selectedQuestion={selected} view="decisions" />
   </div>;
@@ -638,9 +641,7 @@ export function BuilderShell(props: BuilderShellProps) {
       </aside>
       <main className="builder-main">
         <DesignDraftSummary draft={props.designDraft ?? null} loading={props.designDraftLoading ?? false} error={props.designDraftError ?? null}
-          resolvedQuestionIds={props.snapshot.questions.filter(question => question.status === "answered"
-            && question.questionContext?.projectId === props.designDraft?.projectId
-            && question.questionContext?.draftRevisionId === props.designDraft?.revisionId).map(question => question.questionContext!.questionId)} />
+          resolvedQuestionIds={props.designDraftResolvedQuestionIds ?? []} />
         {view !== "lead" && view !== "decisions" && !activeActor
           ? <div className="builder-view-body"><div className="builder-page-actions"><h1>{current.title}</h1>{headerActions}</div>{content}</div>
           : <div className="builder-view-body">{content}</div>}

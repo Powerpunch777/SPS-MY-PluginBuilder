@@ -61,7 +61,7 @@ test("renders the read-only draft summary and its details as escaped text", asyn
     assert.match(html, /설계 초안 · 승인·실행 전/);
     assert.match(html, /draft-r01/);
     assert.match(html, /요구사항 1개/);
-    assert.match(html, /미결정질문 1개/);
+    assert.match(html, /설계 질문 1개/);
     assert.match(html, /<details\b/);
     assert.match(html, /요구사항/);
     assert.match(html, /REQ-1/);
@@ -107,10 +107,10 @@ test("resolved question history stays visible but no longer inflates the unresol
   try {
     const html = renderToStaticMarkup(createElement(DesignDraftSummary, { draft, loading: false, error: null,
       resolvedQuestionIds: ["question-1", "not-in-this-draft"] }));
-    assert.match(html, /미결정질문 0개/);
+    assert.match(html, /설계 질문 0개/);
     assert.match(html, /답변 완료/);
     assert.match(html, /출력 형식/);
     assert.match(html, /설계 초안 · 승인·실행 전/);
-    assert.doesNotMatch(html, /미결정질문 1개/);
+    assert.doesNotMatch(html, /설계 질문 1개/);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });

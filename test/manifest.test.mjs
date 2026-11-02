@@ -3,6 +3,7 @@ import test from "node:test";
 import manifest from "../src/manifest.mjs";
 import { CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL, DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL } from "../src/delivery-tool-declarations.mjs";
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-tool-declarations.mjs";
+import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
   assert.equal(manifest.companyActivation?.defaultEnabled, false);
@@ -66,4 +67,41 @@ test("CTO memory tools expose strict private-memory contracts in the manifest", 
   assert.match(READ_CTO_MEMORY_TOOL.description, /project-and-CTO-scoped/);
   assert.match(UPDATE_CTO_MEMORY_TOOL.description, /never automatically retry/);
   assert.match(UPDATE_CTO_MEMORY_TOOL.description, /not approval or evidence/);
+});
+
+test("CTO question tools expose strict planning-only contracts in the manifest", () => {
+  const declarations = [SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL];
+  assert.deepEqual(declarations.map(declaration => manifest.tools.find(tool => tool.name === declaration.name)), declarations);
+  const submit = SUBMIT_CTO_QUESTION_TOOL.parametersSchema;
+  assert.deepEqual(submit.required, ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "proposal"]);
+  assert.equal(submit.additionalProperties, false);
+  assert.deepEqual(submit.properties.expectedBaseRevisionId.type, ["string", "null"]);
+  const proposal = submit.properties.proposal;
+  assert.deepEqual(proposal.required, ["id", "title", "context", "reasonNeeded", "options", "recommendation", "delayImpact", "scopeNodeIds", "evidenceRefs"]);
+  assert.equal(proposal.additionalProperties, false);
+  assert.equal(proposal.properties.title.maxLength, 512);
+  assert.equal(proposal.properties.options.minItems, 2);
+  assert.equal(proposal.properties.options.maxItems, 8);
+  assert.deepEqual(proposal.properties.options.items.required, ["id", "label", "tradeoff"]);
+  assert.equal(proposal.properties.scopeNodeIds.minItems, 1);
+  assert.equal(proposal.properties.scopeNodeIds.maxItems, 64);
+  assert.equal(proposal.properties.evidenceRefs.maxItems, 32);
+  assert.deepEqual(READ_CTO_QUESTIONS_TOOL.parametersSchema.required, ["projectId"]);
+  assert.equal(READ_CTO_QUESTIONS_TOOL.parametersSchema.additionalProperties, false);
+  assert.deepEqual(READ_OWN_CTO_QUESTION_TOOL.parametersSchema.required, ["projectId", "ctoId", "workstreamId", "questionId"]);
+  assert.equal(READ_OWN_CTO_QUESTION_TOOL.parametersSchema.additionalProperties, false);
+  assert.match(READ_OWN_CTO_QUESTION_TOOL.description, /exact active Core-bound CTO session/);
+  assert.match(READ_OWN_CTO_QUESTION_TOOL.description, /No other CTO question/);
+  assert.match(READ_OWN_CTO_QUESTION_TOOL.description, /never resends/);
+  const review = REVIEW_CTO_QUESTION_TOOL.parametersSchema;
+  assert.deepEqual(review.required, ["projectId", "questionId", "expectedBaseRevisionId", "revisionId", "reviewId", "disposition", "rationale", "evidenceRefs"]);
+  assert.deepEqual(review.properties.disposition.enum, ["existing-specification", "delegated-choice", "user-decision-needed"]);
+  assert.equal(review.additionalProperties, false);
+  for (const declaration of declarations.filter(item => item !== READ_OWN_CTO_QUESTION_TOOL)) {
+    assert.match(declaration.description, /planning/i);
+    assert.match(declaration.description, /implementation/i);
+  }
+  assert.match(SUBMIT_CTO_QUESTION_TOOL.description, /exact active Core-bound/);
+  assert.match(SUBMIT_CTO_QUESTION_TOOL.description, /never automatically retry/);
+  assert.match(REVIEW_CTO_QUESTION_TOOL.description, /does not generate a user answer/);
 });

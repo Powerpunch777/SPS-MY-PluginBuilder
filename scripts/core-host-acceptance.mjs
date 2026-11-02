@@ -258,8 +258,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     })}).then(r=>({status:r.status}))`, true);
   assert.equal(proposedTool.status, 403, "User UI cannot call the Lead draft-writing tool.");
 
-  // Presentation fixture only. It exercises the actual compiled UI with an
-  // explicitly intercepted DTO, not Host persistence, AI output or approval.
+  // Presentation fixtures only. They exercise the compiled UI with intercepted
+  // DTOs, not Host persistence, AI output or approval.
   const draftFixture = { workspaceId: company.id, projectId: company.id, selectionRevision: 1, agentId: leadAgent.id,
     sequence: 1, createdAt: "2026-11-02T00:00:00.000Z", draft: { projectId: company.id, revisionId: "fixture-draft-1",
       sourceIds: [saved.messages[0].id], specification: { revisionId: "fixture-spec-1", productTier: "M",
@@ -269,6 +269,25 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         relations: [], viewLayoutRef: "fixture-layout-1" }, questions: [{ id: "Q-FIXTURE", title: "Fixture question",
         text: "This UI fixture is not a customer decision.", options: [{ id: "A", label: "Fixture option", tradeoff: "Not executed" }], recommendation: "A" }] } };
   const baselineFixtureSourceId = `lead-turn:${randomUUID()}`;
+  const ctoQuestionRecord = (questionId, disposition) => ({
+    proposal: { id: questionId, title: "CTO storage choice fixture", context: "A storage mode is needed.",
+      reasonNeeded: "This affects the data boundary.", options: [{ id: "local", label: "Local", tradeoff: "Single device" },
+        { id: "shared", label: "Shared", tradeoff: "More operations" }], recommendation: "shared", delayImpact: "Data work waits.",
+      scopeNodeIds: ["REQ-FIXTURE"], evidenceRefs: [] },
+    reporter: { ctoId: "fixture-cto", agentId: leadAgent.id, sessionId: preparedSessions.sessions["cto-inbox"],
+      runId: "55555555-5555-4555-8555-555555555555", requestId: "66666666-6666-4666-8666-666666666666",
+      workstreamId: "fixture-workstream", specRevision: 1, instructionSha256: "c".repeat(64) },
+    createdAtISO: "2026-11-02T00:00:00.000Z",
+    review: disposition === null ? null : { reviewId: `review-${questionId}`,
+      reviewer: { agentId: leadAgent.id, sessionId: preparedSessions.sessions["cto-inbox"],
+        runId: "77777777-7777-4777-8777-777777777777", selectionRevision: 1 },
+      disposition, rationale: "Fixture review only; user input is required.", evidenceRefs: ["baseline:fixture-baseline-1"],
+      createdAtISO: "2026-11-02T00:00:01.000Z" },
+  });
+  const ctoQuestionsFixture = { workspaceId: company.id, projectId: company.id, sequence: 2,
+    board: { projectId: company.id, revisionId: "fixture-cto-questions-2", questions: [
+      ctoQuestionRecord("unreviewed-fixture", null), ctoQuestionRecord("reviewed-not-needed-fixture", "delegated-choice"),
+    ] } };
   const baselineFixture = { workspaceId: company.id, projectId: company.id, sequence: 1,
     baseline: { projectId: company.id, revisionId: "fixture-baseline-1", sourceDraftRevisionId: draftFixture.draft.revisionId,
       draftDigest: "a".repeat(64), createdAt: draftFixture.createdAt,
@@ -280,6 +299,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   await workspace.evaluate(`(() => {
     if(globalThis.__spsBuilderSavedFetch) throw new Error('Unexpected existing fixture interceptor');
     globalThis.__spsBuilderQuestionDraftFixture=${JSON.stringify(draftFixture)};
+    globalThis.__spsBuilderCtoQuestionsFixture=${JSON.stringify(ctoQuestionsFixture)};
     globalThis.__spsBuilderQuestionSends=[];
     globalThis.__spsBuilderBaselineFixture=null;
     globalThis.__spsBuilderTechnologyFixture=null;
@@ -289,6 +309,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
       const url=new URL(typeof input==='string'?input:input.url,location.href);
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.design-draft`)})
         return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderQuestionDraftFixture}),{status:200,headers:{'content-type':'application/json'}}));
+      if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.cto-user-decisions`)})
+        return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderCtoQuestionsFixture}),{status:200,headers:{'content-type':'application/json'}}));
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.design-baseline`)})
         return Promise.resolve(new Response(JSON.stringify({data:globalThis.__spsBuilderBaselineFixture}),{status:200,headers:{'content-type':'application/json'}}));
       if(url.pathname===${JSON.stringify(`/api/plugins/${plugin.id}/data/builder.technology-decisions`)})
@@ -303,7 +325,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     };
   })()`);
   try {
-    await click(workspace, '[aria-label="Workspace 새로고침"]', "Refresh actual UI with a clearly marked draft DTO fixture");
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Refresh actual UI with marked draft and CTO review DTO fixtures");
     await eventually(() => workspace.evaluate(`document.querySelector('[aria-label="Lead 설계 초안"]')?.innerText`),
       value => value?.includes("설계 초안 · 승인·실행 전") && value.includes("fixture-draft-1"), "unapproved draft summary");
     await click(workspace, '[aria-label="Lead 설계 초안"] summary', "Expand read-only draft source/requirement details");
@@ -318,38 +340,36 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Read the draft specification document");
     await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
       value => value?.includes("REQ-FIXTURE"), "draft document projection");
-    await click(workspace, '.builder-nav [aria-label="미결정사항"]', "Read the draft question");
+    await click(workspace, '[aria-label="Lead 설계 초안"] summary', "Expand the persisted draft question summary");
+    await eventually(() => workspace.evaluate(`document.querySelector('[aria-label="Lead 설계 초안"]')?.textContent`),
+      value => value?.includes("Fixture question") && value.includes("답변 필요"), "draft question remains in the main draft summary");
+    await click(workspace, '.builder-nav [aria-label="미결정사항"]', "Check filtered CTO user-decision list before a user-decision review");
+    await eventually(() => workspace.evaluate(`document.querySelector('.builder-empty')?.textContent`),
+      value => value?.includes("미결정사항이 없습니다"), "unreviewed and Lead-resolved CTO questions are omitted");
+    assert.equal(await workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent.includes('Fixture question') ?? false`), false);
+    ctoQuestionsFixture.sequence = 3;
+    ctoQuestionsFixture.board.revisionId = "fixture-cto-questions-3";
+    ctoQuestionsFixture.board.questions[1].review.disposition = "user-decision-needed";
+    await workspace.evaluate(`globalThis.__spsBuilderCtoQuestionsFixture=${JSON.stringify(ctoQuestionsFixture)}`);
+    await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to the main Lead's Workspace refresh control");
+    await click(workspace, '[aria-label="Workspace 새로고침"]', "Load the Lead-reviewed user-decision-needed DTO fixture");
+    await click(workspace, '.builder-nav [aria-label="미결정사항"]', "Inspect the CTO question read-only presentation");
     await eventually(() => workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent`),
-      value => value?.includes("Fixture question") && value.includes("답변 필요"), "draft question is unanswered");
-    await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled===false`), Boolean, "question fixture composer");
-    await workspace.evaluate(`(() => {const field=document.querySelector('textarea[aria-label="Lead에게 메시지"]');
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'Fixture answer only');
-      field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="메시지 보내기"]')?.disabled===false`), Boolean, "question answer fixture send");
-    await click(workspace, 'button[aria-label="메시지 보내기"]', "Inspect question association using a UI-only intercepted action (no AI/Host write)");
-    const questionSends = await eventually(() => workspace.evaluate(`globalThis.__spsBuilderQuestionSends`), value => value.length === 1, "one fixture action");
-    assert.deepEqual(questionSends[0].params.questionContext, { projectId: company.id, draftRevisionId: "fixture-draft-1", questionId: "Q-FIXTURE" });
-    assert.equal(questionSends[0].params.channel, "decisions");
-    assert.equal(questionSends[0].params.text, "Fixture answer only");
-    assert.equal(questionSends[0].companyId, company.id);
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent.includes('답변 필요')`), Boolean,
-      "A send receipt alone cannot mark the question answered");
-    await workspace.evaluate(`(() => {const doc=globalThis.__spsBuilderQuestionDraftFixture;
-      doc.decisions=[{questionId:'Q-FIXTURE',questionDigest:${JSON.stringify(createHash("sha256").update(JSON.stringify(draftFixture.draft.questions[0])).digest("hex"))},
-        answerSourceId:'lead-turn:'+globalThis.__spsBuilderQuestionSends[0].params.requestId,answerSourceSha256:'a'.repeat(64),
-        answerText:'Fixture stored interpretation, not approval.',fromDraftRevisionId:'fixture-draft-0',appliedDraftRevisionId:'fixture-draft-1'}];})()`);
-    await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead to refresh marked question DTO");
-    await click(workspace, '[aria-label="Workspace 새로고침"]', "Load the marked answered-question presentation fixture");
-    await click(workspace, '.builder-nav [aria-label="미결정사항"]', "Inspect stored-answer presentation");
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent`),
-      value => value?.includes("Fixture stored interpretation, not approval.") && !value.includes("답변 필요"), "answered fixture projection");
+      value => value?.includes("CTO storage choice fixture") && value.includes("Lead 검토: Fixture review only"), "only the reviewed user-decision-needed question appears");
+    assert.match(await workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent ?? ''`), /CTO 권고\(Lead 추천 아님\): shared/);
+    assert.doesNotMatch(await workspace.evaluate(`document.querySelector('.builder-question-detail')?.textContent ?? ''`), /Lead 추천:/);
     assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled`), true);
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-composer .builder-composer-note')?.textContent`),
-      value => value === "이 질문의 답변이 설계에 반영되었습니다.", "answered composer reason, not an AI connection error");
-    assert.equal(await workspace.evaluate(`Boolean(document.querySelector('[aria-label="미결정질문 0개"]'))`), true);
+    assert.equal(await workspace.evaluate(`document.querySelector('button[aria-label="메시지 보내기"]')?.disabled`), true);
+    assert.equal(await workspace.evaluate(`document.querySelector('.builder-composer .builder-composer-note')?.textContent`),
+      "이 CTO 질문의 답변 연결은 아직 준비되지 않았습니다.");
+    await workspace.evaluate(`document.querySelector('button[aria-label="메시지 보내기"]')?.click()`);
+    assert.equal((await workspace.evaluate(`globalThis.__spsBuilderQuestionSends`)).length, 0,
+      "read-only CTO question must not dispatch the intercepted Lead message action");
+    await eventually(() => workspace.evaluate(`Boolean(document.querySelector('[aria-label="설계 질문 1개"]'))`), Boolean,
+      "The unanswered main draft question remains distinct from the CTO user-decision list after refresh finishes");
     assert.ok(await workspace.evaluate(`(() => {const question=document.querySelector('.builder-question-detail');const main=question.closest('.builder-message-main');
       return question.getBoundingClientRect().height<=main.getBoundingClientRect().height*0.41;})()`));
-    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-question-answer-fixture.png"));
+    if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-cto-question-readonly-fixture.png"));
     const layout = await workspace.evaluate(`({overflow:document.querySelector('.builder-shell').scrollWidth>document.querySelector('.builder-shell').clientWidth,
       nodeEditable:document.querySelectorAll('.react-flow__node.draggable').length})`);
     assert.equal(layout.overflow, false);
@@ -562,7 +582,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
-    questionAnswerAssociationPresentationFixture: true, sendReceiptDoesNotResolveQuestion: true, storedAnswerPresentationFixture: true,
+    questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,
+    ctoReviewFilterPresentationFixture: true, ctoQuestionComposerReadOnlyPresentationFixture: true,
     designBaselinePresentationFixture: true, realHostBaselineWritten: false,
     technologyDecisionsPresentationFixture: true, realHostTechnologyWritten: false,
     workstreamPresentationFixture: true, readinessIsNotExecution: true, realHostWorkstreamWritten: false,
