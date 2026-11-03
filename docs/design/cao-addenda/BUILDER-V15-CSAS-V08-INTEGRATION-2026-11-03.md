@@ -20,7 +20,7 @@
 - Lead 실행정책은 `LEAD_PLANNING_TOOL_NAMES` 공통 목록이다. 새 역할별 권한은 `src/session-execution-policy.ts`의 목록까지 함께 검토한다. (`CONFIRMED_CODE`)
 - Task Packet 저장은 계획 자료다. Worker 생성, process 실행, 실제 작업, QA 또는 완료 증거가 아니다. (`CONFIRMED_CODE`, `src/domain/task-packets.ts`, `src/task-packet-tools.ts`; 실행 Gate 결과 `UNKNOWN`)
 - SDK 지원 발견 목록에서 `ensure/getRequest`가 빠졌다는 제공 검토는 API 전체 부재를 뜻하지 않는다. 제공된 후속 자료는 Worker RPC가 두 operation을 전송한다고 기록하지만 이 추가 노트 작업에서는 SDK 원문을 재검사하지 않았다. (`DOCUMENTED_ONLY`, 사용자 제공 「후속 운영자 지시」 SHA-256 `f8e2ad0ede6e3b6a336a18ed32e94e187a625c5f526b1925d0014c16e5cb1396`)
-- 제공 operator audit의 E0–E15 목록 자체는 80개 고유 경로(39 `src`, 38 `test`, package/build 3개: `package.json`, `sps-plugin.json`, `scripts/build.mjs`)이며, `package.json` 및 `sps-plugin.json` 두 manifest를 제외하면 78개다. 후속 operator directive의 78은 부정확한 요약이다. `ACTOR-QA-B`는 QA 담당 role ID이며 credential/account 식별자가 아니다. 이 Task의 162행 의미는 `NOT_VERIFIED`, 제품 테스트는 `NOT_RUN`이다. 출처: 제공 audit SHA-256 `9d955a62e9391b3adbbaf5f1da37d1be6b65bd4c0760e1cb7b41836c14aabd7`; operator directive SHA-256 `f8e2ad0ede6e3b6a336a18ed32e94e187a625c5f526b1925d0014c16e5cb1396`. (`DOCUMENTED_ONLY`)
+- 제공 operator audit의 E0–E15 목록 자체는 80개 고유 경로(39 `src`, 38 `test`, package/build 3개: `package.json`, `sps-plugin.json`, `scripts/build.mjs`)이며, `package.json` 및 `sps-plugin.json` 두 manifest를 제외하면 78개다. 후속 operator directive의 78은 부정확한 요약이다. `ACTOR-QA-B`는 QA 담당 role ID이며 credential/account 식별자가 아니다. 이 Task의 162행 의미는 `NOT_VERIFIED`, 제품 테스트는 `NOT_RUN`이다. 출처: 제공 audit SHA-256 `9d955a62e9391b3adbbaf5f1da37d1be6b65bd4c0760e1cb7b41836c14aabd7d`; operator directive SHA-256 `f8e2ad0ede6e3b6a336a18ed32e94e187a625c5f526b1925d0014c16e5cb1396`. (`DOCUMENTED_ONLY`)
 
 ## 적용 경계와 미결정
 
