@@ -3,7 +3,7 @@ import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plu
 import { parseAuthoredTechnologyDecisions } from "./domain/authored-technology-decisions.ts";
 import { parseTechnologyDecisionRegister } from "./domain/technology-decisions.ts";
 import { readDesignBaseline } from "./design-baseline-tools.ts";
-import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
+import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -28,6 +28,7 @@ export async function publishTechnologyDecisions(params: unknown, runContext: un
   const expectedBaseRevisionId = input.expectedBaseRevisionId === null ? null : identifier(input.expectedBaseRevisionId);
   const context = parseLeadToolContext(runContext);
   const authority = await resolveLeadToolAuthority(context, platform);
+  requireLeadFormalPublicationAuthority(authority);
   const baseline = await readDesignBaseline(context.companyId, projectId, platform);
   if (!baseline || register.sourceBaselineRevisionId !== baseline.revision.revisionId
     || register.sourceSpecRevisionId !== baseline.revision.specification.revisionId

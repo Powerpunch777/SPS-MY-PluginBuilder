@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
-import type { BuilderSnapshot, LeadChannel } from "./domain/model.ts";
+import type { BuilderSnapshot, LeadChannel, LeadConversationId } from "./domain/model.ts";
 import { LEAD_CHANNELS } from "./domain/lead-sessions.ts";
 import { parseLeadMemoryRevision } from "./domain/lead-memory.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
@@ -61,13 +61,13 @@ export async function updateLeadMemory(params: unknown, runContext: unknown, pla
     const priorDigest = unchanged ? retained.sourceDigests.find(digest => digest.id === id) : undefined;
     if (priorDigest) { sourceDigests.push({ ...priorDigest }); continue; }
     const source = id.startsWith("lead-turn:")
-      ? await readLeadUserSource(id.slice("lead-turn:".length), authority.sessions, platform)
+      ? await readLeadUserSource(id.slice("lead-turn:".length), authority.conversationSessions, platform)
       : snapshot.messages.find(message => message.id === id && message.role === "user" && message.channel === "main");
     if (!source || !source.text.trim()) throw new Error("Memory cites unavailable user input in this Workspace/Lead selection.");
     sourceDigests.push({ id, sha256: createHash("sha256").update(source.text, "utf8").digest("hex") });
   }
   await authority.check();
-  const channel = LEAD_CHANNELS.find(channel => authority.sessions.sessions[channel] === context.sessionId) as LeadChannel;
+  const channel = authority.logicalContext ?? LEAD_CHANNELS.find(channel => authority.sessions!.sessions[channel] === context.sessionId) as LeadChannel;
   const authored: AuthoredLeadMemory = { author: { agentId: context.agentId, sessionId: context.sessionId,
     runId: context.runId, selectionRevision: authority.selectionRevision, channel }, createdAt: new Date().toISOString(),
   sourceDigests, memory };

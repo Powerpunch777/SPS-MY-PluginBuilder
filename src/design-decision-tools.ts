@@ -24,7 +24,11 @@ export async function resolveDesignQuestion(params: unknown, runContext: unknown
     expectedBaseRevisionId: string; questionId: string; answerSourceId: string; answerText: string;
   };
   const authority = await resolveLeadToolAuthority(context, platform);
-  if (authority.sessions.sessions.decisions !== context.sessionId) throw new Error("Question answers require the prepared decisions Lead session.");
+  if (authority.logicalContext !== null
+    ? authority.logicalContext !== "question_discussion"
+    : authority.sessions!.sessions.decisions !== context.sessionId) {
+    throw new Error("Question answers require the prepared Question Discussion Lead context.");
+  }
   const state = platform.state as typeof platform.state & RevisionState;
   const guarded = {
     get: async (key: Parameters<typeof state.get>[0]) => {
@@ -49,7 +53,7 @@ export async function resolveDesignQuestion(params: unknown, runContext: unknown
     || next.graph.graphRevisionId === current.revision.draft.graph.graphRevisionId || !next.sourceIds.includes(answerSourceId)) {
     throw new Error("Keep the answered question unchanged and create new cited design, specification and Graph revisions.");
   }
-  const source = await readLeadUserSource(answerSourceId.slice("lead-turn:".length), authority.sessions, platform);
+  const source = await readLeadUserSource(answerSourceId.slice("lead-turn:".length), authority.conversationSessions, platform);
   if (source.questionContext?.projectId !== next.projectId || source.questionContext.draftRevisionId !== expectedBaseRevisionId
     || source.questionContext.questionId !== questionId) throw new Error("The user answer is not bound to this question and design revision.");
   const decisions = parseDesignDecisions([...(current.revision.decisions ?? []), { questionId,
@@ -59,7 +63,7 @@ export async function resolveDesignQuestion(params: unknown, runContext: unknown
   const sourceDigests = [];
   for (const id of next.sourceIds) {
     const cited = id.startsWith("lead-turn:")
-      ? await readLeadUserSource(id.slice("lead-turn:".length), authority.sessions, platform)
+      ? await readLeadUserSource(id.slice("lead-turn:".length), authority.conversationSessions, platform)
       : snapshot.messages.find(message => message.id === id && message.role === "user" && message.channel === "main");
     if (!cited || !cited.text.trim()) throw new Error("The revised design cites unavailable user input.");
     sourceDigests.push({ id, sha256: hash(cited.text) });

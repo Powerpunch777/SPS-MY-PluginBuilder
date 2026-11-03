@@ -328,6 +328,37 @@ test("unknown and approval-shaped fields are denied before any baseline write", 
   assert.equal(f.setCalls, 0);
 });
 
+test("v2 UI Design remains unable to publish while a Main source turn can publish the baseline", async () => {
+  const { f } = await prepared();
+  const v2Ids = [
+    "12121212-1212-4121-8121-121212121212",
+    "13131313-1313-4131-8131-131313131313",
+    "14141414-1414-4141-8141-141414141414",
+    "15151515-1515-4151-8151-151515151515",
+    "16161616-1616-4161-8161-161616161616",
+  ];
+  f.values.set(f.scopedKey("lead-contexts.v2.1"), {
+    schemaVersion: 2, workspaceId: WORKSPACE, selectionRevision: 1, agentId: LEAD,
+    requestId: "17171717-1717-4171-8171-171717171717", status: "ready", pendingContext: null,
+    contexts: { user_conversation: v2Ids[4], ui_design: v2Ids[0], background_planning: v2Ids[1],
+      question_intake: v2Ids[2], question_discussion: v2Ids[3] },
+  });
+  const writes = f.successfulWrites;
+  await assert.rejects(publishDesignBaseline(publishParams(), { ...f.context, sessionId: v2Ids[0] }, f.platform), /Only the Main/);
+  assert.equal(f.successfulWrites, writes);
+  assert.equal(f.setCalls, 0);
+  f.values.set(f.scopedKey(`lead-chat.turn.v1.${TURN_ID}`), {
+    workspaceId: WORKSPACE, selectionRevision: 1, agentId: LEAD, sessionId: v2Ids[4], channel: "user_conversation",
+    schemaVersion: 1, requestId: TURN_ID, previousRequestId: null, sequence: 0,
+    text: "The user explicitly approved the current baseline decision.", createdAt: "2026-11-03T00:00:00.000Z",
+    state: "submitted", runId: RUN, answer: null, outputState: "not_ready", cancellationRequested: false,
+    termination: "not_applicable",
+  });
+  const result = await publishDesignBaseline(publishParams(), { ...f.context, sessionId: v2Ids[4] }, f.platform);
+  assert.equal((result.data as { status: string }).status, "published");
+  assert.equal(f.successfulWrites, writes + 2);
+});
+
 test("canonical solution reads the paired graph and baseline history survives Lead selection changes", async () => {
   const { f } = await prepared();
   await publishDesignBaseline(publishParams(), f.context, f.platform);

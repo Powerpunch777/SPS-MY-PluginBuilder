@@ -3,8 +3,8 @@ import { useHostContext, usePluginAction, usePluginData } from "@sonparkserver/p
 import { BuilderShell } from "./BuilderShell.tsx";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
-import { parseLeadSessions } from "../domain/lead-sessions.ts";
-import type { LeadChannel } from "../domain/model.ts";
+import { parseLeadContexts } from "../domain/lead-contexts.ts";
+import type { LeadConversationId } from "../domain/model.ts";
 import { parseQuestionContext, type QuestionContext } from "../domain/question-context.ts";
 import { parseLeadConversationPage } from "../lead-conversations.ts";
 import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
@@ -14,12 +14,13 @@ import { projectWorkstreams } from "../domain/workstreams-view.ts";
 import { projectLeadMemory } from "../domain/lead-memory-view.ts";
 import { projectProjectCtos } from "../domain/project-ctos-view.ts";
 import { parseCtoUserQuestionsView, projectCtoUserQuestions } from "../domain/cto-question-view.ts";
+import { resumePreparedMessageInScope } from "./prepared-message-resume.ts";
 
 export function BuilderPage() {
   const context = useHostContext();
   const state = usePluginData<unknown>("builder.snapshot");
   const lead = usePluginData<unknown>("builder.lead-agents");
-  const sessions = usePluginData<unknown>("builder.lead-sessions");
+  const logicalContexts = usePluginData<unknown>("builder.lead-contexts");
   const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
   const designBaseline = usePluginData<unknown>("builder.design-baseline", { projectId: context.companyId ?? "" });
   const technology = usePluginData<unknown>("builder.technology-decisions", { projectId: context.companyId ?? "" });
@@ -27,19 +28,20 @@ export function BuilderPage() {
   const memory = usePluginData<unknown>("builder.lead-memory", { projectId: context.companyId ?? "" });
   const projectCtos = usePluginData<unknown>("builder.project-ctos", { projectId: context.companyId ?? "" });
   const ctoUserDecisions = usePluginData<unknown>("builder.cto-user-decisions", { projectId: context.companyId ?? "" });
-  const [channel, setChannel] = useState<LeadChannel>("main");
+  const [channel, setChannel] = useState<LeadConversationId>("user_conversation");
   const [cursor, setCursor] = useState<string | null>(null);
-  const conversation = usePluginData<unknown>("builder.lead-conversation", { channel, cursor });
-  const send = usePluginAction<{ channel: LeadChannel; requestId: string; text: string; questionContext?: QuestionContext }, { saved: boolean; requestId: string }>("builder.send-lead-message");
-  const refreshConversation = usePluginAction<{ channel: LeadChannel }, { refreshed: boolean }>("builder.refresh-lead-conversation");
-  const cancelMessage = usePluginAction<{ channel: LeadChannel }, { cancellationRequested: boolean }>("builder.cancel-lead-message");
-  const resumeMessage = usePluginAction<{ channel: LeadChannel; requestId: string }, { saved: boolean; requestId: string }>("builder.resume-prepared-lead-message");
+  const conversation = usePluginData<unknown>("builder.lead-conversation", { contextId: channel, cursor });
+  const send = usePluginAction<{ contextId: LeadConversationId; requestId: string; text: string; questionContext?: QuestionContext }, { saved: boolean; requestId: string }>("builder.send-lead-message");
+  const refreshConversation = usePluginAction<{ contextId: LeadConversationId }, { refreshed: boolean }>("builder.refresh-lead-conversation");
+  const cancelMessage = usePluginAction<{ contextId: LeadConversationId }, { cancellationRequested: boolean }>("builder.cancel-lead-message");
+  const resumeMessage = usePluginAction<{ contextId: LeadConversationId; requestId: string }, { saved: boolean; requestId: string }>("builder.resume-prepared-lead-message");
   const selectLead = usePluginAction<{ agentId: string | null; expectedRevision: number }, { saved: boolean; executionStarted: boolean }>("builder.select-lead-agent");
-  const prepareLead = usePluginAction<{ agentId: string; expectedRevision: number }, { saved: boolean; executionStarted: boolean; sessionsReady: boolean }>("builder.prepare-lead-sessions");
+  const prepareLeadContexts = usePluginAction<{ agentId: string; expectedRevision: number; requestId: string },
+    { saved: boolean; requestId: string; status: "ready"; contextsReady: true }>("builder.prepare-lead-contexts");
   const importText = usePluginAction<{ requestId: string; text: string }, { saved: boolean; analysisStarted: boolean }>("builder.import-consultation");
   const pending = useRef<{ workspaceId: string; text: string; requestId: string } | null>(null);
-  const pendingMessage = useRef<{ workspaceId: string; channel: LeadChannel; text: string; questionContext: QuestionContext | null; requestId: string } | null>(null);
-  const liveScope = useRef("");
+  const pendingMessage = useRef<{ workspaceId: string; channel: LeadConversationId; text: string; questionContext: QuestionContext | null; requestId: string } | null>(null);
+  const liveScope = useRef<{ key: string; token: object } | null>(null);
   const current = useMemo(() => {
     if (!context.companyId) return null;
     try {
@@ -53,17 +55,17 @@ export function BuilderPage() {
     if (!context.companyId || lead.loading || lead.error) return null;
     try { return parseLeadAgentOptions(lead.data, context.companyId); } catch { return null; }
   }, [context.companyId, lead.data, lead.loading, lead.error]);
-  const leadSessions = useMemo(() => {
-    if (!context.companyId || !leadOptions || sessions.loading || sessions.error) return null;
+  const currentLeadContexts = useMemo(() => {
+    if (!context.companyId || !leadOptions || logicalContexts.loading || logicalContexts.error || logicalContexts.data === null) return null;
     try {
-      const parsed = parseLeadSessions(sessions.data, context.companyId);
+      const parsed = parseLeadContexts(logicalContexts.data, context.companyId);
       return parsed.selectionRevision === leadOptions.revision && parsed.agentId === leadOptions.selectedAgentId ? parsed : null;
     } catch { return null; }
-  }, [context.companyId, leadOptions, sessions.data, sessions.loading, sessions.error]);
+  }, [context.companyId, leadOptions, logicalContexts.data, logicalContexts.loading, logicalContexts.error]);
   const conversationPage = useMemo(() => {
-    if (!leadSessions || conversation.loading || conversation.error) return null;
-    try { return parseLeadConversationPage(conversation.data, leadSessions, channel); } catch { return null; }
-  }, [leadSessions, conversation.data, conversation.loading, conversation.error, channel]);
+    if (!currentLeadContexts || currentLeadContexts.status !== "ready" || conversation.loading || conversation.error) return null;
+    try { return parseLeadConversationPage(conversation.data, currentLeadContexts, channel); } catch { return null; }
+  }, [currentLeadContexts, conversation.data, conversation.loading, conversation.error, channel]);
   const draftView = useMemo(() => {
     if (!context.companyId || !leadOptions?.selectedAgentId || design.loading || design.error) return { view: null, error: null };
     if (design.data === null) return { view: null, error: null };
@@ -114,21 +116,22 @@ export function BuilderPage() {
       return { snapshot: projectCtoUserQuestions(decisionBase, view), error: null };
     } catch { return { snapshot: decisionBase, error: "CTO 사용자 결정 질문을 확인하지 못했습니다. 새로고침해 주세요." }; }
   }, [context.companyId, workstreamsView, ctoUserDecisions.data, ctoUserDecisions.loading, ctoUserDecisions.error]);
-  const scope = JSON.stringify([context.companyId, leadOptions?.revision ?? null, channel]);
-  liveScope.current = scope;
+  const scopeKey = JSON.stringify([context.companyId, leadOptions?.revision ?? null, channel]);
+  if (liveScope.current?.key !== scopeKey) liveScope.current = { key: scopeKey, token: {} };
+  const scopeToken = liveScope.current.token;
   useEffect(() => { setCursor(null); pendingMessage.current = null; }, [context.companyId, leadOptions?.revision]);
   useEffect(() => {
     const request = conversationPage?.active;
     if (!request?.runId || request.state === "uncertain" || conversation.error) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
-    const observedScope = scope;
+    const observedScopeToken = scopeToken;
     async function poll() {
-      if (disposed || liveScope.current !== observedScope) return;
+      if (disposed || liveScope.current?.token !== observedScopeToken) return;
       if (document.visibilityState === "hidden") { timer = setTimeout(() => void poll(), 2_000); return; }
       try {
-        await refreshConversation({ channel });
-        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
+        await refreshConversation({ contextId: channel });
+        if (!disposed && liveScope.current?.token === observedScopeToken) { conversation.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
       } catch {
         // Polling only observes the exact saved request. Stop on error; the
         // explicit button remains available and no send is retried here.
@@ -139,7 +142,7 @@ export function BuilderPage() {
     timer = setTimeout(() => void poll(), 2_000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [conversationPage?.active?.requestId, conversationPage?.active?.runId, conversationPage?.active?.state,
-    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, technology.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
+    conversation.error, scopeKey, scopeToken, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, technology.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
@@ -149,32 +152,38 @@ export function BuilderPage() {
     designDraftError={draftView.error ?? (design.error ? "설계 초안을 불러오지 못했습니다." : null)}
     workspaceLabel={context.companyPrefix ?? "Workspace"}
     conversation={conversationPage} conversationChannel={channel} conversationLoading={conversation.loading}
-    conversationError={leadSessions?.sessions[channel] && !conversation.loading && !conversationPage ? "대화 기록을 확인하지 못했습니다. 새로고침해 주세요." : null}
+    conversationError={currentLeadContexts?.status === "ready" && currentLeadContexts.contexts[channel as keyof typeof currentLeadContexts.contexts]
+      && !conversation.loading && !conversationPage ? "대화 기록을 확인하지 못했습니다. 새로고침해 주세요." : null}
     conversationHasNewer={cursor !== null}
-    onLeadChannelChange={next => { setChannel(next); setCursor(null); }}
+    onLeadChannelChange={next => {
+      if (next !== channel) liveScope.current = { key: JSON.stringify([context.companyId, leadOptions?.revision ?? null, next]), token: {} };
+      setChannel(next); setCursor(null); pendingMessage.current = null;
+      conversation.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh();
+      memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); logicalContexts.refresh();
+    }}
     onOlderConversation={conversationPage?.nextCursor ? () => setCursor(conversationPage.nextCursor) : undefined}
     onLatestConversation={cursor !== null ? () => setCursor(null) : undefined}
-    onRefreshConversation={leadSessions?.sessions[channel] ? async () => {
+    onRefreshConversation={currentLeadContexts?.status === "ready" && currentLeadContexts.contexts[channel as keyof typeof currentLeadContexts.contexts] ? async () => {
       try {
-        const result = await refreshConversation({ channel });
+        const result = await refreshConversation({ contextId: channel });
         if (result.refreshed !== true) throw new Error("Unexpected refresh result.");
       } finally { conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); }
     } : undefined}
     onCancelLeadMessage={conversationPage?.active?.runId ? async () => {
-      try { await cancelMessage({ channel }); } finally { conversation.refresh(); }
+      try { await cancelMessage({ contextId: channel }); } finally { conversation.refresh(); }
     } : undefined}
     onResumePreparedLeadMessage={conversationPage?.active?.state === "prepared" ? async () => {
       const requestId = conversationPage.active!.requestId;
-      try {
-        const result = await resumeMessage({ channel, requestId });
-        if (result.saved !== true || result.requestId !== requestId) throw new Error("Unexpected prepared message result.");
-      } finally { conversation.refresh(); }
+      await resumePreparedMessageInScope({ requestId, scopeToken, currentScopeToken: () => liveScope.current?.token ?? null,
+        resume: () => resumeMessage({ contextId: channel, requestId }),
+        refreshCurrentScope: [conversation.refresh, lead.refresh, design.refresh, designBaseline.refresh, technology.refresh,
+          workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh, logicalContexts.refresh] });
     } : undefined}
     onSendMessage={conversationPage && !conversationPage.active && !conversation.loading && !conversation.error
       && !current.error && !state.loading && !state.error && !lead.error && leadOptions
       && leadOptions.agents.some(agent => agent.id === leadOptions.selectedAgentId && ["idle", "running"].includes(agent.status)) ? async (text, selectedChannel, questionContext) => {
-      if (selectedChannel !== channel || selectedChannel === "cto-inbox") throw new Error("Conversation changed.");
-      if (questionContext && selectedChannel !== "decisions") throw new Error("Question context is only valid for decisions.");
+      if (selectedChannel !== channel || ["cto-inbox", "background_planning", "question_intake"].includes(selectedChannel)) throw new Error("Conversation changed.");
+      if ((questionContext && selectedChannel !== "question_discussion") || selectedChannel === "question_discussion" && !questionContext) throw new Error("Question Discussion requires a specific current question.");
       const contextSnapshot = questionContext ? parseQuestionContext(questionContext) : null;
       if (!pendingMessage.current || pendingMessage.current.workspaceId !== workspaceId
         || pendingMessage.current.channel !== channel || pendingMessage.current.text !== text
@@ -183,9 +192,9 @@ export function BuilderPage() {
       }
       const request = pendingMessage.current;
       try {
-        const result = await send({ channel, text, requestId: request.requestId,
+        const result = await send({ contextId: channel, text, requestId: request.requestId,
           ...(request.questionContext ? { questionContext: request.questionContext } : {}) });
-        if (liveScope.current !== scope) throw new Error("Conversation changed while sending.");
+        if (liveScope.current?.token !== scopeToken) throw new Error("Conversation changed while sending.");
         if (result.saved !== true || result.requestId !== request.requestId) throw new Error("Unexpected send result.");
         pendingMessage.current = null;
         setCursor(null);
@@ -193,8 +202,6 @@ export function BuilderPage() {
     } : undefined}
     leadAgents={leadOptions} leadAgentsLoading={lead.loading}
     leadAgentsError={!lead.loading && !leadOptions ? "Agent 목록을 불러오지 못했습니다. 새로고침해 주세요." : null}
-    leadSessions={leadSessions} leadSessionsLoading={lead.loading || sessions.loading}
-    leadSessionsError={!lead.loading && leadOptions && !sessions.loading && !leadSessions ? "Lead 세션 상태를 불러오지 못했습니다. 새로고침해 주세요." : null}
     onSelectLeadAgent={async (agentId, expectedRevision) => {
       if (!leadOptions || lead.loading || lead.error) throw new Error("Agent settings are not ready.");
       const result = await selectLead({ agentId, expectedRevision });
@@ -207,18 +214,26 @@ export function BuilderPage() {
       memory.refresh();
       projectCtos.refresh();
       ctoUserDecisions.refresh();
-      sessions.refresh();
       conversation.refresh();
     }}
-    onPrepareLeadSessions={async (agentId, expectedRevision) => {
-      if (!leadOptions || !leadSessions || lead.loading || sessions.loading || sessions.error) throw new Error("Lead session settings are not ready.");
+    leadContexts={currentLeadContexts} leadContextsLoading={lead.loading || logicalContexts.loading}
+    leadContextsError={!lead.loading && leadOptions && !logicalContexts.loading && logicalContexts.data !== null && !currentLeadContexts
+      ? "새 Lead 구성 상태를 확인하지 못했습니다. 새로고침해 주세요." : logicalContexts.error ? "새 Lead 구성 상태를 불러오지 못했습니다." : null}
+    onPrepareLeadContexts={async (agentId, expectedRevision) => {
+      if (!leadOptions || lead.loading || logicalContexts.loading || logicalContexts.error || currentLeadContexts
+        || leadOptions.selectedAgentId !== agentId || leadOptions.revision !== expectedRevision) {
+        throw new Error("Lead context settings are not ready for a new explicit start.");
+      }
+      const requestId = crypto.randomUUID();
       try {
-        const result = await prepareLead({ agentId, expectedRevision });
-        if (result.saved !== true || result.executionStarted !== false || result.sessionsReady !== true) throw new Error("Unexpected Lead session preparation result.");
-      } finally { sessions.refresh(); conversation.refresh(); }
+        const result = await prepareLeadContexts({ agentId, expectedRevision, requestId });
+        if (result.saved !== true || result.requestId !== requestId || result.status !== "ready" || result.contextsReady !== true) {
+          throw new Error("Unexpected Lead context preparation result.");
+        }
+      } finally { logicalContexts.refresh(); }
     }}
     loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? ctoQuestionsView.error ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
+    onRefresh={() => { state.refresh(); lead.refresh(); logicalContexts.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };

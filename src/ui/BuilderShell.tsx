@@ -10,24 +10,27 @@ import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
 import { DesignDraftSummary } from "./DesignDraftSummary.tsx";
 import { leadSendFailureMessage } from "../lead-send-feedback.ts";
+import { performConversationControlAction } from "./prepared-message-resume.ts";
 import { isNearTranscriptBottom, transcriptScrollAction, type TranscriptPage } from "./transcript-scroll.ts";
 import { selectLeadDecisionTranscript } from "../domain/selectors.ts";
 import { assertConsultationRequestSize, decodeConsultationFile, MAX_CONSULTATION_REQUEST_BYTES } from "../domain/consultation-file.js";
 import type {
-  BuilderActor, BuilderMessage, BuilderQuestion, BuilderShellProps, BuilderView, LeadChannel,
+  BuilderActor, BuilderMessage, BuilderQuestion, BuilderShellProps, BuilderView, LeadChannel, LeadConversationId,
 } from "../domain/model.js";
 
 const NAV_ITEMS: Array<{ id: BuilderView; label: string; icon: typeof MessageSquare }> = [
-  { id: "lead", label: "Lead 대화", icon: MessageSquare },
+  { id: "lead", label: "Main", icon: MessageSquare },
+  { id: "ui-design", label: "UI Design", icon: FileText },
+  { id: "decisions", label: "미결정사항", icon: CircleHelp },
   { id: "architecture", label: "설계 시각화", icon: GitBranch },
   { id: "organization", label: "조직도", icon: Network },
   { id: "documents", label: "설계 문서", icon: FileText },
-  { id: "decisions", label: "미결정사항", icon: CircleHelp },
   { id: "system", label: "시스템", icon: Server },
 ];
 
 const VIEW_TITLES: Record<BuilderView, { title: string; description: string }> = {
-  lead: { title: "Lead 대화", description: "요구사항과 설계를 Lead와 함께 정리합니다." },
+  lead: { title: "Main", description: "요구사항과 설계를 Lead와 함께 정리합니다." },
+  "ui-design": { title: "UI Design", description: "별도 UI Design 컨텍스트의 연결 상태입니다." },
   architecture: { title: "설계 시각화", description: "현재 Workspace의 설계 Graph를 조회합니다." },
   organization: { title: "조직도", description: "Workspace에 기록된 Lead와 실행 중인 작업 관계입니다." },
   documents: { title: "설계 문서", description: "Lead가 기록한 Workspace 문서와 Revision입니다." },
@@ -175,22 +178,24 @@ function MessageList({ messages, actor, actors = [], followLatest = true }: {
   </div>}</>;
 }
 
-function conversationMessages(props: BuilderShellProps, channel: LeadChannel): BuilderMessage[] {
+function conversationMessages(props: BuilderShellProps, channel: LeadConversationId): BuilderMessage[] {
   const page = props.conversation;
   if (!page || page.channel !== channel) return [];
+  const displayChannel: LeadChannel = channel === "question_discussion" || channel === "decisions" ? "decisions"
+    : channel === "cto-inbox" ? "cto-inbox" : "main";
   return [...page.turns].reverse().flatMap(turn => [
-    { id: `${turn.requestId}:user`, channel, actorId: null, role: "user" as const, text: turn.text, createdAt: turn.createdAt, runId: turn.runId },
-    ...(turn.answer === null ? [] : [{ id: `${turn.requestId}:assistant`, channel, actorId: null, role: "assistant" as const,
+    { id: `${turn.requestId}:user`, channel: displayChannel, actorId: null, role: "user" as const, text: turn.text, createdAt: turn.createdAt, runId: turn.runId },
+    ...(turn.answer === null ? [] : [{ id: `${turn.requestId}:assistant`, channel: displayChannel, actorId: null, role: "assistant" as const,
       text: turn.answer, createdAt: turn.createdAt, runId: turn.runId }]),
-    ...(turn.state === "succeeded" && turn.answer === null ? [{ id: `${turn.requestId}:unavailable`, channel, actorId: null,
+    ...(turn.state === "succeeded" && turn.answer === null ? [{ id: `${turn.requestId}:unavailable`, channel: displayChannel, actorId: null,
       role: "system" as const, text: "실행은 끝났지만 확인 가능한 답변을 제공하지 않았습니다.", createdAt: turn.createdAt, runId: turn.runId }] : []),
-    ...(["failed", "cancelled", "interrupted", "timed_out"].includes(turn.state) ? [{ id: `${turn.requestId}:terminal`, channel, actorId: null,
+    ...(["failed", "cancelled", "interrupted", "timed_out"].includes(turn.state) ? [{ id: `${turn.requestId}:terminal`, channel: displayChannel, actorId: null,
       role: "system" as const, text: ({ failed: "실행 실패", cancelled: "실행 중단", interrupted: "실행 끊김", timed_out: "실행 시간 초과" } as Record<string, string>)[turn.state]!,
       createdAt: turn.createdAt, runId: turn.runId }] : []),
   ]);
 }
 
-function ConversationControls({ props, channel }: { props: BuilderShellProps; channel: LeadChannel }) {
+function ConversationControls({ props, channel }: { props: BuilderShellProps; channel: LeadConversationId }) {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   if (props.conversation === undefined || props.conversationChannel !== channel) return null;
@@ -198,11 +203,7 @@ function ConversationControls({ props, channel }: { props: BuilderShellProps; ch
   const labels = { prepared: "저장됨 · 전송 준비 중", dispatching: "접수 확인 중", uncertain: "접수 불명확 · 자동 재전송하지 않음",
     submitted: "실행 중 · 응답 확인 가능", succeeded: "실행 완료", failed: "실행 실패", cancelled: "중단됨", interrupted: "실행 끊김", timed_out: "시간 초과" };
   async function perform(action: (() => Promise<void>) | undefined) {
-    if (!action || busy) return;
-    setBusy(true); setFeedback("");
-    try { await action(); }
-    catch { setFeedback("결과를 확인하지 못했습니다. 같은 실행의 상태를 다시 확인해 주세요."); }
-    finally { setBusy(false); }
+    await performConversationControlAction(action, busy, setBusy, setFeedback);
   }
   return <div className="builder-conversation-controls">
     <div className="builder-header-actions">
@@ -226,7 +227,7 @@ function ConversationControls({ props, channel }: { props: BuilderShellProps; ch
 
 function MessageComposer({
   enabled, channel, onSend, questionContext, disabledReason,
-}: { enabled: boolean; channel: LeadChannel; onSend?: BuilderShellProps["onSendMessage"];
+}: { enabled: boolean; channel: LeadConversationId; onSend?: BuilderShellProps["onSendMessage"];
   questionContext?: BuilderQuestion["questionContext"]; disabledReason?: string }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -266,7 +267,7 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
 }) {
   const [importOpen, setImportOpen] = useState(false);
   const readOnly = Boolean(actor);
-  const channel: LeadChannel = actor ? "cto-inbox" : "main";
+  const channel: LeadConversationId = actor ? "cto-inbox" : "user_conversation";
   const enabled = !readOnly && Boolean(props.onSendMessage)
     && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === channel && !props.conversation.active);
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
@@ -438,14 +439,14 @@ export function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose
   const openQuestions = props.snapshot.questions.filter(question => question.status === "open");
   const [selectedId, setSelectedId] = useState<string | null>(openQuestions[0]?.id ?? props.snapshot.questions[0]?.id ?? null);
   const selected = props.snapshot.questions.find(question => question.id === selectedId) ?? openQuestions[0] ?? props.snapshot.questions[0] ?? null;
-  const messages = [...selectLeadDecisionTranscript(props.snapshot), ...conversationMessages(props, "decisions")];
+  const messages = [...selectLeadDecisionTranscript(props.snapshot), ...conversationMessages(props, "question_discussion")];
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
     <button aria-label="질문 목록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section className="builder-message-main">
       <div className="builder-chat-context"><div className="builder-chat-heading"><h1>미결정사항</h1><p>CTO 제안 중 Lead가 사용자 결정 필요로 분류한 항목만 표시합니다. 기존 저장 질문과 답변 기록은 삭제되지 않습니다.</p></div>
         <button aria-label="미결정사항 목록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">질문 목록</span></button>
       </div>
-      <ConversationControls channel="decisions" props={props} />
+      <ConversationControls channel="question_discussion" props={props} />
       {selected ? <><div className="builder-question-detail" style={{ padding: "12px 18px 0" }}>
         <StatusLabel status={selected.status} /><h2 style={{ margin: "7px 0", fontSize: 14 }}>{selected.title}</h2><p>{selected.text}</p>
         {selected.options.map(option => <div className="builder-option" key={option.id}><strong>{option.label}</strong><small>{option.tradeoff}</small></div>)}
@@ -456,9 +457,9 @@ export function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose
       </div></>
         : <EmptyState icon={CircleHelp} title="미결정사항이 없습니다" detail="Lead가 사용자 결정을 요청하면 여기에 표시됩니다." />}
       {(selected || messages.length > 0) && <MessageList actors={props.snapshot.actors} messages={messages} followLatest={!props.conversationHasNewer} />}
-      {selected && <MessageComposer key={selected.id} channel="decisions" enabled={Boolean(props.onSendMessage) && selected.status === "open"
+      {selected && <MessageComposer key={selected.id} channel="question_discussion" enabled={Boolean(props.onSendMessage) && selected.status === "open"
         && !selected.answerUnavailableReason
-        && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === "decisions" && !props.conversation.active)}
+        && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === "question_discussion" && !props.conversation.active)}
         onSend={selected.answerUnavailableReason ? undefined : props.onSendMessage} questionContext={selected.questionContext}
         disabledReason={selected.answerUnavailableReason ?? (selected.status === "answered" ? "이 질문의 답변이 설계에 반영되었습니다." : undefined)} />}
     </section>
@@ -478,14 +479,29 @@ function SystemView({ props }: { props: BuilderShellProps }) {
     <div className="builder-system-grid"><section className="builder-card"><h2>연결 상태</h2>
       <LeadAgentSettings options={props.leadAgents ?? null} loading={props.leadAgentsLoading ?? false}
         error={props.leadAgentsError ?? null} onSave={props.onSelectLeadAgent}
-        sessions={props.leadSessions} sessionsLoading={props.leadSessionsLoading} sessionsError={props.leadSessionsError}
-        onPrepare={props.onPrepareLeadSessions} />
+        contexts={props.leadContexts} contextsLoading={props.leadContextsLoading}
+        contextsError={props.leadContextsError} onPrepareContexts={props.onPrepareLeadContexts} />
       <IntegrationCard detail="메인 Lead 및 질문 대화 연결 상태" icon={Bot} state={aiLabel} title="AI 대화" />
       <IntegrationCard detail="저장소 및 Actions 연동 상태" icon={GitFork} state={githubLabel} title="GitHub" />
     </section><section className="builder-card"><h2>Runner 정보</h2>
       <div className="builder-empty-card builder-runner-unavailable"><Server /><strong>Runner 정보가 아직 연결되지 않았습니다</strong><p>접속 상태, 운영체제, 라벨, 최근 작업은 현재 화면에서 확인할 수 없습니다.</p></div>
     </section></div>
   </div>;
+}
+
+function UiDesignContextView({ props }: { props: BuilderShellProps }) {
+  const channel = "ui_design" as const;
+  const messages = conversationMessages(props, channel);
+  const enabled = Boolean(props.onSendMessage) && (props.conversation === undefined
+    ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === channel && !props.conversation.active);
+  return <div className="builder-page builder-system-page"><div className="builder-page-intro">
+    <h2>UI Design</h2><p>화면 설계 논의는 Main과 독립된 대화 컨텍스트에 저장됩니다.</p>
+  </div><section aria-label="UI Design 대화" className="builder-card">
+    <ConversationControls channel={channel} props={props} />
+    {messages.length ? <MessageList actors={props.snapshot.actors} messages={messages} followLatest={!props.conversationHasNewer} />
+      : <div className="builder-empty-card"><FileText /><strong>UI Design 대화가 아직 없습니다</strong><p>명시적으로 보낸 대화만 표시됩니다.</p></div>}
+    <MessageComposer channel={channel} enabled={enabled} onSend={props.onSendMessage} />
+  </section></div>;
 }
 
 function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellProps["onImportConsultation"]> }) {
@@ -576,12 +592,13 @@ export function BuilderShell(props: BuilderShellProps) {
   const current = VIEW_TITLES[view];
   const leadIds = new Set(props.snapshot.actors.filter(actor => actor.role === "lead").map(actor => actor.id));
   const mainMessages = [...props.snapshot.messages.filter(message => message.channel === "main"
-    && (message.actorId === null || leadIds.has(message.actorId))), ...conversationMessages(props, "main")];
+    && (message.actorId === null || leadIds.has(message.actorId))), ...conversationMessages(props, "user_conversation")];
   const openQuestionCount = props.snapshot.questions.filter(question => question.status === "open").length;
 
   function selectView(next: BuilderView) {
     setView(next); setActorId(null); setDrawerOpen(false);
-    if (next === "lead" || next === "decisions") props.onLeadChannelChange?.(next === "lead" ? "main" : "decisions");
+    if (next === "lead" || next === "decisions" || next === "ui-design") props.onLeadChannelChange?.(
+      next === "lead" ? "user_conversation" : next === "decisions" ? "question_discussion" : "ui_design");
   }
   function openActor(id: string) {
     if (props.snapshot.actors.find(actor => actor.id === id)?.role === "lead") selectView("lead");
@@ -598,6 +615,7 @@ export function BuilderShell(props: BuilderShellProps) {
   let content: ReactNode;
   if (activeActor) content = <ActorTranscriptView actions={headerActions} actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
   else if (view === "lead") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
+  else if (view === "ui-design") content = <UiDesignContextView props={props} />;
   else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
   else if (view === "organization") content = <OrganizationView onActor={openActor} props={props} />;
   else if (view === "documents") content = <DocumentsView props={props} />;

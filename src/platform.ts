@@ -5,7 +5,9 @@ import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
 import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agent.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
-import type { LeadChannel } from "./domain/model.ts";
+import { LEAD_CONTEXTS, parseLeadContexts } from "./domain/lead-contexts.ts";
+import { beginLeadContextPreparation, readLeadContexts, writeLeadContextProgress, writeLeadContexts } from "./lead-context-store.ts";
+import type { LeadChannel, LeadConversationId } from "./domain/model.ts";
 import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
 import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
 import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL } from "./tool-declarations.mjs";
@@ -232,26 +234,120 @@ export async function prepareLeadSessions(companyId: string, params: Record<stri
   });
 }
 
-function conversationInput(params: Record<string, unknown>, extra: readonly string[] = [], optional: readonly string[] = []) {
-  const keys = ["channel", ...extra];
-  if (keys.some(key => !Object.hasOwn(params, key)) || Object.keys(params).some(key => ![...keys, ...optional].includes(key))
-    || typeof params.channel !== "string" || !LEAD_CHANNELS.includes(params.channel as LeadChannel)) {
-    throw new TypeError("Lead conversation requires a supported channel and exact fields.");
+/** A separate, explicit v2 start. The v1 action above remains unchanged. */
+export async function prepareLeadContexts(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  if (Object.keys(params).sort().join(",") !== "agentId,expectedRevision,requestId"
+    || typeof params.agentId !== "string" || !UUID.test(params.agentId)
+    || !Number.isSafeInteger(params.expectedRevision) || (params.expectedRevision as number) < 1
+    || typeof params.requestId !== "string" || !UUID.test(params.requestId)) {
+    throw new TypeError("Lead context preparation requires an explicit request ID and the displayed Lead selection.");
   }
-  return params.channel as LeadChannel;
+  const agentId = params.agentId;
+  const expectedRevision = params.expectedRevision as number;
+  const requestId = params.requestId;
+  return serialize(companyId, async () => {
+    const binding = await readLeadAgentBinding(companyId, platform);
+    if (binding.revision !== expectedRevision || binding.selectedAgentId !== agentId) {
+      throw new Error("Lead Agent selection changed. Refresh before starting Lead contexts.");
+    }
+    const options = await readLeadAgentOptions(companyId, platform);
+    if (!options.agents.some(agent => agent.id === agentId && ["idle", "running"].includes(agent.status))) {
+      throw new Error("Select an available Agent from this Workspace.");
+    }
+    let current = await beginLeadContextPreparation(companyId, agentId, expectedRevision, requestId, platform);
+    if (current.status === "ready") {
+      await assertLeadSelection(companyId, binding, platform);
+      return { saved: true, requestId: current.requestId, status: "ready", contextsReady: true };
+    }
+
+    for (const context of LEAD_CONTEXTS) {
+      const knownId = current.contexts[context];
+      if (knownId !== null) continue;
+      if (current.pendingContext !== context) {
+        throw new Error("Lead context preparation has an unresolved request. Refresh its exact saved state before continuing.");
+      }
+      if (current.status === "uncertain") {
+        throw new Error("Host session ensure is unresolved. No retry was attempted because the SDK does not guarantee recovery by taskKey; reconcile this exact context before continuing.");
+      }
+      await assertLeadSelection(companyId, binding, platform);
+      // Persist the in-flight boundary before calling Host. If the worker or
+      // response is lost, a later invocation must not guess that taskKey
+      // recovery returns the same session: the public SDK does not promise it.
+      current = parseLeadContexts({ ...current, status: "uncertain" }, companyId);
+      await writeLeadContextProgress(companyId, current,
+        LEAD_CONTEXTS.flatMap(name => current.contexts[name] === null ? [] : [current.contexts[name]!]), platform);
+      let result: { created: boolean; sessionId: string };
+      try {
+        // taskKey identifies this Host operation; it is not a documented
+        // recovery guarantee. Never accept a caller-provided session ID.
+        result = await platform.agents.sessions.ensure(agentId, companyId, {
+          taskKey: `plugin:com.sonparkserver.my-plugin-builder:session:lead:v2:${expectedRevision}:${context}`,
+        });
+        if (!result || Object.keys(result).sort().join(",") !== "created,sessionId"
+          || typeof result.created !== "boolean" || typeof result.sessionId !== "string" || !UUID.test(result.sessionId)
+          || Object.values(current.contexts).some(id => id?.toLowerCase() === result.sessionId.toLowerCase())) {
+          throw new Error("Invalid or duplicate Host session ensure result.");
+        }
+      } catch {
+        throw new Error("Host session ensure is unresolved. The exact context was kept; no automatic retry was attempted.");
+      }
+      await assertLeadSelection(companyId, binding, platform);
+      const contexts = { ...current.contexts, [context]: result.sessionId };
+      const index = LEAD_CONTEXTS.indexOf(context);
+      if (index === LEAD_CONTEXTS.length - 1) {
+        current = parseLeadContexts({ ...current, status: "ready", pendingContext: null, contexts }, companyId);
+        await writeLeadContexts(companyId, current,
+          LEAD_CONTEXTS.map(name => current.contexts[name]!), platform);
+      } else {
+        current = parseLeadContexts({ ...current, status: "preparing", pendingContext: LEAD_CONTEXTS[index + 1], contexts }, companyId);
+        await writeLeadContextProgress(companyId, current,
+          LEAD_CONTEXTS.flatMap(name => current.contexts[name] === null ? [] : [current.contexts[name]!]), platform);
+      }
+    }
+    await assertLeadSelection(companyId, binding, platform);
+    const saved = await readLeadContexts(companyId, platform);
+    if (!saved || saved.requestId !== requestId || saved.status !== "ready") {
+      throw new Error("Lead context preparation did not reach a durable ready state.");
+    }
+    return { saved: true, requestId, status: saved.status, contextsReady: true };
+  });
 }
 
-async function withConversation<T>(companyId: string, platform: SpsPlatformInvocationContext,
+function conversationInput(params: Record<string, unknown>, extra: readonly string[] = [], optional: readonly string[] = []) {
+  const hasChannel = Object.hasOwn(params, "channel"), hasContext = Object.hasOwn(params, "contextId");
+  const identity = hasContext ? "contextId" : "channel";
+  const keys = [identity, ...extra];
+  if (hasChannel === hasContext || keys.some(key => !Object.hasOwn(params, key))
+    || Object.keys(params).some(key => ![...keys, ...optional].includes(key))) {
+    throw new TypeError("Lead conversation requires one supported channel/context ID and exact fields.");
+  }
+  const value = params[identity];
+  const allowed = identity === "contextId" ? LEAD_CONTEXTS : LEAD_CHANNELS;
+  if (typeof value !== "string" || !allowed.includes(value as never)) throw new TypeError("Unsupported Lead conversation channel/context.");
+  return value as LeadConversationId;
+}
+
+async function withConversation<T>(companyId: string, channel: LeadConversationId, platform: SpsPlatformInvocationContext,
   action: (store: ReturnType<typeof createLeadConversationStore>) => Promise<T>) {
   workspaceId(companyId);
   return serialize(companyId, async () => {
     const binding = await readLeadAgentBinding(companyId, platform);
-    const sessions = await leadSessionsFor(companyId, binding, platform);
+    const logical = LEAD_CONTEXTS.includes(channel as typeof LEAD_CONTEXTS[number]);
+    const sessions = logical ? await readLeadContexts(companyId, platform) : await leadSessionsFor(companyId, binding, platform);
+    if (!sessions || logical && !("contexts" in sessions && sessions.status === "ready")) throw new Error("The selected Lead conversation is not ready.");
     const check = async () => {
       await assertLeadSelection(companyId, binding, platform);
-      const current = await leadSessionsFor(companyId, binding, platform);
-      if (LEAD_CHANNELS.some(channel => current.sessions[channel] !== sessions.sessions[channel])) {
-        throw new Error("Lead session binding changed. Refresh without automatically resending.");
+      if (logical) {
+        const current = await readLeadContexts(companyId, platform);
+        if (!current || !("contexts" in sessions) || JSON.stringify(current) !== JSON.stringify(sessions)) {
+          throw new Error("Lead context binding changed. Refresh without automatically resending.");
+        }
+      } else {
+        const current = await leadSessionsFor(companyId, binding, platform);
+        if (!("sessions" in sessions) || LEAD_CHANNELS.some(legacyChannel => current.sessions[legacyChannel] !== sessions.sessions[legacyChannel])) {
+          throw new Error("Lead session binding changed. Refresh without automatically resending.");
+        }
       }
     };
     await check();
@@ -270,36 +366,80 @@ async function withConversation<T>(companyId: string, platform: SpsPlatformInvoc
         }
       }
       await check();
+      if (!logical) return;
+      const [baseline, currentDraft, userQuestions, sharedMemory] = await Promise.all([
+        readDesignBaseline(companyId, companyId, platform),
+        readCurrentDesignDraft(companyId, companyId, platform),
+        readUserCtoQuestions(companyId, companyId, platform),
+        createLeadMemoryStore(companyId, companyId, platform.state).current(),
+      ]);
+      const references = {
+        workspaceId: companyId,
+        approvedBaseline: baseline ? {
+          revisionId: baseline.revision.revisionId,
+          specificationRevisionId: baseline.revision.specification.revisionId,
+          graphRevisionId: baseline.revision.graph.graphRevisionId,
+          userDecision: baseline.revision.userDecision.interpretation.slice(0, 2_000),
+          requirements: baseline.revision.specification.requirements.slice(0, 40)
+            .map(requirement => ({ id: requirement.id, description: requirement.description.slice(0, 512) })),
+          omittedRequirementCount: Math.max(0, baseline.revision.specification.requirements.length - 40),
+        } : null,
+        currentDesignDraft: currentDraft ? {
+          revisionId: currentDraft.revision.draft.revisionId,
+          decisions: currentDraft.revision.decisions?.slice(-40).map(decision => ({
+            questionId: decision.questionId, answerSourceId: decision.answerSourceId,
+            answerText: decision.answerText.slice(0, 512), appliedDraftRevisionId: decision.appliedDraftRevisionId,
+          })) ?? [],
+          openQuestions: currentDraft.revision.draft.questions.filter(question => !currentDraft.revision.decisions
+            ?.some(decision => decision.questionId === question.id)).slice(0, 20)
+            .map(question => ({ id: question.id, text: question.text.slice(0, 512) })),
+        } : null,
+        userDecisionQuestions: userQuestions?.board.questions.slice(-32).map(question => ({
+          id: question.proposal.id, title: question.proposal.title, context: question.proposal.context.slice(0, 512),
+          disposition: question.review?.disposition ?? null, rationale: question.review?.rationale.slice(0, 512) ?? null,
+        })) ?? [],
+        sharedProjectMemory: sharedMemory?.revision.memory.entries.slice(0, 40).map(entry => ({
+          id: entry.id, kind: entry.kind, text: entry.text.slice(0, 512), sourceIds: entry.sourceIds,
+        })) ?? [],
+      };
+      const encoded = JSON.stringify(references);
+      return Buffer.byteLength(encoded, "utf8") <= 14 * 1024 ? encoded
+        : JSON.stringify({ workspaceId: companyId, baselineRevisionId: baseline?.revision.revisionId ?? null,
+          draftRevisionId: currentDraft?.revision.draft.revisionId ?? null,
+          userDecisionQuestionRevisionId: userQuestions?.board.revisionId ?? null,
+          note: "Reference summary exceeded the bounded prompt context; read exact records with the provided Builder tools." });
     };
     return action(createLeadConversationStore(platform, sessions, check, beforeDispatch));
   });
 }
 
 export async function readLeadConversation(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
-  const channel = conversationInput(params, ["cursor"]);
+  const channel = conversationInput(params, ["cursor"], ["channel", "contextId"]);
   if (params.cursor !== null && (typeof params.cursor !== "string" || !UUID.test(params.cursor))) throw new TypeError("Invalid conversation cursor.");
-  return withConversation(companyId, platform, store => store.page(channel, params.cursor as string | null));
+  return withConversation(companyId, channel, platform, store => store.page(channel, params.cursor as string | null));
 }
 export async function sendLeadMessage(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
-  const channel = conversationInput(params, ["requestId", "text"], ["questionContext"]);
+  const channel = conversationInput(params, ["requestId", "text"], ["channel", "contextId", "questionContext"]);
   if (channel === "cto-inbox") throw new Error("The internal Lead intake channel does not accept user messages.");
+  if (["background_planning", "question_intake"].includes(channel)) throw new Error("This Lead context does not accept direct user messages.");
   const questionContext = Object.hasOwn(params, "questionContext") ? parseQuestionContext(params.questionContext) : undefined;
-  if (questionContext && channel !== "decisions") throw new Error("Question-associated answers use the decisions channel.");
+  if ((questionContext && channel !== "decisions" && channel !== "question_discussion")
+    || channel === "question_discussion" && !questionContext) throw new Error("Question Discussion messages require their exact question and design Revision context.");
   if (typeof params.requestId !== "string" || !UUID.test(params.requestId) || typeof params.text !== "string") throw new TypeError("Invalid Lead message.");
-  return withConversation(companyId, platform, store => store.send(channel, params.requestId as string, params.text as string, questionContext));
+  return withConversation(companyId, channel, platform, store => store.send(channel, params.requestId as string, params.text as string, questionContext));
 }
 export async function refreshLeadConversation(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
   const channel = conversationInput(params);
-  return withConversation(companyId, platform, store => store.refresh(channel));
+  return withConversation(companyId, channel, platform, store => store.refresh(channel));
 }
 export async function cancelLeadMessage(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
   const channel = conversationInput(params);
-  return withConversation(companyId, platform, store => store.cancel(channel));
+  return withConversation(companyId, channel, platform, store => store.cancel(channel));
 }
 export async function resumePreparedLeadMessage(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
   const channel = conversationInput(params, ["requestId"]);
-  if (channel === "cto-inbox" || typeof params.requestId !== "string" || !UUID.test(params.requestId)) throw new TypeError("Invalid prepared message.");
-  return withConversation(companyId, platform, store => store.resumePrepared(channel, params.requestId as string));
+  if (["cto-inbox", "background_planning", "question_intake"].includes(channel) || typeof params.requestId !== "string" || !UUID.test(params.requestId)) throw new TypeError("Invalid prepared message.");
+  return withConversation(companyId, channel, platform, store => store.resumePrepared(channel, params.requestId as string));
 }
 
 function userActionInput(params: Record<string, unknown>, context: { companyId: string; actor: { type: string; companyId: string } }) {
@@ -354,7 +494,7 @@ export async function proposeLeadDesign(params: unknown, runContext: unknown, pl
     const sourceDigests = [];
     for (const id of draft.sourceIds) {
       const source = id.startsWith("lead-turn:")
-        ? await readLeadUserSource(id.slice("lead-turn:".length), authority.sessions, platform)
+        ? await readLeadUserSource(id.slice("lead-turn:".length), authority.conversationSessions, platform)
         : snapshot.messages.find(message => message.id === id && message.role === "user" && message.channel === "main");
       if (!source || typeof source.text !== "string" || !source.text.trim()) {
         throw new Error("The draft cites unavailable user input in this Workspace/Lead selection.");
@@ -435,8 +575,14 @@ export async function readLeadDesignSources(params: unknown, runContext: unknown
       nextCursor = sources[index + 1]?.id ?? null;
     } else {
       if (cursor !== null && (!UUID.test(cursor) || cursor !== cursor.toLowerCase())) throw new TypeError("Invalid user-message cursor.");
-      if (!authority.sessions.sessions[channel]) throw new Error("This Lead input session is not prepared.");
-      const page = await createLeadConversationStore(platform, authority.sessions, authority.check).page(channel, cursor);
+      const conversationId = authority.contexts
+        ? channel === "main" ? "user_conversation" : "question_discussion"
+        : channel;
+      const sourceSessions = authority.conversationSessions;
+      if (authority.contexts
+        ? !authority.contexts.contexts[conversationId as typeof LEAD_CONTEXTS[number]]
+        : !authority.sessions?.sessions[channel]) throw new Error("This Lead input context is not prepared.");
+      const page = await createLeadConversationStore(platform, sourceSessions, authority.check).page(conversationId, cursor);
       const turn = page.turns[0];
       source = turn ? { id: `lead-turn:${turn.requestId}`, text: turn.text,
         ...(turn.questionContext ? { questionContext: turn.questionContext } : {}) } : null;
@@ -713,6 +859,8 @@ export function createBuilderPlatform() {
       await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-sessions", handler: async (params, platform) =>
       await readLeadSessions(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.lead-contexts", handler: async (params, platform) =>
+      await readLeadContexts(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-memory", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
@@ -743,6 +891,8 @@ export function createBuilderPlatform() {
       selectLeadAgent(context.companyId, userActionInput(params, context), context) },
     { key: "builder.prepare-lead-sessions", handler: async (params, context) =>
       prepareLeadSessions(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.prepare-lead-contexts", handler: async (params, context) =>
+      prepareLeadContexts(context.companyId, userActionInput(params, context), context) },
     { key: "builder.send-lead-message", handler: async (params, context) =>
       sendLeadMessage(context.companyId, userActionInput(params, context), context) },
     { key: "builder.refresh-lead-conversation", handler: async (params, context) =>

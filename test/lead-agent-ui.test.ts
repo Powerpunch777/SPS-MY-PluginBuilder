@@ -1,33 +1,38 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { build } from "esbuild";
 import type { BuilderLeadAgentOptions } from "../src/domain/model.js";
+import type { BuilderLeadContexts } from "../src/domain/lead-contexts.ts";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
 
-async function render(options: BuilderLeadAgentOptions | null, loading = false, error: string | null = null) {
-  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".lead-agent-ui-test-"));
-  try {
-    const output = path.join(temporary, "LeadAgentSettings.mjs");
-    await build({
+async function render(options: BuilderLeadAgentOptions | null, loading = false, error: string | null = null,
+  contexts: BuilderLeadContexts | null = null) {
+  const result = await build({
       entryPoints: [path.join(projectRoot, "src", "ui", "LeadAgentSettings.tsx")],
-      outfile: output,
       bundle: true,
-      external: ["react", "react-dom", "react-dom/server"],
+      external: ["react", "react-dom", "react-dom/server", "react/jsx-runtime"],
       platform: "node",
       format: "esm",
       jsx: "automatic",
+      nodePaths: [path.join(projectRoot, "node_modules")],
+      write: false,
     });
-    const { LeadAgentSettings } = await import(pathToFileURL(output).href);
-    return renderToStaticMarkup(createElement(LeadAgentSettings, { options, loading, error, onSave: async () => {} }));
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
+  const output = result.outputFiles[0];
+  if (!output) throw new Error("esbuild did not return the in-memory Lead settings bundle.");
+  const source = Buffer.from(output.contents).toString("utf8")
+    .replaceAll('"react/jsx-runtime"', JSON.stringify(pathToFileURL(require.resolve("react/jsx-runtime")).href))
+    .replaceAll('"react"', JSON.stringify(pathToFileURL(require.resolve("react")).href));
+  const { LeadAgentSettings } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`) as
+    typeof import("../src/ui/LeadAgentSettings.tsx");
+  return renderToStaticMarkup(createElement(LeadAgentSettings, { options, loading, error, contexts,
+    onSave: async () => {}, onPrepareContexts: async () => {} }));
 }
 
 const options: BuilderLeadAgentOptions = {
@@ -73,4 +78,25 @@ test("supports an unconfigured state without inventing an agent", async () => {
   const html = await render({ ...options, selectedAgentId: null, agents: [] });
   assert.match(html, /value="" selected/);
   assert.doesNotMatch(html, /현재 선택된 Lead Agent를 사용할 수 없음/);
+});
+
+test("v2 creation is a separate explicit action and uncertain ensure state disables retry", async () => {
+  const available = await render(options);
+  assert.match(available, /새 5개 Lead 구성 명시 시작/);
+  assert.match(available, /왼쪽 화면 이동은 세션을 만들지 않습니다/);
+  assert.match(available, /aria-label="5개 논리 Lead 컨텍스트"/);
+  for (const label of ["Main", "UI Design", "Background", "Question Intake", "Question Discussion"]) {
+    assert.match(available, new RegExp(label));
+  }
+  assert.match(available, /세션 없음/);
+  assert.doesNotMatch(available, /Lead 세션 준비|저장된 Lead 세션/);
+  const uncertain: BuilderLeadContexts = { schemaVersion: 2, workspaceId: options.workspaceId,
+    selectionRevision: options.revision, agentId: options.selectedAgentId!, requestId: "11111111-1111-4111-8111-111111111111",
+    status: "uncertain", pendingContext: "ui_design", contexts: { user_conversation: "22222222-2222-4222-8222-222222222222",
+      ui_design: null, background_planning: null, question_intake: null, question_discussion: null } };
+  const blocked = await render(options, false, null, uncertain);
+  assert.match(blocked, /Host SDK는 taskKey만으로 동일 세션이 복구된다고 보장하지 않습니다/);
+  assert.match(blocked, /UI Design/);
+  assert.match(blocked, /새 Lead 구성 상태 확인 필요/);
+  assert.doesNotMatch(blocked, /새 5개 Lead 구성 명시 시작/);
 });

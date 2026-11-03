@@ -1,6 +1,8 @@
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { parseLeadAgentBinding } from "./domain/lead-agent.ts";
+import { resolveLeadContext, type LeadContextId } from "./domain/lead-contexts.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
+import { readLeadContexts } from "./lead-context-store.ts";
 
 export function exactToolRecord(value: unknown, required: readonly string[], optional: readonly string[] = []) {
   if (!value || typeof value !== "object" || Array.isArray(value)
@@ -37,11 +39,52 @@ export async function resolveLeadToolAuthority(context: ReturnType<typeof parseL
     const raw = await platform.state.get(key("lead-agent.v1"));
     return parseLeadAgentBinding(raw ?? { workspaceId: context.companyId, revision: 0, selectedAgentId: null }, context.companyId);
   };
-  const binding = await readBinding();
-  if (!binding.selectedAgentId || binding.selectedAgentId !== context.agentId) {
-    throw new Error("Only the current Builder Lead may use this tool.");
-  }
-  const readSessions = async () => {
+  const resolve = async () => {
+    const binding = await readBinding();
+    if (!binding.selectedAgentId || binding.selectedAgentId !== context.agentId) {
+      throw new Error("Only the current Builder Lead may use this tool.");
+    }
+    const contexts = await readLeadContexts(context.companyId, platform);
+    if (contexts !== null) {
+      // Once this selection has a v2 record, its five Host identities are the
+      // only authority for that selection. An incomplete record must not fall
+      // back to a v1 session, and a non-member v1 session must not regain
+      // access merely because the v2 record is ready.
+      if (contexts.status !== "ready" || !Object.values(contexts.contexts).includes(context.sessionId)) {
+        throw new Error("The Host session is not an authorized ready Lead context.");
+      }
+      const logicalContext = resolveLeadContext(contexts, { workspaceId: context.companyId, agentId: context.agentId,
+        sessionId: context.sessionId }, { selectionRevision: binding.revision, agentId: binding.selectedAgentId });
+      return { binding, contexts, logicalContext, channel: null, sessions: null };
+    }
+    const sessions = await readSessions(binding);
+    const channel = LEAD_CHANNELS.find(candidate => sessions.sessions[candidate] === context.sessionId);
+    if (!channel) throw new Error("The tool requires a prepared current Lead session or context.");
+    return { binding, contexts: null, logicalContext: null, channel, sessions };
+  };
+  const initial = await resolve();
+  const check = async () => {
+    const latest = await readBinding();
+    if (latest.revision !== initial.binding.revision || latest.selectedAgentId !== initial.binding.selectedAgentId) {
+      throw new Error("Lead Agent selection changed. Refresh without automatically retrying.");
+    }
+    const current = await resolve();
+    if (current.binding.revision !== initial.binding.revision
+      || current.binding.selectedAgentId !== initial.binding.selectedAgentId
+      || current.channel !== initial.channel || current.logicalContext !== initial.logicalContext
+      || JSON.stringify(current.contexts) !== JSON.stringify(initial.contexts)
+      || (initial.sessions === null) !== (current.sessions === null)
+      || initial.sessions !== null && current.sessions !== null
+        && LEAD_CHANNELS.some(channel => current.sessions!.sessions[channel] !== initial.sessions!.sessions[channel])) {
+      throw new Error("Lead tool authority changed. Refresh without automatically retrying.");
+    }
+  };
+  return Object.freeze({ context, selectionRevision: initial.binding.revision, sessions: initial.sessions,
+    contexts: initial.contexts,
+    conversationSessions: initial.contexts ?? initial.sessions!,
+    channel: initial.channel, logicalContext: initial.logicalContext, check });
+
+  async function readSessions(binding: Awaited<ReturnType<typeof readBinding>>) {
     const raw = await platform.state.get(key(`lead-sessions.v1.${binding.revision}`));
     const sessions = parseLeadSessions(raw ?? { workspaceId: context.companyId, selectionRevision: binding.revision,
       agentId: binding.selectedAgentId, sessions: { main: null, "cto-inbox": null, decisions: null } }, context.companyId);
@@ -49,20 +92,12 @@ export async function resolveLeadToolAuthority(context: ReturnType<typeof parseL
       throw new Error("Lead session selection does not match the saved Agent.");
     }
     return sessions;
-  };
-  const sessions = await readSessions();
-  if (!LEAD_CHANNELS.some(channel => sessions.sessions[channel] === context.sessionId)) {
-    throw new Error("The tool requires a prepared current Lead session.");
   }
-  const check = async () => {
-    const latest = await readBinding();
-    if (latest.revision !== binding.revision || latest.selectedAgentId !== binding.selectedAgentId) {
-      throw new Error("Lead Agent selection changed. Refresh without automatically retrying.");
-    }
-    const current = await readSessions();
-    if (LEAD_CHANNELS.some(channel => current.sessions[channel] !== sessions.sessions[channel])) {
-      throw new Error("Lead tool session authority changed.");
-    }
-  };
-  return Object.freeze({ context, selectionRevision: binding.revision, sessions, check });
+}
+
+/** Formal specification/Graph, technology and Workstream publication is Main-only for both versions. */
+export function requireLeadFormalPublicationAuthority(authority: { channel: string | null; logicalContext: LeadContextId | null }): void {
+  if (authority.channel !== "main" && authority.logicalContext !== "user_conversation") {
+    throw new Error("Only the Main Lead context may publish formal revisions.");
+  }
 }

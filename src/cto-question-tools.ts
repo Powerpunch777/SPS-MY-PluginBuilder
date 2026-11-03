@@ -20,7 +20,8 @@ function conflict(current: string | null) {
 }
 async function intakeAuthority(projectId: string, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext), lead = await resolveLeadToolAuthority(context, platform);
-  if (lead.sessions.sessions["cto-inbox"] !== context.sessionId) throw new Error("Only the prepared CTO-intake Lead session may read or review CTO proposals.");
+  if (lead.logicalContext !== null ? lead.logicalContext !== "question_intake"
+    : lead.sessions?.sessions["cto-inbox"] !== context.sessionId) throw new Error("Only the prepared CTO-intake Lead session or Question Intake context may read or review CTO proposals.");
   const check = async () => {
     await lead.check();
     const run = await platform.agents.sessions.getRun(context.sessionId, context.companyId, context.runId);

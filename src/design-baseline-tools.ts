@@ -3,7 +3,7 @@ import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plu
 import { parseDesignBaseline } from "./domain/design-baseline.ts";
 import { createDesignDraftStore } from "./design-draft-store.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
-import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
+import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { readLeadUserTurn } from "./lead-conversations.ts";
 
 const hash = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -37,8 +37,12 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
   const userSourceId = input.userSourceId, interpretation = input.interpretation;
   const context = parseLeadToolContext(runContext);
   const authority = await resolveLeadToolAuthority(context, platform);
-  if (context.sessionId === authority.sessions.sessions["cto-inbox"]) throw new Error("Internal CTO intake cannot record a user design decision.");
-  const turn = await readLeadUserTurn(userSourceId.slice("lead-turn:".length), authority.sessions, platform);
+  requireLeadFormalPublicationAuthority(authority);
+  if (authority.logicalContext !== null && authority.logicalContext !== "user_conversation") {
+    throw new Error("Only the Main Lead context may record a user design decision.");
+  }
+  if (authority.logicalContext === null && context.sessionId === authority.sessions!.sessions["cto-inbox"]) throw new Error("Internal CTO intake cannot record a user design decision.");
+  const turn = await readLeadUserTurn(userSourceId.slice("lead-turn:".length), authority.conversationSessions, platform);
   if (turn.runId !== context.runId || turn.sessionId !== context.sessionId) {
     throw new Error("The decision must be the actual user input for this current Lead run/session.");
   }

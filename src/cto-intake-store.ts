@@ -42,7 +42,8 @@ export async function checkCurrentCtoQuestion(workspaceId: string, projectId: st
 export async function resolveBoundCtoIntake(projectId: string, questionId: string, runContext: unknown,
   platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext), lead = await resolveLeadToolAuthority(context, platform);
-  if (lead.sessions.sessions["cto-inbox"] !== context.sessionId) throw new Error("Only the prepared CTO-intake Lead session may handle this question.");
+  if (lead.logicalContext !== null ? lead.logicalContext !== "question_intake"
+    : lead.sessions?.sessions["cto-inbox"] !== context.sessionId) throw new Error("Only the prepared CTO-intake Lead session or Question Intake context may handle this question.");
   const store = createCtoIntakeStore(context.companyId, projectId, questionId, platform.state);
   const delivery = (await store.current())?.revision;
   if (!delivery || ["prepared", "superseded"].includes(delivery.phase)
@@ -53,8 +54,16 @@ export async function resolveBoundCtoIntake(projectId: string, questionId: strin
   }
   const check = async () => {
     await lead.check();
+    const currentTargetSession = lead.logicalContext !== null
+      ? lead.contexts?.contexts.question_intake
+      : lead.sessions?.sessions["cto-inbox"];
+    if (currentTargetSession !== context.sessionId || delivery.target.sessionId !== currentTargetSession
+      || delivery.target.agentId !== lead.context.agentId || delivery.target.selectionRevision !== lead.selectionRevision) {
+      throw new Error("The current Lead intake target changed. The recorded request was not reassigned.");
+    }
     const current = (await store.current())?.revision;
-    if (!current || current.requestId !== delivery.requestId || ["prepared", "superseded"].includes(current.phase)
+    if (!current || current.requestId !== delivery.requestId || JSON.stringify(current.target) !== JSON.stringify(delivery.target)
+      || ["prepared", "superseded"].includes(current.phase)
       || current.runId !== null && current.runId !== context.runId) throw new Error("The recorded question intake changed.");
     const receipt = await platform.agents.sessions.getRequest(context.sessionId, context.companyId, delivery.requestId);
     if (!receipt || receipt.requestId !== delivery.requestId || receipt.state !== "submitted" || receipt.runId !== context.runId) {

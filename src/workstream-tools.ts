@@ -3,10 +3,11 @@ import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plu
 import { parseWorkstreamBoard, parseWorkstreamChange, parseWorkstreamSpec, type WorkstreamRecord } from "./domain/workstreams.ts";
 import { parseLeadAgentBinding } from "./domain/lead-agent.ts";
 import { parseLeadSessions } from "./domain/lead-sessions.ts";
+import { readLeadContexts } from "./lead-context-store.ts";
 import { createDesignBaselineStore, readDesignBaseline } from "./design-baseline-tools.ts";
 import { createTechnologyDecisionStore, readTechnologyDecisions } from "./technology-decision-tools.ts";
 import { readProjectCtos } from "./project-cto-tools.ts";
-import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
+import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 import { resolveCtoDeliveryRun, workstreamInstructionDigest } from "./cto-delivery-store.ts";
 
@@ -43,6 +44,7 @@ export async function publishWorkstream(params: unknown, runContext: unknown, pl
   const spec = parseWorkstreamSpec(input.spec, projectId), change = parseWorkstreamChange(input.change);
   const context = parseLeadToolContext(runContext);
   const authority = await resolveLeadToolAuthority(context, platform);
+  requireLeadFormalPublicationAuthority(authority);
   const current = await readWorkstreams(context.companyId, projectId, platform);
   if ((current?.revision.revisionId ?? null) !== expectedBaseRevisionId) return conflict(current?.revision.revisionId ?? null);
   const old = current?.revision.workstreams.find(record => record.spec.id === spec.id);
@@ -112,6 +114,10 @@ export async function resolveCtoAuthority(projectId: string, ctoId: string, cont
     const raw = await platform.state.get(key("lead-agent.v1"));
     const lead = parseLeadAgentBinding(raw ?? { workspaceId: context.companyId, revision: 0, selectedAgentId: null }, context.companyId);
     if (lead.selectedAgentId === context.agentId) {
+      const contexts = await readLeadContexts(context.companyId, platform);
+      if (contexts !== null && Object.values(contexts.contexts).includes(context.sessionId)) {
+        throw new Error("A Lead logical context cannot impersonate CTO receipt authority.");
+      }
       const rawSessions = await platform.state.get(key(`lead-sessions.v1.${lead.revision}`));
       if (rawSessions !== null) {
         const sessions = parseLeadSessions(rawSessions, context.companyId);
