@@ -1,5 +1,11 @@
 # 미해결 계약 및 의존성
 
+> **2026-11-03 최신 결정 안내:** 이 문서의 기존 화면 유지·선택 전환 및 레거시 사용자 대화 이력 가정은 과거 기록이며 현행 정책으로 적용하지 않는다. [최신 결정](../../design/cao-addenda/BUILDER-USER-DECISION-2026-11-03.md)에 따라 기본은 빈 다섯 context이며, 공유 프로젝트 기억·승인된 설계/결정과 실제 존재 데이터는 보존하되 이를 레거시 사용자 이력으로 간주하지 않는다.
+
+## HISTORICAL ANALYSIS — 2026-11-03 기준 자료
+
+> 이 뒤의 기존 본문은 해당 시점의 역사적 분석이다. 미래형 계획·요구 표현은 당시 기록을 설명하며 현행 정책으로 적용하지 않는다.
+
 분류: `UNKNOWN`은 이번 승인 공개 자료/소스만으로 확정할 수 없음, `CONFLICT`는 서로 다른 기준의 불일치, `DOCUMENTED_ONLY`는 공급 문서 진술이며 별도 실증이 아님.
 
 ## 기준선과 AC 대조의 한계
@@ -23,3 +29,5 @@
 ## 다음 안전 구현 조각
 
 명시 선택으로 신규 5-context를 시작하는 흐름에 필요한 계약/데이터 호환 설계를 먼저 정리한다. 기존 3개 record, IDs, message provenance, receipts, references를 보존하고 retry/restart/idempotency에서 중복 생성을 막는 범위를 정의한다. `lead-sessions.ts`의 parser와 `lead-tool-authority.ts`의 전체 채널 검사, `session-execution-policy.ts`의 공통 Lead 도구 집합을 함께 설계 대상으로 둔다. 세부 UI 전환 정책 및 신규 AI 실행은 추가 결정 없이 확대하지 않는다. 계획 저장 후 Worker/QA 실행을 완료로 오인하지 않는다.
+
+> **HISTORICAL ANALYSIS 구간 종료 — 2026-11-03.** 위 본문은 원래 기록으로 보존한다.

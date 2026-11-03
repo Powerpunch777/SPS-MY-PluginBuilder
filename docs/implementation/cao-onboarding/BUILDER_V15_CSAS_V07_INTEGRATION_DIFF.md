@@ -1,5 +1,11 @@
 # Builder v15 ↔ CSAS v0.7 통합 차이
 
+> **2026-11-03 최신 결정 안내:** 이 문서의 기존 화면 유지·선택 전환 및 레거시 사용자 대화 이력 가정은 과거 기록이며 현행 정책으로 적용하지 않는다. [최신 결정](../../design/cao-addenda/BUILDER-USER-DECISION-2026-11-03.md)에 따라 기본은 빈 다섯 context이며, 공유 프로젝트 기억·승인된 설계/결정과 실제 존재 데이터는 보존하되 이를 레거시 사용자 이력으로 간주하지 않는다.
+
+## HISTORICAL ANALYSIS — 2026-11-03 기준 자료
+
+> 이 뒤의 기존 본문은 해당 시점의 역사적 분석이다. 미래형 계획·요구 표현은 당시 기록을 설명하며 현행 정책으로 적용하지 않는다.
+
 기준: v15 원본 `docs/design/01_Design/SPS_Plugin_Builder_Codex_Final_Design_v15.md`, CSAS v0.7 입력 및 v0.8 누적 개정 원문. 분류는 소스 코드 확인(`CONFIRMED_CODE`)과 문서 요구(`DOCUMENTED_ONLY`)를 구분한다.
 
 검토 기준선은 공개 Builder PR #2의 [revision `996c43f47ad68ba0a63c7bfbe14851e731a66891`](https://github.com/Powerpunch777/SPS-MY-PluginBuilder/tree/996c43f47ad68ba0a63c7bfbe14851e731a66891)이며, 이는 공급된 식별자다. [PR 링크](https://github.com/Powerpunch777/SPS-MY-PluginBuilder/pull/2); 두 URL은 이번 QA에서 원격 조회하지 않았다. `CONFIRMED_CODE` 행은 운영자 제공 `Builder 전체 인수 기준 정적 감사` (SHA-256 `9d955a62e9391b3adbbaf5f1da37d1be6b65bd4c0760e1cb7b41836c14aabd7d`)의 기준선 대조를 인용한다. checkout HEAD 독립 확인 및 기준선 일치는 `NOT_VERIFIED`다. v15/CSAS 및 audit 원문은 제공된 작업자료이며 비공개 입력을 공개 자료인 것처럼 인용하지 않는다.
@@ -15,3 +21,5 @@
 | Core Primary | 용어 해석 충돌 가능 | Primary/Extension/activation은 Core 실계약으로 판정 | Core 코드 부재로 `UNKNOWN`; 선택형이라는 이유로 배제하거나 문서 용어만으로 가상 API를 만들지 않음. |
 
 v15와 UI v9 원본은 수정하지 않는다. 사용자 확정 정책은 재질문하거나 미결정으로 되돌리지 않고, 명시하지 않은 세부 UX/API는 미결정으로 유지한다. 출처: 제공 원문 `SPS_Builder_CSAS_Complete_Design_Reviewed_v0.7_2026-11-03.md` (SHA-256 `832b1f4a4884df8b12f5733ce60e951bfaa418f249c54c69e2646ca95c7070db`) §§B–K, 누적 v0.8 원문 (SHA-256 `bb5e723e1aa0408e4e91fcbad784d58acb27ed46f00a78b474b828ad58be9de7`) §§0.1–0.4/B–K, 사용자 제공 「후속 운영자 지시」 SHA-256 `f8e2ad0ede6e3b6a336a18ed32e94e187a625c5f526b1925d0014c16e5cb1396`. 제공자료는 공개 문서라고 주장하지 않는다.
+
+> **HISTORICAL ANALYSIS 구간 종료 — 2026-11-03.** 위 본문은 원래 기록으로 보존한다.

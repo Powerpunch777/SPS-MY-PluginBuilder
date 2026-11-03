@@ -23,6 +23,12 @@
 - Task Packet 스키마는 개발/QA 계획, acceptance/evidence 및 test plan 필드를 저장하지만 실제 Worker 실행의 증명이 아니다. `src/domain/task-packets.ts`, `src/task-packet-tools.ts` — `CONFIRMED_CODE`; 실행 Gate 전체는 `UNKNOWN`.
 - Builder UI와 manifest는 제품 표면 및 선언 capability를 제공하지만, 존재만으로 Core의 실행/권한/격리 동작이 검증되지는 않는다. `src/platform.ts`, `src/manifest.mjs` — `CONFIRMED_CODE`.
 
+## HISTORICAL ANALYSIS — 2026-11-04
+
+> 아래 내용은 당시 결정에 관한 기록이다. 현행 기본은 비어 있는 5개 context이며, legacy switch·migration·이전 대화 메뉴는 없다. 이 기록과 충돌하는 경우 최신 `14996c` 및 `6026596`을 우선한다.
+
 ## 후속 설계의 보존 조건
 
 사용자 후속 결정은 기존 3개 대화 화면 보존 후 명시적 선택으로 별도 5-context를 시작하도록 한다. 기존 기록/ID/provenance/receipt/reference 보존, 이름 기반 자동 매핑 금지, 중복 생성 방지가 적용된다. 읽기전용 강제, 자동 링크/이관/삭제/병합, 취소·재전송, 자동 AI 실행은 승인되지 않았다. 세부 UX는 미결정이다. 출처: 사용자 제공 「후속 사용자 확정 답변」(2026-11-03), operator directive SHA-256 `f8e2ad0ede6e3b6a336a18ed32e94e187a625c5f526b1925d0014c16e5cb1396`; `DOCUMENTED_ONLY`.
+
+<!-- END HISTORICAL ANALYSIS — 2026-11-04 -->
