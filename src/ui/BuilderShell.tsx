@@ -198,12 +198,16 @@ function conversationMessages(props: BuilderShellProps, channel: LeadConversatio
 function ConversationControls({ props, channel }: { props: BuilderShellProps; channel: LeadConversationId }) {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
+  useEffect(() => {
+    setBusy(false);
+    setFeedback("");
+  }, [props.conversationActionToken]);
   if (props.conversation === undefined || props.conversationChannel !== channel) return null;
   const current = props.conversation?.active;
   const labels = { prepared: "저장됨 · 전송 준비 중", dispatching: "접수 확인 중", uncertain: "접수 불명확 · 자동 재전송하지 않음",
     submitted: "실행 중 · 응답 확인 가능", succeeded: "실행 완료", failed: "실행 실패", cancelled: "중단됨", interrupted: "실행 끊김", timed_out: "시간 초과" };
   async function perform(action: (() => Promise<void>) | undefined) {
-    await performConversationControlAction(action, busy, setBusy, setFeedback);
+    await performConversationControlAction(action, busy, setBusy, setFeedback, props.isConversationActionCurrent?.() ?? (() => true));
   }
   return <div className="builder-conversation-controls">
     <div className="builder-header-actions">

@@ -121,6 +121,8 @@ export interface BuilderShellProps {
   onSendMessage?(text: string, channel: LeadConversationId, questionContext?: import("./question-context.ts").QuestionContext): Promise<void>;
   conversation?: import("../lead-conversations.ts").LeadConversationPage | null;
   conversationChannel?: LeadConversationId;
+  conversationActionToken?: object;
+  isConversationActionCurrent?(): () => boolean;
   conversationLoading?: boolean;
   conversationError?: string | null;
   onLeadChannelChange?(channel: LeadConversationId): void;

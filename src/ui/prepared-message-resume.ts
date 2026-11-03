@@ -3,17 +3,28 @@ export async function performConversationControlAction(
   busy: boolean,
   setBusy: (busy: boolean) => void,
   setFeedback: (feedback: string) => void,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
-  if (!action || busy) return;
+  if (!action || busy || !isCurrent()) return;
   setBusy(true);
   setFeedback("");
   try {
     await action();
   } catch {
-    setFeedback("결과를 확인하지 못했습니다. 같은 실행의 상태를 다시 확인해 주세요.");
+    if (isCurrent()) setFeedback("결과를 확인하지 못했습니다. 같은 실행의 상태를 다시 확인해 주세요.");
   } finally {
-    setBusy(false);
+    if (isCurrent()) setBusy(false);
   }
+}
+
+export function invalidateLiveScopeOnCleanup(
+  liveScope: { current: { key: string; token: object } | null },
+  scopeKey: string,
+): () => void {
+  return () => {
+    const current = liveScope.current;
+    if (current?.key === scopeKey) liveScope.current = { key: current.key, token: {} };
+  };
 }
 
 export async function resumePreparedMessageInScope<T extends { saved: boolean; requestId: string }>(options: {

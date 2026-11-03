@@ -14,7 +14,7 @@ import { projectWorkstreams } from "../domain/workstreams-view.ts";
 import { projectLeadMemory } from "../domain/lead-memory-view.ts";
 import { projectProjectCtos } from "../domain/project-ctos-view.ts";
 import { parseCtoUserQuestionsView, projectCtoUserQuestions } from "../domain/cto-question-view.ts";
-import { resumePreparedMessageInScope } from "./prepared-message-resume.ts";
+import { invalidateLiveScopeOnCleanup, resumePreparedMessageInScope } from "./prepared-message-resume.ts";
 
 export function BuilderPage() {
   const context = useHostContext();
@@ -119,6 +119,19 @@ export function BuilderPage() {
   const scopeKey = JSON.stringify([context.companyId, leadOptions?.revision ?? null, channel]);
   if (liveScope.current?.key !== scopeKey) liveScope.current = { key: scopeKey, token: {} };
   const scopeToken = liveScope.current.token;
+  const conversationActionIdentity = JSON.stringify([scopeKey, conversationPage?.active?.requestId ?? null]);
+  const conversationAction = useRef<{ identity: string; token: object } | null>(null);
+  if (conversationAction.current?.identity !== conversationActionIdentity) {
+    conversationAction.current = { identity: conversationActionIdentity, token: {} };
+  }
+  const conversationActionToken = conversationAction.current.token;
+  const createConversationActionGuard = () => {
+    const actionToken = conversationAction.current?.token;
+    const actionScope = liveScope.current;
+    return () => conversationAction.current?.token === actionToken
+      && liveScope.current?.token === actionScope?.token && liveScope.current?.key === actionScope?.key;
+  };
+  useEffect(() => invalidateLiveScopeOnCleanup(liveScope, scopeKey), [scopeKey]);
   useEffect(() => { setCursor(null); pendingMessage.current = null; }, [context.companyId, leadOptions?.revision]);
   useEffect(() => {
     const request = conversationPage?.active;
@@ -151,7 +164,9 @@ export function BuilderPage() {
     designDraftResolvedQuestionIds={draftView.view?.decisions?.map(decision => decision.questionId) ?? []}
     designDraftError={draftView.error ?? (design.error ? "설계 초안을 불러오지 못했습니다." : null)}
     workspaceLabel={context.companyPrefix ?? "Workspace"}
-    conversation={conversationPage} conversationChannel={channel} conversationLoading={conversation.loading}
+    conversation={conversationPage} conversationChannel={channel} conversationActionToken={conversationActionToken}
+    isConversationActionCurrent={createConversationActionGuard}
+    conversationLoading={conversation.loading}
     conversationError={currentLeadContexts?.status === "ready" && currentLeadContexts.contexts[channel as keyof typeof currentLeadContexts.contexts]
       && !conversation.loading && !conversationPage ? "대화 기록을 확인하지 못했습니다. 새로고침해 주세요." : null}
     conversationHasNewer={cursor !== null}
@@ -164,17 +179,27 @@ export function BuilderPage() {
     onOlderConversation={conversationPage?.nextCursor ? () => setCursor(conversationPage.nextCursor) : undefined}
     onLatestConversation={cursor !== null ? () => setCursor(null) : undefined}
     onRefreshConversation={currentLeadContexts?.status === "ready" && currentLeadContexts.contexts[channel as keyof typeof currentLeadContexts.contexts] ? async () => {
+      const isCurrent = createConversationActionGuard();
       try {
         const result = await refreshConversation({ contextId: channel });
         if (result.refreshed !== true) throw new Error("Unexpected refresh result.");
-      } finally { conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); }
+      } finally {
+        if (isCurrent()) {
+          conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh();
+        }
+      }
     } : undefined}
     onCancelLeadMessage={conversationPage?.active?.runId ? async () => {
-      try { await cancelMessage({ contextId: channel }); } finally { conversation.refresh(); }
+      const isCurrent = createConversationActionGuard();
+      try { await cancelMessage({ contextId: channel }); }
+      finally { if (isCurrent()) conversation.refresh(); }
     } : undefined}
     onResumePreparedLeadMessage={conversationPage?.active?.state === "prepared" ? async () => {
       const requestId = conversationPage.active!.requestId;
-      await resumePreparedMessageInScope({ requestId, scopeToken, currentScopeToken: () => liveScope.current?.token ?? null,
+      const isCurrent = createConversationActionGuard();
+      const actionScopeToken = liveScope.current?.token;
+      if (!actionScopeToken) return;
+      await resumePreparedMessageInScope({ requestId, scopeToken: actionScopeToken, currentScopeToken: () => isCurrent() ? actionScopeToken : null,
         resume: () => resumeMessage({ contextId: channel, requestId }),
         refreshCurrentScope: [conversation.refresh, lead.refresh, design.refresh, designBaseline.refresh, technology.refresh,
           workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh, logicalContexts.refresh] });
@@ -182,6 +207,9 @@ export function BuilderPage() {
     onSendMessage={conversationPage && !conversationPage.active && !conversation.loading && !conversation.error
       && !current.error && !state.loading && !state.error && !lead.error && leadOptions
       && leadOptions.agents.some(agent => agent.id === leadOptions.selectedAgentId && ["idle", "running"].includes(agent.status)) ? async (text, selectedChannel, questionContext) => {
+      const actionScopeToken = liveScope.current?.token;
+      const actionScopeKey = liveScope.current?.key;
+      const isCurrent = () => liveScope.current?.token === actionScopeToken && liveScope.current?.key === actionScopeKey;
       if (selectedChannel !== channel || ["cto-inbox", "background_planning", "question_intake"].includes(selectedChannel)) throw new Error("Conversation changed.");
       if ((questionContext && selectedChannel !== "question_discussion") || selectedChannel === "question_discussion" && !questionContext) throw new Error("Question Discussion requires a specific current question.");
       const contextSnapshot = questionContext ? parseQuestionContext(questionContext) : null;
@@ -194,11 +222,11 @@ export function BuilderPage() {
       try {
         const result = await send({ contextId: channel, text, requestId: request.requestId,
           ...(request.questionContext ? { questionContext: request.questionContext } : {}) });
-        if (liveScope.current?.token !== scopeToken) throw new Error("Conversation changed while sending.");
+        if (!isCurrent()) throw new Error("Conversation changed while sending.");
         if (result.saved !== true || result.requestId !== request.requestId) throw new Error("Unexpected send result.");
         pendingMessage.current = null;
         setCursor(null);
-      } finally { conversation.refresh(); lead.refresh(); designBaseline.refresh(); }
+      } finally { if (isCurrent()) { conversation.refresh(); lead.refresh(); designBaseline.refresh(); } }
     } : undefined}
     leadAgents={leadOptions} leadAgentsLoading={lead.loading}
     leadAgentsError={!lead.loading && !leadOptions ? "Agent 목록을 불러오지 못했습니다. 새로고침해 주세요." : null}
