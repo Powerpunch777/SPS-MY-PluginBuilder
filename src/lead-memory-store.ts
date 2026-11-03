@@ -1,11 +1,12 @@
 import { parseLeadMemoryRevision, type LeadMemoryRevision } from "./domain/lead-memory.ts";
 import { LEAD_CHANNELS } from "./domain/lead-sessions.ts";
-import type { LeadChannel } from "./domain/model.ts";
+import { LEAD_CONTEXTS } from "./domain/lead-contexts.ts";
+import type { LeadConversationId } from "./domain/model.ts";
 import { exactToolRecord } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 
 export type AuthoredLeadMemory = Readonly<{
-  author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number; channel: LeadChannel }>;
+  author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number; channel: LeadConversationId }>;
   createdAt: string;
   sourceDigests: readonly Readonly<{ id: string; sha256: string }>[];
   memory: LeadMemoryRevision;
@@ -20,7 +21,7 @@ export function createLeadMemoryStore(workspaceId: string, projectId: string, st
     const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision", "channel"]);
     if ([author.agentId, author.sessionId, author.runId].some(value => typeof value !== "string" || !UUID.test(value))
       || !Number.isSafeInteger(author.selectionRevision) || (author.selectionRevision as number) < 1
-      || !LEAD_CHANNELS.includes(author.channel as LeadChannel)) throw new TypeError("Invalid Lead memory author.");
+      || !LEAD_CHANNELS.includes(author.channel as never) && !LEAD_CONTEXTS.includes(author.channel as never)) throw new TypeError("Invalid Lead memory author.");
     if (typeof row.createdAt !== "string" || !Number.isFinite(Date.parse(row.createdAt))
       || new Date(row.createdAt).toISOString() !== row.createdAt) throw new TypeError("Invalid memory creation time.");
     const memory = parseLeadMemoryRevision(row.memory, projectId);
@@ -39,7 +40,7 @@ export function createLeadMemoryStore(workspaceId: string, projectId: string, st
       return Object.freeze({ id, sha256: digest.sha256 });
     });
     return Object.freeze({ author: Object.freeze({ agentId: author.agentId as string, sessionId: author.sessionId as string,
-      runId: author.runId as string, selectionRevision: author.selectionRevision as number, channel: author.channel as LeadChannel }),
+      runId: author.runId as string, selectionRevision: author.selectionRevision as number, channel: author.channel as LeadConversationId }),
     createdAt: row.createdAt, sourceDigests: Object.freeze(sourceDigests), memory });
   };
   return createRevisionJournal(workspaceId, projectId, state, {

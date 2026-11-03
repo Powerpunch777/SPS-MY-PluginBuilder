@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire, Module } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,18 +8,16 @@ import { build } from "esbuild";
 import type { BuilderSnapshot, BuilderShellProps } from "../src/domain/model.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
 
 test("a CTO intake decision question is visibly read-only until answer binding exists", async () => {
-  const temporary = await mkdtemp(path.join(root, "node_modules", ".question-composer-test-"));
-  try {
-    const output = path.join(temporary, "BuilderShell.mjs");
-    await build({
+    const result = await build({
       entryPoints: [path.join(root, "src", "ui", "BuilderShell.tsx")],
-      outfile: output,
       bundle: true,
+      write: false,
       external: ["react", "react-dom", "react-dom/server"],
       platform: "node",
-      format: "esm",
+      format: "cjs",
       jsx: "automatic",
       loader: { ".css": "text" },
       plugins: [{
@@ -38,7 +35,19 @@ test("a CTO intake decision question is visibly read-only until answer binding e
         },
       }],
     });
-    const { DecisionsView } = await import(pathToFileURL(output).href);
+    const output = result.outputFiles[0];
+    assert.ok(output, "esbuild returns the in-memory BuilderShell bundle");
+    const filename = path.join(root, "node_modules", ".question-composer-test-BuilderShell.cjs");
+    const compiled = new Module(filename) as unknown as {
+      filename: string;
+      paths: string[];
+      exports: { DecisionsView: typeof import("../src/ui/BuilderShell.tsx").DecisionsView };
+      _compile(source: string, filename: string): void;
+    };
+    compiled.filename = filename;
+    compiled.paths = require.resolve.paths("react") ?? [];
+    compiled._compile(output.text, filename);
+    const { DecisionsView } = compiled.exports;
     const snapshot: BuilderSnapshot = {
       schemaVersion: 1,
       workspaceId: "workspace-1",
@@ -83,7 +92,4 @@ test("a CTO intake decision question is visibly read-only until answer binding e
     assert.match(html, /<button[^>]*disabled[^>]*type="submit"/);
     assert.doesNotMatch(html, /project-1|draft-2/);
     assert.doesNotMatch(html, /결정된 답변|승인됨|approved/);
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
@@ -10,19 +10,26 @@ import { build } from "esbuild";
 import type { BuilderShellProps } from "../src/domain/model.js";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
+
+function importBundleInMemory(contents: Uint8Array) {
+  const source = Buffer.from(contents).toString("utf8")
+    .replaceAll('"react-dom/server"', JSON.stringify(pathToFileURL(require.resolve("react-dom/server")).href))
+    .replaceAll('"react/jsx-runtime"', JSON.stringify(pathToFileURL(require.resolve("react/jsx-runtime")).href))
+    .replaceAll('"react"', JSON.stringify(pathToFileURL(require.resolve("react")).href));
+  return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+}
 
 test("BuilderShell server-renders the Lead workspace without inventing activity", async () => {
-  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".ui-test-"));
-  try {
-    const output = path.join(temporary, "BuilderShell.mjs");
-    await build({
+  const result = await build({
       entryPoints: [path.join(projectRoot, "src", "ui", "BuilderShell.tsx")],
-      outfile: output,
       bundle: true,
-      external: ["react", "react-dom", "react-dom/server"],
+      external: ["react", "react-dom", "react-dom/server", "react/jsx-runtime"],
       platform: "node",
       format: "esm",
       jsx: "automatic",
+      nodePaths: [path.join(projectRoot, "node_modules")],
+      write: false,
       loader: { ".css": "text" },
       plugins: [{
         name: "react-flow-ssr-stub",
@@ -39,7 +46,10 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
         },
       }],
     });
-    const { BuilderShell, resolveSelectedGraphEntity, resolveSelectedDocument } = await import(pathToFileURL(output).href);
+    const output = result.outputFiles[0];
+    assert.ok(output, "esbuild should return the in-memory UI bundle");
+    const { BuilderShell, resolveSelectedGraphEntity, resolveSelectedDocument } = await importBundleInMemory(output.contents) as
+      typeof import("../src/ui/BuilderShell.tsx");
     const graphEntities = [
       { id: "node-first", kind: "feature" as const, label: "First feature", ownerActorId: null, status: "planned" as const, evidenceRefs: [] },
       { id: "node-second", kind: "component" as const, label: "Second component", ownerActorId: null, status: "verified" as const, evidenceRefs: [] },
@@ -75,7 +85,11 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
       onOpenHtmlPreview() {},
     };
     const html = renderToStaticMarkup(createElement(BuilderShell, props));
-    assert.match(html, /Lead 대화/);
+    assert.match(html, /aria-label="Main"/);
+    assert.match(html, /aria-label="UI Design"/);
+    assert.match(html, /aria-label="미결정사항"/);
+    assert.ok(html.indexOf('aria-label="Main"') < html.indexOf('aria-label="UI Design"'));
+    assert.ok(html.indexOf('aria-label="UI Design"') < html.indexOf('aria-label="미결정사항"'));
     assert.match(html, /Need a project brief/);
     assert.match(html, /CTO One/);
     assert.doesNotMatch(html, /Dev One/);
@@ -84,7 +98,7 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
     assert.match(html, /저장된 작업이 생기면 여기에 표시됩니다/);
     assert.match(html, /class="builder-shell"/);
     assert.doesNotMatch(html, /class="builder-view-header"/);
-    assert.match(html, /Lead와 대화/);
+    assert.match(html, /Main/);
     assert.match(html, /role="tablist"/);
     for (const tab of ["수정사항", "작업 지시", "기록", "작업 파일", "설계"]) assert.ok(html.includes(`>${tab}</button>`));
     const css = await readFile(path.join(projectRoot, "src/ui/builder.css"), "utf8");
@@ -95,7 +109,4 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
     assert.doesNotMatch(html, /aria-label="상담 텍스트"/);
     assert.equal((html.match(/aria-label="Lead HTML 뷰어 열기"/g) ?? []).length, 1);
     assert.doesNotMatch(html, /HTML 뷰어.*사용 가능/);
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
 });

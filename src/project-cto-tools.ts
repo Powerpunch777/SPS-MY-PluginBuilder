@@ -83,7 +83,8 @@ export async function createProjectCto(params: unknown, runContext: unknown, pla
   }), ["sessionId", "created"]);
   await authority.check();
   if (typeof result.sessionId !== "string" || !uuid.test(result.sessionId) || typeof result.created !== "boolean"
-    || Object.values(authority.sessions.sessions).includes(result.sessionId)
+    || (authority.contexts !== null ? Object.values(authority.contexts.contexts).includes(result.sessionId)
+      : Object.values(authority.sessions!.sessions).includes(result.sessionId))
     || cto.sessionId !== null && (result.sessionId !== cto.sessionId || result.created !== false)) {
     throw new TypeError("Invalid Host CTO session identity; no replacement or dispatch was attempted.");
   }

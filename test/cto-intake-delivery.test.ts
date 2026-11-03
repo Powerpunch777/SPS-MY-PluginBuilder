@@ -4,7 +4,7 @@ import test from "node:test";
 import type { SpsAgentSessionRunResult } from "@sonparkserver/plugin-sdk/platform";
 import { dispatchQuestionToLead, readBoundCtoIntake } from "../src/cto-intake-delivery.ts";
 import { createCtoIntakeStore } from "../src/cto-intake-store.ts";
-import { createCtoQuestionStore, submitCtoQuestion } from "../src/cto-question-tools.ts";
+import { createCtoQuestionStore, reviewCtoQuestion, submitCtoQuestion } from "../src/cto-question-tools.ts";
 import { submitAssignedCtoQuestion } from "../src/platform.ts";
 import { createWorkstreamStore } from "../src/workstream-tools.ts";
 import { dispatchCtoWorkstream } from "../src/cto-workstream-delivery.ts";
@@ -119,7 +119,7 @@ async function setup(options: { cas?: boolean; seedQuestion?: boolean } = {}) {
       runId: receipts.get(current!.revision.requestId)?.runId ?? INBOX_RUN }));
   };
   return {
-    ...f, ctoRunContext, inboxSession, inboxRunContext, params, intakeStore, questionInput,
+    ...f, ctoRunContext, inboxSession, inboxRunContext, boundInboxRunContext, params, intakeStore, questionInput,
     receipts, inboxRuns, inboxSent,
     get inboxCancelled() { return inboxCancelled; },
     loseResponse() { loseNextResponse = true; },
@@ -130,6 +130,14 @@ async function setup(options: { cas?: boolean; seedQuestion?: boolean } = {}) {
       return readBoundCtoIntake({ projectId: P, questionId }, context ?? await boundInboxRunContext(), f.platform);
     },
   };
+}
+
+function readyLogicalContexts(x: Awaited<ReturnType<typeof setup>>, questionIntakeSession = x.inboxSession) {
+  const contexts = { user_conversation: randomUUID(), ui_design: randomUUID(), background_planning: randomUUID(),
+    question_intake: questionIntakeSession, question_discussion: randomUUID() };
+  x.values.set(mapKey(key("lead-contexts.v2.1")), { schemaVersion: 2, workspaceId: W, selectionRevision: 1,
+    agentId: A, requestId: randomUUID(), status: "ready", pendingContext: null, contexts });
+  return contexts;
 }
 
 test("admits one stable question request and reuses it without a second send", async () => {
@@ -149,6 +157,80 @@ test("admits one stable question request and reuses it without a second send", a
   const again = await x.dispatch();
   assert.equal((again.data as { status: string }).status, "existing");
   assert.equal(x.inboxSent.length, 1);
+});
+
+test("EMPTY5 public submit sends once to Question Intake and reads/reviews the same Core receipt", async () => {
+  const x = await setup({ seedQuestion: false });
+  const contexts = readyLogicalContexts(x);
+  x.values.delete(mapKey(key("lead-sessions.v1.1")));
+  const submitted = await submitAssignedCtoQuestion(x.questionInput, x.ctoRunContext, x.platform);
+  const data = submitted.data as { intake: { status: string; delivery: { requestId: string; runId: string } } };
+  const requestId = data.intake.delivery.requestId, runId = data.intake.delivery.runId;
+  assert.equal(data.intake.status, "submitted");
+  assert.equal(x.inboxSent.length, 1);
+  assert.equal(x.inboxSent[0]!.sessionId, contexts.question_intake);
+  assert.equal(x.inboxSent[0]!.options.requestId, requestId);
+  assert.deepEqual(x.receipts.get(requestId), { requestId, state: "submitted", runId });
+  assert.equal(x.inboxRuns.get(runId)?.runId, runId);
+
+  const read = await x.read();
+  assert.equal((read.data as { delivery: { requestId: string; runId: string } }).delivery.requestId, requestId);
+  assert.equal((read.data as { delivery: { requestId: string; runId: string } }).delivery.runId, runId);
+  const review = await reviewCtoQuestion({ projectId: P, questionId: QUESTION, expectedBaseRevisionId: "question-board-1",
+    revisionId: "question-board-v2-reviewed", reviewId: "review-v2-intake", disposition: "user-decision-needed",
+    rationale: "The pinned sources leave this choice to the user.",
+    evidenceRefs: ["baseline:baseline-1", "spec:spec-1", "graph:graph-1",
+      "technology:tech-1", "workstream:ws-1:1"] }, await x.boundInboxRunContext(), x.platform);
+  assert.equal((review.data as { status: string }).status, "published");
+  const duplicate = await x.dispatch();
+  assert.equal((duplicate.data as { status: string }).status, "existing");
+  assert.equal(x.inboxSent.length, 1);
+  assert.equal((await x.intakeStore.current())!.revision.requestId, requestId);
+});
+
+test("v2 Question Intake rejects other logical contexts and never falls back from preparation", async () => {
+  const x = await setup();
+  const contexts = readyLogicalContexts(x);
+  for (const context of ["user_conversation", "ui_design", "background_planning", "question_discussion"] as const) {
+    await assert.rejects(x.read({ companyId: W, agentId: A, sessionId: contexts[context], runId: INBOX_RUN }));
+  }
+  assert.equal(x.inboxSent.length, 0);
+
+  const pending = await setup();
+  pending.values.set(mapKey(key("lead-contexts.v2.1")), { schemaVersion: 2, workspaceId: W, selectionRevision: 1,
+    agentId: A, requestId: randomUUID(), status: "uncertain", pendingContext: "question_intake",
+    contexts: { user_conversation: randomUUID(), ui_design: randomUUID(), background_planning: randomUUID(),
+      question_intake: null, question_discussion: randomUUID() } });
+  await assert.rejects(pending.dispatch(), /not ready|fallback/i);
+  assert.equal(pending.inboxSent.length, 0);
+  assert.equal((await pending.intakeStore.current()), null);
+});
+
+test("changed Host selection or Question Intake identity is observed without rewriting the old receipt", async () => {
+  const x = await setup();
+  const contexts = readyLogicalContexts(x);
+  await x.dispatch();
+  const before = (await x.intakeStore.current())!.revision;
+  const replaced = { ...contexts, question_intake: randomUUID() };
+  x.values.set(mapKey(key("lead-contexts.v2.1")), { schemaVersion: 2, workspaceId: W, selectionRevision: 1,
+    agentId: A, requestId: randomUUID(), status: "ready", pendingContext: null, contexts: replaced });
+  await assert.rejects(x.read(), /authority changed|target changed|authorized/i);
+  const after = (await x.intakeStore.current())!.revision;
+  assert.equal(after.requestId, before.requestId);
+  assert.deepEqual(after.target, before.target);
+  assert.equal(x.receipts.get(before.requestId)?.runId, before.runId);
+  assert.equal(x.inboxSent.length, 1);
+
+  const legacy = await setup();
+  await legacy.dispatch();
+  const legacyBefore = (await legacy.intakeStore.current())!.revision;
+  readyLogicalContexts(legacy, randomUUID());
+  await assert.rejects(legacy.dispatch(), /different delivery target/i);
+  const legacyAfter = (await legacy.intakeStore.current())!.revision;
+  assert.equal(legacyAfter.requestId, legacyBefore.requestId);
+  assert.deepEqual(legacyAfter.target, legacyBefore.target);
+  assert.equal(legacy.receipts.get(legacyBefore.requestId)?.runId, legacyBefore.runId);
+  assert.equal(legacy.inboxSent.length, 1);
 });
 
 test("recovers an accepted lost response from the exact Core receipt without resending", async () => {
@@ -252,6 +334,8 @@ test("rejects another Lead session and cancelled inbox run when reading the boun
   const x = await setup();
   await x.dispatch();
   await assert.rejects(x.read(ctx(S, randomUUID())));
+  await assert.rejects(x.read({ companyId: "22222222-2222-4222-8222-222222222222", agentId: A,
+    sessionId: x.inboxSession, runId: INBOX_RUN }));
   const bound = await x.read().then(() => x.inboxSent[0]!.options.requestId as string);
   const runId = x.receipts.get(bound)!.runId;
   x.inboxRuns.set(runId, { ...x.inboxRuns.get(runId)!, cancellationRequested: true, termination: "pending" });

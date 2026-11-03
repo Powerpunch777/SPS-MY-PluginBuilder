@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire, Module } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -10,6 +9,7 @@ import { createEmptyBuilderSnapshot } from "../src/domain/snapshot.ts";
 import type { BuilderSnapshot } from "../src/domain/model.ts";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
 const primaryBridge = "__spsPluginBridge__";
 const legacyBridge = "__paperclipPluginBridge__";
 
@@ -36,23 +36,34 @@ function snapshotWithMessage(workspaceId: string, text: string): BuilderSnapshot
 }
 
 test("BuilderPage uses the public UI bridge for scoped data and action hooks", async () => {
-  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".ui-bridge-test-"));
   const previousPrimary = globalThis[primaryBridge as keyof typeof globalThis];
   const previousLegacy = globalThis[legacyBridge as keyof typeof globalThis];
   try {
-    const output = path.join(temporary, "BuilderPage.mjs");
-    await build({
+    const result = await build({
       entryPoints: [path.join(projectRoot, "src", "ui", "index.tsx")],
-      outfile: output,
       bundle: true,
+      write: false,
       external: ["react", "react-dom", "react-dom/server", "react/jsx-runtime"],
       platform: "node",
-      format: "esm",
+      format: "cjs",
       jsx: "automatic",
+      nodePaths: [path.join(projectRoot, "node_modules")],
       loader: { ".css": "text" },
       plugins: [reactFlowStub],
     });
-    const { BuilderPage } = await import(pathToFileURL(output).href);
+    const output = result.outputFiles[0];
+    assert.ok(output, "esbuild should return the in-memory UI bundle");
+    const filename = path.join(projectRoot, "node_modules", ".ui-bridge-test-BuilderPage.cjs");
+    const compiled = new Module(filename) as unknown as {
+      filename: string;
+      paths: string[];
+      exports: { BuilderPage: typeof import("../src/ui/index.tsx").BuilderPage };
+      _compile(source: string, filename: string): void;
+    };
+    compiled.filename = filename;
+    compiled.paths = require.resolve.paths("react") ?? [];
+    compiled._compile(output.text, filename);
+    const { BuilderPage } = compiled.exports;
 
     const hookCalls: Array<[string, unknown[]]> = [];
     let hostContext = { companyId: null as string | null, companyPrefix: null as string | null };
@@ -112,6 +123,5 @@ test("BuilderPage uses the public UI bridge for scoped data and action hooks", a
     delete (globalThis as Record<string, unknown>)[legacyBridge];
     if (previousPrimary !== undefined) (globalThis as Record<string, unknown>)[primaryBridge] = previousPrimary;
     if (previousLegacy !== undefined) (globalThis as Record<string, unknown>)[legacyBridge] = previousLegacy;
-    await rm(temporary, { recursive: true, force: true });
   }
 });

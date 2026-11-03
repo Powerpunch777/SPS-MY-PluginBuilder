@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { parseLeadAgentBinding } from "./domain/lead-agent.ts";
 import { parseLeadSessions } from "./domain/lead-sessions.ts";
+import { readLeadContexts } from "./lead-context-store.ts";
 import { CTO_INTAKE_EXECUTION_POLICY, ctoIntakeRequestId, parseCtoIntakeDelivery, type CtoIntakeDelivery } from "./domain/cto-intake-deliveries.ts";
 import { createCtoQuestionStore } from "./cto-question-store.ts";
 import { createCtoIntakeStore, checkCurrentCtoQuestion, resolveBoundCtoIntake, unreviewedQuestion } from "./cto-intake-store.ts";
@@ -32,6 +33,17 @@ async function targetLead(workspaceId: string, platform: SpsPlatformInvocationCo
   const key = (stateKey: string) => ({ scopeKind: "company" as const, scopeId: workspaceId, namespace: "sonpark.my-builder", stateKey });
   const binding = parseLeadAgentBinding(await platform.state.get(key("lead-agent.v1")), workspaceId);
   if (!binding.selectedAgentId || binding.revision < 1) throw new Error("A current Lead is required for CTO question intake.");
+  const contexts = await readLeadContexts(workspaceId, platform);
+  if (contexts !== null) {
+    if (contexts.status !== "ready" || contexts.agentId !== binding.selectedAgentId
+      || contexts.selectionRevision !== binding.revision || !contexts.contexts.question_intake) {
+      throw new Error("The current Lead Question Intake context is not ready; no v1 fallback or replacement was used.");
+    }
+    return { agentId: binding.selectedAgentId, sessionId: contexts.contexts.question_intake,
+      selectionRevision: binding.revision };
+  }
+  // Preserve existing v1 records only when this selection has no v2 record.
+  // A preparing or uncertain v2 record is authoritative and never falls back.
   const sessions = parseLeadSessions(await platform.state.get(key(`lead-sessions.v1.${binding.revision}`)), workspaceId);
   const sessionId = sessions.sessions["cto-inbox"];
   if (!sessionId || sessions.agentId !== binding.selectedAgentId || sessions.selectionRevision !== binding.revision) {

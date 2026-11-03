@@ -1,0 +1,256 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { invalidateLiveScopeOnCleanup, performConversationControlAction, resumePreparedMessageInScope } from "../src/ui/prepared-message-resume.ts";
+
+const requestId = "11111111-1111-4111-8111-111111111111";
+const refreshNames = ["conversation", "lead", "design", "baseline", "technology", "workstreams", "memory", "projectCtos", "decisions", "contexts"];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function interaction(scopeState: { current: string; token: object }, resume: () => Promise<{ saved: boolean; requestId: string }>, refreshed: string[], targetRequestId = requestId) {
+  const scopeToken = scopeState.token;
+  return () => resumePreparedMessageInScope({
+    requestId: targetRequestId,
+    scopeToken,
+    currentScopeToken: () => scopeState.token,
+    resume,
+    refreshCurrentScope: refreshNames.map(name => () => { refreshed.push(name); }),
+  });
+}
+
+test("the resume control refreshes the current scope after success, including baseline and decisions", async () => {
+  const scope = { current: "workspace-a:selection-4:user_conversation", token: {} };
+  const refreshed: string[] = [];
+  let busy = false;
+  let feedback = "stale feedback";
+  const action = interaction(scope, async () => ({ saved: true, requestId }), refreshed);
+
+  await performConversationControlAction(action, busy, value => { busy = value; }, value => { feedback = value; });
+
+  assert.equal(busy, false);
+  assert.equal(feedback, "");
+  assert.deepEqual(refreshed, refreshNames);
+  assert.ok(refreshed.includes("baseline") && refreshed.includes("decisions"));
+});
+
+test("a failed resume refreshes the current scope and leaves a visible retry/status message", async () => {
+  const scope = { current: "workspace-a:selection-4:user_conversation", token: {} };
+  const refreshed: string[] = [];
+  let busy = false;
+  let feedback = "";
+  const action = interaction(scope, async () => { throw new Error("fixture admission failed"); }, refreshed);
+
+  await performConversationControlAction(action, busy, value => { busy = value; }, value => { feedback = value; });
+
+  assert.equal(busy, false);
+  assert.equal(feedback, "결과를 확인하지 못했습니다. 같은 실행의 상태를 다시 확인해 주세요.");
+  assert.deepEqual(refreshed, refreshNames);
+  assert.ok(refreshed.includes("baseline") && refreshed.includes("decisions"));
+});
+
+test("the UI action stays busy while pending and ignores a duplicate click", async () => {
+  const operation = deferred<void>();
+  let busy = false;
+  let feedback = "";
+  let actionCalls = 0;
+  const action = async () => { actionCalls += 1; await operation.promise; };
+  const setBusy = (value: boolean) => { busy = value; };
+  const setFeedback = (value: string) => { feedback = value; };
+
+  const first = performConversationControlAction(action, busy, setBusy, setFeedback);
+  assert.equal(busy, true);
+  const duplicate = await performConversationControlAction(action, busy, setBusy, setFeedback);
+  assert.equal(duplicate, undefined);
+  assert.equal(actionCalls, 1);
+  assert.equal(feedback, "");
+
+  operation.reject(new Error("fixture failure"));
+  await first;
+  assert.equal(busy, false);
+  assert.equal(feedback, "결과를 확인하지 못했습니다. 같은 실행의 상태를 다시 확인해 주세요.");
+});
+
+test("a late success after pending A→B→A navigation cannot refresh the returned scope", async () => {
+  const scope = { current: "workspace-a:selection-4:user_conversation", token: {} };
+  const operation = deferred<{ saved: boolean; requestId: string }>();
+  const refreshed: string[] = [];
+  let feedback = "";
+  let busy = false;
+  const action = interaction(scope, () => operation.promise, refreshed);
+  const pending = performConversationControlAction(action, busy, value => { busy = value; }, value => { feedback = value; });
+  assert.equal(busy, true, "the explicit resume action stays busy while pending");
+  scope.current = "workspace-a:selection-4:ui_design";
+  scope.token = {};
+  scope.current = "workspace-a:selection-4:user_conversation";
+  scope.token = {};
+  operation.resolve({ saved: true, requestId });
+  await pending;
+
+  assert.equal(busy, false);
+  assert.equal(feedback, "");
+  assert.deepEqual(refreshed, [], "the old A action cannot refresh the returned A scope");
+});
+
+test("a late error after pending A→B→A navigation cannot report or refresh in the returned scope", async () => {
+  const scope = { current: "workspace-a:selection-4:user_conversation", token: {} };
+  const operation = deferred<{ saved: boolean; requestId: string }>();
+  const refreshed: string[] = [];
+  let feedback = "";
+  let busy = false;
+  const action = interaction(scope, () => operation.promise, refreshed);
+  const pending = performConversationControlAction(action, busy, value => { busy = value; }, value => { feedback = value; });
+  scope.current = "workspace-a:selection-4:ui_design";
+  scope.token = {};
+  scope.current = "workspace-a:selection-4:user_conversation";
+  scope.token = {};
+  operation.reject(new Error("fixture failure after navigation"));
+  await pending;
+
+  assert.equal(busy, false);
+  assert.deepEqual(refreshed, [], "the old A error cannot refresh the returned A scope");
+  assert.equal(feedback, "", "the old A error cannot set feedback in the returned scope");
+});
+
+test("StrictMode effect cleanup replay invalidates old work but permits a new current action", async () => {
+  const liveScope: { current: { key: string; token: object } | null } = {
+    current: { key: "workspace-a:selection-4:user_conversation", token: {} },
+  };
+  const initialScope = liveScope.current!;
+  const cleanup = invalidateLiveScopeOnCleanup(liveScope, initialScope.key);
+  const firstMountToken = initialScope.token;
+
+  // React StrictMode runs setup → cleanup → setup on initial mount in development.
+  cleanup();
+  assert.notEqual(liveScope.current?.token, firstMountToken, "effect cleanup retires actions from the previous effect lifetime");
+  const operation = deferred<{ saved: boolean; requestId: string }>();
+  const refreshed: string[] = [];
+  let busy = false;
+  let feedback = "stale feedback";
+  const actionToken = liveScope.current!.token;
+  const isCurrent = () => liveScope.current?.token === actionToken;
+  const pending = performConversationControlAction(interaction(
+    { current: initialScope.key, token: actionToken }, () => operation.promise, refreshed,
+  ), busy, value => { busy = value; }, value => { feedback = value; }, isCurrent);
+
+  operation.resolve({ saved: true, requestId });
+  await pending;
+  assert.equal(busy, false);
+  assert.equal(feedback, "");
+  assert.deepEqual(refreshed, refreshNames, "the action started after StrictMode replay refreshes its current scope");
+});
+
+for (const outcome of ["success", "error"] as const) {
+  test(`unmount cleanup prevents late ${outcome} from refreshing or changing new busy and feedback state`, async () => {
+    const liveScope: { current: { key: string; token: object } | null } = {
+      current: { key: "workspace-a:selection-4:user_conversation", token: {} },
+    };
+    const initialScope = liveScope.current!;
+    const cleanup = invalidateLiveScopeOnCleanup(liveScope, initialScope.key);
+    const actionToken = initialScope.token;
+    const operation = deferred<{ saved: boolean; requestId: string }>();
+    const refreshed: string[] = [];
+    let busy = false;
+    let feedback = "";
+    const isCurrent = () => liveScope.current?.token === actionToken;
+    const action = () => resumePreparedMessageInScope({
+      requestId, scopeToken: actionToken, currentScopeToken: () => liveScope.current?.token ?? null,
+      resume: () => operation.promise, refreshCurrentScope: refreshNames.map(name => () => { refreshed.push(name); }),
+    });
+    const pending = performConversationControlAction(action, busy, value => { busy = value; }, value => { feedback = value; }, isCurrent);
+    assert.equal(busy, true);
+
+    cleanup();
+    busy = true; // A newly mounted control owns this state.
+    feedback = "new control feedback";
+    if (outcome === "success") operation.resolve({ saved: true, requestId });
+    else operation.reject(new Error("late action error after unmount"));
+    await pending;
+
+    assert.deepEqual(refreshed, [], "the unmounted action cannot refresh its former scope");
+    assert.equal(busy, true, "the old finally block cannot clear the new control's busy state");
+    assert.equal(feedback, "new control feedback", "late completion cannot replace feedback from the new control");
+  });
+}
+
+test("late success after leaving and returning to a Workspace cannot refresh that Workspace", async () => {
+  const scope = { current: "workspace-a:selection-4:user_conversation", token: {} };
+  const operation = deferred<{ saved: boolean; requestId: string }>();
+  const refreshed: string[] = [];
+  const action = interaction(scope, () => operation.promise, refreshed);
+  const pending = performConversationControlAction(action, false, () => {}, () => {});
+  scope.current = "";
+  scope.token = {};
+  scope.current = "workspace-a:selection-4:user_conversation";
+  scope.token = {};
+  operation.resolve({ saved: true, requestId });
+  await pending;
+
+  assert.deepEqual(refreshed, [], "returning to the same Workspace does not revive the old action");
+});
+
+test("late error after leaving and returning to a Workspace cannot report or refresh there", async () => {
+  const scope = { current: "workspace-a:selection-4:user_conversation", token: {} };
+  const operation = deferred<{ saved: boolean; requestId: string }>();
+  const refreshed: string[] = [];
+  let feedback = "";
+  const action = interaction(scope, () => operation.promise, refreshed);
+  const pending = performConversationControlAction(action, false, () => {}, value => { feedback = value; });
+  scope.current = "";
+  scope.token = {};
+  scope.current = "workspace-a:selection-4:user_conversation";
+  scope.token = {};
+  operation.reject(new Error("fixture failure after Workspace return"));
+  await pending;
+
+  assert.deepEqual(refreshed, []);
+  assert.equal(feedback, "", "the departed Workspace error cannot set feedback after return");
+});
+
+for (const { label, newRequestId, oldOutcome } of [
+  { label: "same requestId", newRequestId: requestId, oldOutcome: "success" },
+  { label: "different requestId", newRequestId: "22222222-2222-4222-8222-222222222222", oldOutcome: "reject" },
+] as const) {
+  test(`A→B→A old ${oldOutcome} cannot alter a newer pending action (${label})`, async () => {
+    const scope = { current: "A", token: {} as object };
+    const oldToken = scope.token;
+    const oldOperation = deferred<{ saved: boolean; requestId: string }>();
+    const newOperation = deferred<{ saved: boolean; requestId: string }>();
+    const refreshed: string[] = [];
+    let busy = false;
+    let feedback = "";
+    const isCurrent = (token: object) => scope.token === token;
+    const oldAction = interaction(scope, () => oldOperation.promise, refreshed);
+    const oldPending = performConversationControlAction(oldAction, busy, value => { busy = value; },
+      value => { feedback = value; }, () => isCurrent(oldToken));
+
+    scope.current = "B";
+    scope.token = {};
+    scope.current = "A";
+    scope.token = {};
+    busy = false; // ConversationControls resets its state when the action token changes.
+    const newToken = scope.token;
+    const newAction = interaction(scope, () => newOperation.promise, refreshed, newRequestId);
+    const newPending = performConversationControlAction(newAction, busy, value => { busy = value; },
+      value => { feedback = value; }, () => isCurrent(newToken));
+    assert.equal(busy, true, "the returned scope's new action owns busy state");
+
+    if (oldOutcome === "success") oldOperation.resolve({ saved: true, requestId });
+    else oldOperation.reject(new Error("old action failed"));
+    await oldPending;
+    assert.equal(busy, true, "old finally cannot clear the new action's busy state");
+    assert.equal(feedback, "", "old completion cannot replace the new action's feedback");
+    assert.equal(refreshed.length, 0, "old completion cannot refresh the returned scope");
+
+    newOperation.resolve({ saved: true, requestId: newRequestId });
+    await newPending;
+    assert.equal(busy, false);
+    assert.equal(feedback, "");
+    assert.ok(refreshed.includes("baseline") && refreshed.includes("decisions"));
+    assert.deepEqual(refreshed, refreshNames, "the current action refreshes conversation, baseline and decisions");
+  });
+}

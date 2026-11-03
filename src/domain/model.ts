@@ -1,5 +1,6 @@
-export type BuilderView = "lead" | "architecture" | "organization" | "documents" | "decisions" | "system";
+export type BuilderView = "lead" | "ui-design" | "architecture" | "organization" | "documents" | "decisions" | "system";
 export type LeadChannel = "main" | "cto-inbox" | "decisions";
+export type LeadConversationId = LeadChannel | import("./lead-contexts.ts").LeadContextId;
 export type BuilderRole = "lead" | "cto" | "development" | "qa";
 export type ActorStatus = "idle" | "running" | "waiting" | "failed" | "archived";
 
@@ -16,6 +17,8 @@ export interface BuilderLeadSessions {
   agentId: string | null;
   sessions: Record<LeadChannel, string | null>;
 }
+
+export type { BuilderLeadContexts } from "./lead-contexts.ts";
 
 export interface BuilderActor {
   id: string;
@@ -115,12 +118,14 @@ export interface BuilderShellProps {
   loading?: boolean;
   error?: string | null;
   onRefresh(): void;
-  onSendMessage?(text: string, channel: LeadChannel, questionContext?: import("./question-context.ts").QuestionContext): Promise<void>;
+  onSendMessage?(text: string, channel: LeadConversationId, questionContext?: import("./question-context.ts").QuestionContext): Promise<void>;
   conversation?: import("../lead-conversations.ts").LeadConversationPage | null;
-  conversationChannel?: LeadChannel;
+  conversationChannel?: LeadConversationId;
+  conversationActionToken?: object;
+  isConversationActionCurrent?(): () => boolean;
   conversationLoading?: boolean;
   conversationError?: string | null;
-  onLeadChannelChange?(channel: LeadChannel): void;
+  onLeadChannelChange?(channel: LeadConversationId): void;
   onRefreshConversation?(): Promise<void>;
   onCancelLeadMessage?(): Promise<void>;
   onResumePreparedLeadMessage?(): Promise<void>;
@@ -134,8 +139,8 @@ export interface BuilderShellProps {
   leadAgentsLoading?: boolean;
   leadAgentsError?: string | null;
   onSelectLeadAgent?(agentId: string | null, expectedRevision: number): Promise<void>;
-  leadSessions?: BuilderLeadSessions | null;
-  leadSessionsLoading?: boolean;
-  leadSessionsError?: string | null;
-  onPrepareLeadSessions?(agentId: string, expectedRevision: number): Promise<void>;
+  leadContexts?: import("./lead-contexts.ts").BuilderLeadContexts | null;
+  leadContextsLoading?: boolean;
+  leadContextsError?: string | null;
+  onPrepareLeadContexts?(agentId: string, expectedRevision: number): Promise<void>;
 }

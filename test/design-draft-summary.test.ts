@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire, Module } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,6 +8,7 @@ import { build } from "esbuild";
 import type { DesignDraft } from "../src/domain/design-drafts.ts";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
 const draft: DesignDraft = {
   projectId: "project-1",
   revisionId: "draft-r01",
@@ -38,24 +38,32 @@ const draft: DesignDraft = {
 };
 
 async function loadComponent() {
-  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".ui-test-"));
-  const output = path.join(temporary, "DesignDraftSummary.mjs");
-  await build({
+  const result = await build({
     entryPoints: [path.join(projectRoot, "src/ui/DesignDraftSummary.tsx")],
-    outfile: output,
     bundle: true,
+    write: false,
     external: ["react", "react/jsx-runtime"],
     platform: "node",
-    format: "esm",
+    format: "cjs",
     jsx: "automatic",
   });
-  const module = await import(pathToFileURL(output).href);
-  return { DesignDraftSummary: module.DesignDraftSummary as typeof import("../src/ui/DesignDraftSummary.tsx").DesignDraftSummary, temporary };
+  const output = result.outputFiles[0];
+  assert.ok(output, "esbuild returns the in-memory design draft summary bundle");
+  const filename = path.join(projectRoot, "node_modules", ".ui-test-DesignDraftSummary.cjs");
+  const compiled = new Module(filename) as unknown as {
+    filename: string;
+    paths: string[];
+    exports: { DesignDraftSummary: typeof import("../src/ui/DesignDraftSummary.tsx").DesignDraftSummary };
+    _compile(source: string, filename: string): void;
+  };
+  compiled.filename = filename;
+  compiled.paths = require.resolve.paths("react") ?? [];
+  compiled._compile(output.text, filename);
+  return { DesignDraftSummary: compiled.exports.DesignDraftSummary };
 }
 
 test("renders the read-only draft summary and its details as escaped text", async () => {
-  const { DesignDraftSummary, temporary } = await loadComponent();
-  try {
+  const { DesignDraftSummary } = await loadComponent();
     const html = renderToStaticMarkup(createElement(DesignDraftSummary, { draft, loading: false, error: null }));
     assert.match(html, /aria-label="Lead 설계 초안"/);
     assert.match(html, /설계 초안 · 승인·실행 전/);
@@ -75,14 +83,10 @@ test("renders the read-only draft summary and its details as escaped text", asyn
     assert.doesNotMatch(html, /<script>/);
     assert.doesNotMatch(html, /<(?:button|input|textarea|select)\b/i);
     assert.doesNotMatch(html, /승인됨|검증 완료|호출 완료|실행 완료|코드 생성 완료/);
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
 });
 
 test("keeps empty, loading, and error states free of stale draft content", async () => {
-  const { DesignDraftSummary, temporary } = await loadComponent();
-  try {
+  const { DesignDraftSummary } = await loadComponent();
     const render = (props: { draft: DesignDraft | null; loading: boolean; error: string | null }) =>
       renderToStaticMarkup(createElement(DesignDraftSummary, props));
 
@@ -97,14 +101,10 @@ test("keeps empty, loading, and error states free of stale draft content", async
     assert.match(error, /role="alert"/);
     assert.match(error, /설계 초안을 불러오지 못했습니다\./);
     assert.doesNotMatch(error, /draft-r01|REQ-1|internal detail/);
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
 });
 
 test("resolved question history stays visible but no longer inflates the unresolved count", async () => {
-  const { DesignDraftSummary, temporary } = await loadComponent();
-  try {
+  const { DesignDraftSummary } = await loadComponent();
     const html = renderToStaticMarkup(createElement(DesignDraftSummary, { draft, loading: false, error: null,
       resolvedQuestionIds: ["question-1", "not-in-this-draft"] }));
     assert.match(html, /설계 질문 0개/);
@@ -112,5 +112,4 @@ test("resolved question history stays visible but no longer inflates the unresol
     assert.match(html, /출력 형식/);
     assert.match(html, /설계 초안 · 승인·실행 전/);
     assert.doesNotMatch(html, /설계 질문 1개/);
-  } finally { await rm(temporary, { recursive: true, force: true }); }
 });

@@ -1,11 +1,14 @@
 import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult } from "@sonparkserver/plugin-sdk/platform";
-import type { BuilderLeadSessions, LeadChannel } from "./domain/model.ts";
+import type { BuilderLeadContexts } from "./domain/lead-contexts.ts";
+import { LEAD_CONTEXTS, parseLeadContexts } from "./domain/lead-contexts.ts";
+import type { BuilderLeadSessions, LeadChannel, LeadConversationId } from "./domain/model.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import { parseQuestionContext, type QuestionContext } from "./domain/question-context.ts";
 import { assertSessionExecutionPolicySupport, LEAD_SESSION_EXECUTION_POLICY, type SessionExecutionPolicy } from "./session-execution-policy.ts";
 import { PROTECTED_SEND_UNAVAILABLE } from "./lead-send-feedback.ts";
 
-type Scope = { workspaceId: string; selectionRevision: number; agentId: string; sessionId: string; channel: LeadChannel };
+type ConversationSessions = BuilderLeadSessions | BuilderLeadContexts;
+type Scope = { workspaceId: string; selectionRevision: number; agentId: string; sessionId: string; channel: LeadConversationId };
 type TurnState = "prepared" | "dispatching" | "submitted" | "uncertain" | "succeeded" | "failed" | "cancelled" | "interrupted" | "timed_out";
 export type LeadTurn = Scope & {
   schemaVersion: 1; requestId: string; previousRequestId: string | null; sequence: number;
@@ -60,13 +63,22 @@ function scopedKey(scope: Scope, stateKey: string) {
 const headKey = (scope: Scope) => scopedKey(scope, `lead-chat.head.v1.${scope.selectionRevision}.${scope.channel}`);
 const turnKey = (scope: Scope, requestId: string) => scopedKey(scope, `lead-chat.turn.v1.${id(requestId)}`);
 const indexKey = (scope: Scope, sequence: number) => scopedKey(scope, `lead-chat.index.v1.${scope.selectionRevision}.${scope.channel}.${sequence}`);
-function scopeFor(sessions: BuilderLeadSessions, channel: unknown): Scope {
+function scopeFor(sessions: ConversationSessions, channel: unknown): Scope {
+  if ("contexts" in sessions) {
+    const selected = parseLeadContexts(sessions, sessions.workspaceId);
+    if (typeof channel !== "string" || !LEAD_CONTEXTS.includes(channel as typeof LEAD_CONTEXTS[number])
+      || selected.status !== "ready" || !selected.agentId) throw error();
+    const sessionId = selected.contexts[channel as typeof LEAD_CONTEXTS[number]];
+    if (!sessionId) throw error();
+    return { workspaceId: id(selected.workspaceId), selectionRevision: selected.selectionRevision,
+      agentId: id(selected.agentId), sessionId: id(sessionId), channel: channel as LeadConversationId };
+  }
   const selected = parseLeadSessions(sessions, sessions.workspaceId);
   if (typeof channel !== "string" || !LEAD_CHANNELS.includes(channel as LeadChannel) || !selected.agentId) throw error();
   const sessionId = selected.sessions[channel as LeadChannel];
   if (!sessionId) throw error();
   return { workspaceId: id(selected.workspaceId), selectionRevision: selected.selectionRevision,
-    agentId: id(selected.agentId), sessionId: id(sessionId), channel: channel as LeadChannel };
+    agentId: id(selected.agentId), sessionId: id(sessionId), channel: channel as LeadConversationId };
 }
 function parseHead(value: unknown, scope: Scope): Head {
   if (value === null) return { ...scope, schemaVersion: 1, totalTurns: 0, lastRequestId: null, activeRequestId: null };
@@ -81,7 +93,7 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
   const row = record(value, TURN_KEYS, ["questionContext", "executionPolicy"]); matches(row, scope);
   const questionContext = Object.hasOwn(row, "questionContext") ? parseQuestionContext(row.questionContext) : undefined;
   const executionPolicy = Object.hasOwn(row, "executionPolicy") ? parseStoredPolicy(row.executionPolicy) : undefined;
-  if (questionContext && scope.channel !== "decisions") throw error();
+  if (questionContext && scope.channel !== "decisions" && scope.channel !== "question_discussion") throw error();
   const requestId = id(row.requestId), previousRequestId = nullableId(row.previousRequestId), runId = nullableId(row.runId);
   if (requestId === previousRequestId || !Number.isSafeInteger(row.sequence) || (row.sequence as number) < 0
     || (row.sequence as number) >= MAX_TURNS || (row.sequence === 0) !== (previousRequestId === null)
@@ -135,11 +147,12 @@ async function loadTurn(platform: SpsPlatformInvocationContext, scope: Scope, re
 }
 
 /** Internal source identity for tools that must bind a decision to its current run. */
-export async function readLeadUserTurn(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
+export async function readLeadUserTurn(requestId: string, sessions: ConversationSessions, platform: SpsPlatformInvocationContext) {
   const raw = await platform.state.get({ scopeKind: "company", scopeId: sessions.workspaceId,
     namespace: "sonpark.my-builder", stateKey: `lead-chat.turn.v1.${id(requestId)}` });
   const row = record(raw, TURN_KEYS, ["questionContext", "executionPolicy"]);
-  if (row.channel !== "main" && row.channel !== "decisions") throw error();
+  const allowed = "schemaVersion" in sessions ? LEAD_CONTEXTS : LEAD_CHANNELS;
+  if (typeof row.channel !== "string" || !allowed.includes(row.channel as never)) throw error();
   const scope = scopeFor(sessions, row.channel);
   const turn = parseTurn(raw, scope);
   if (turn.requestId !== requestId) throw error();
@@ -147,8 +160,11 @@ export async function readLeadUserTurn(requestId: string, sessions: BuilderLeadS
 }
 
 /** User input only; assistant answers never become customer approval evidence. */
-export async function readLeadUserSource(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
+export async function readLeadUserSource(requestId: string, sessions: ConversationSessions, platform: SpsPlatformInvocationContext) {
   const turn = await readLeadUserTurn(requestId, sessions, platform);
+  const userFacing = turn.channel === "main" || turn.channel === "decisions"
+    || turn.channel === "user_conversation" || turn.channel === "ui_design" || turn.channel === "question_discussion";
+  if (!userFacing) throw error();
   return Object.freeze({ id: `lead-turn:${requestId}`, text: turn.text,
     ...(turn.questionContext ? { questionContext: turn.questionContext } : {}) });
 }
@@ -163,7 +179,7 @@ function runProjection(turn: LeadTurn, result: SpsAgentSessionRunResult): LeadTu
     cancellationRequested: result.cancellationRequested, termination: result.termination };
 }
 
-export function parseLeadConversationPage(value: unknown, sessions: BuilderLeadSessions, channel: LeadChannel): LeadConversationPage {
+export function parseLeadConversationPage(value: unknown, sessions: ConversationSessions, channel: LeadConversationId): LeadConversationPage {
   const scope = scopeFor(sessions, channel);
   const row = record(value, [...SCOPE_KEYS, "totalTurns", "active", "turns", "nextCursor"]);
   if (SCOPE_KEYS.some(key => row[key] !== scope[key as keyof Scope]) || !Number.isSafeInteger(row.totalTurns)
@@ -200,8 +216,8 @@ export function parseLeadConversationPage(value: unknown, sessions: BuilderLeadS
 /** Called only under the owning Workspace Worker's serialized write boundary.
  * Per-turn records plus a linked head avoid an ever-growing snapshot. This is
  * not cross-process CAS; Core must fence retired Worker invocations. */
-export function createLeadConversationStore(platform: SpsPlatformInvocationContext, sessions: BuilderLeadSessions,
-  check: () => Promise<void>, beforeDispatch: (questionContext?: QuestionContext) => Promise<void> = check) {
+export function createLeadConversationStore(platform: SpsPlatformInvocationContext, sessions: ConversationSessions,
+  check: () => Promise<void>, beforeDispatch: (questionContext?: QuestionContext) => Promise<string | void> = check) {
   async function requireSupportedPolicy(scope: Scope) {
     try { await assertSessionExecutionPolicySupport(platform, scope.sessionId, scope.workspaceId); }
     catch { throw new Error(PROTECTED_SEND_UNAVAILABLE); }
@@ -236,7 +252,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
     return updated;
   }
   return {
-    async page(channel: LeadChannel, cursor: string | null = null): Promise<LeadConversationPage> {
+    async page(channel: LeadConversationId, cursor: string | null = null): Promise<LeadConversationPage> {
       const scope = scopeFor(sessions, channel);
       await check();
       const head = parseHead(await platform.state.get(headKey(scope)), scope);
@@ -264,7 +280,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
         runId: activeTurn.runId, cancellationRequested: activeTurn.cancellationRequested, termination: activeTurn.termination };
       return { ...scope, totalTurns: head.totalTurns, active: activity, turns, nextCursor: next };
     },
-    async refresh(channel: LeadChannel) {
+    async refresh(channel: LeadConversationId) {
       const scope = scopeFor(sessions, channel);
       await check();
       const head = parseHead(await platform.state.get(headKey(scope)), scope);
@@ -272,16 +288,19 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       await check();
       return { refreshed: true };
     },
-    async send(channel: LeadChannel, requestId: string, value: string, questionValue?: QuestionContext) {
+    async send(channel: LeadConversationId, requestId: string, value: string, questionValue?: QuestionContext) {
       const scope = scopeFor(sessions, channel);
+      if (channel === "cto-inbox" || channel === "background_planning" || channel === "question_intake") throw error();
       const questionContext = questionValue === undefined ? undefined : parseQuestionContext(questionValue);
-      if (questionContext && channel !== "decisions") throw error();
+      if (questionContext && channel !== "decisions" && channel !== "question_discussion"
+        || channel === "question_discussion" && !questionContext) throw error();
       id(requestId); text(value, MAX_TEXT_BYTES);
       await check();
       let head = parseHead(await platform.state.get(headKey(scope)), scope);
       const existing = await platform.state.get(turnKey(scope, requestId));
       await check();
       let turn: LeadTurn;
+      let referenceContext = "";
       if (existing !== null) {
         turn = parseTurn(existing, scope);
         if (turn.requestId !== requestId || turn.text !== value
@@ -295,13 +314,13 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
         // execution has been attempted before the dispatching record is saved.
         if (head.lastRequestId !== requestId
           && (turn.previousRequestId !== head.lastRequestId || turn.sequence !== head.totalTurns)) throw error();
-        await beforeDispatch(questionContext);
+        referenceContext = await beforeDispatch(questionContext) ?? "";
         if (!turn.executionPolicy) throw new Error("This historical prepared turn has no execution restriction. Review it without resending.");
         await requireSupportedPolicy(scope);
       } else {
         head = await reconcile(scope, head);
         if (head.activeRequestId !== null || head.totalTurns >= MAX_TURNS) throw error();
-        await beforeDispatch(questionContext);
+        referenceContext = await beforeDispatch(questionContext) ?? "";
         await requireSupportedPolicy(scope);
         // Probe the explicit receipt contract before ever sending. Older Hosts
         // must not silently ignore requestId and fall back to unkeyed execution.
@@ -325,8 +344,10 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       turn = await writeTurn(platform, scope, { ...turn, state: "dispatching" }, check);
       await check();
       try {
-        const prompt = turn.questionContext
-          ? `Builder question association (not approval or execution authority): ${JSON.stringify(turn.questionContext)}\nUser message:\n${value}` : value;
+        const prompt = referenceContext || turn.questionContext
+          ? `${referenceContext ? `Current Builder source references (context only; not approval or execution authority):\n${referenceContext}\n` : ""}${turn.questionContext
+            ? `Builder question association (not approval or execution authority): ${JSON.stringify(turn.questionContext)}\n` : ""}User message:\n${value}`
+          : value;
         if (!turn.executionPolicy) throw error();
         const result = await platform.agents.sessions.sendMessage(scope.sessionId, scope.workspaceId,
           { prompt, requestId, executionPolicy: turn.executionPolicy });
@@ -339,7 +360,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       }
       return { saved: true, requestId };
     },
-    async cancel(channel: LeadChannel) {
+    async cancel(channel: LeadConversationId) {
       const scope = scopeFor(sessions, channel);
       await check();
       let head = parseHead(await platform.state.get(headKey(scope)), scope);
@@ -354,7 +375,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       await reconcile(scope, head);
       return { cancellationRequested: result.cancellationRequested };
     },
-    async resumePrepared(channel: LeadChannel, requestId: string): Promise<{ saved: boolean; requestId: string }> {
+    async resumePrepared(channel: LeadConversationId, requestId: string): Promise<{ saved: boolean; requestId: string }> {
       const scope = scopeFor(sessions, channel);
       await check();
       const head = parseHead(await platform.state.get(headKey(scope)), scope);

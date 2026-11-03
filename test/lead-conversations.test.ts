@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult } from "@sonparkserver/plugin-sdk/platform";
-import { createLeadConversationStore, parseLeadConversationPage } from "../src/lead-conversations.ts";
+import { createLeadConversationStore, parseLeadConversationPage, readLeadUserSource } from "../src/lead-conversations.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import type { BuilderLeadSessions } from "../src/domain/model.ts";
+import type { BuilderLeadContexts } from "../src/domain/lead-contexts.ts";
 import { LEAD_SESSION_EXECUTION_POLICY } from "../src/session-execution-policy.ts";
 
 const A = "11111111-1111-4111-8111-111111111111";
@@ -13,6 +14,13 @@ const MAIN = "44444444-4444-4444-8444-444444444444";
 const uuid = (n: number) => `${n.toString(16).padStart(8, "0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
 const sessions = (workspaceId = A): BuilderLeadSessions => ({ workspaceId, selectionRevision: 1, agentId: AGENT,
   sessions: { main: MAIN, "cto-inbox": "55555555-5555-4555-8555-555555555555", decisions: "66666666-6666-4666-8666-666666666666" } });
+const contexts = (): BuilderLeadContexts => ({ schemaVersion: 2, workspaceId: A, selectionRevision: 1, agentId: AGENT,
+  requestId: uuid(77), status: "ready", pendingContext: null, contexts: {
+    user_conversation: MAIN, ui_design: "77777777-7777-4777-8777-777777777777",
+    background_planning: "88888888-8888-4888-8888-888888888888",
+    question_intake: "99999999-9999-4999-8999-999999999999",
+    question_discussion: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  } });
 function fixture() {
   const state = new Map<string, JsonValue>();
   const receipts = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
@@ -25,7 +33,9 @@ function fixture() {
       async get(input: { scopeId?: string; stateKey: string }) { return structuredClone(state.get(key(input)) ?? null); },
       async set(input: { scopeId?: string; stateKey: string }, value: JsonValue) { state.set(key(input), structuredClone(value)); },
       async delete() { throw new Error("Chat must not delete history"); },
-    }, agents: { sessions: {
+    }, agents: { async list({ companyId }: { companyId: string }) {
+      return [{ id: AGENT, name: "Lead", status: "idle", companyId }];
+    }, sessions: {
       async describePolicySupport() { return { schemaVersion: 1, modes: ["plugin-tools-only-v1"], enforcement: "dispatch-and-run",
         readiness: "unknown", osIsolation: "not-certified" }; },
       async sendMessage(sessionId: string, workspaceId: string, opts: { requestId: string; prompt: string }) {
@@ -116,6 +126,40 @@ test("question association is persisted with raw answer text and sent explicitly
   assert.equal(f.sends.length, 1);
 });
 
+test("five logical contexts use independent transcript keys and send only to their own Host session", async () => {
+  const f = fixture();
+  const record = contexts();
+  const store = createLeadConversationStore(f.platform, record, f.check);
+  await store.send("user_conversation", uuid(201), "Main source text");
+  await store.send("ui_design", uuid(202), "UI feedback");
+  const main = await store.page("user_conversation");
+  const ui = await store.page("ui_design");
+  assert.equal(main.turns[0]?.text, "Main source text");
+  assert.equal(ui.turns[0]?.text, "UI feedback");
+  assert.equal((await store.page("background_planning")).totalTurns, 0);
+  assert.equal((await store.page("question_intake")).totalTurns, 0);
+  assert.equal((await store.page("question_discussion")).totalTurns, 0);
+  assert.equal(f.sends[0]?.sessionId, record.contexts.user_conversation);
+  assert.equal(f.sends[1]?.sessionId, record.contexts.ui_design);
+  assert.equal((await readLeadUserSource(uuid(202), record, f.platform)).text, "UI feedback");
+  assert.throws(() => parseLeadConversationPage(ui, record, "user_conversation"));
+});
+
+test("Question Discussion transcript requires its exact question reference and stays separate from Main", async () => {
+  const f = fixture();
+  const record = contexts();
+  const store = createLeadConversationStore(f.platform, record, f.check);
+  await assert.rejects(store.send("question_discussion", uuid(203), "Unbound answer"));
+  const questionContext = { projectId: A, draftRevisionId: "draft-1", questionId: "Q-1" };
+  await store.send("question_discussion", uuid(204), "Use the requested layout", questionContext);
+  const discussion = await store.page("question_discussion");
+  assert.equal(discussion.turns[0]?.questionContext?.questionId, "Q-1");
+  assert.equal(f.sends[0]?.sessionId, record.contexts.question_discussion);
+  assert.equal((await store.page("user_conversation")).totalTurns, 0);
+  await assert.rejects(store.send("background_planning", uuid(205), "Direct message"));
+  await assert.rejects(store.send("question_intake", uuid(206), "Direct message"));
+});
+
 test("prepared question resume rechecks exact association, while submitted request recovery skips new-dispatch validation", async () => {
   const f = fixture();
   const original = f.platform.state.set;
@@ -138,6 +182,33 @@ test("prepared question resume rechecks exact association, while submitted reque
   fresh = false;
   await store.send("decisions", uuid(73), "Desktop", context);
   assert.equal(f.sends.length, 1);
+});
+
+test("v2 dispatch consumes the latest Builder revision and decisions again when resuming a prepared turn", async () => {
+  const f = fixture();
+  const record = contexts();
+  let revision = "baseline-r1", decisions = ["decision-r1"];
+  const beforeDispatch = async () => JSON.stringify({ approvedRevision: revision, decisions });
+  const original = f.platform.state.set;
+  let stopBeforeDispatch = true;
+  f.platform.state.set = async (key, value) => {
+    if (stopBeforeDispatch && (value as Record<string, JsonValue>).state === "dispatching") {
+      stopBeforeDispatch = false;
+      throw new Error("interrupted before dispatch");
+    }
+    return original(key, value);
+  };
+  const first = createLeadConversationStore(f.platform, record, f.check, beforeDispatch);
+  await assert.rejects(first.send("user_conversation", uuid(207), "Continue the design"), /interrupted before dispatch/);
+  assert.equal(f.sends.length, 0);
+  revision = "baseline-r2"; decisions = ["decision-r2"];
+  const resumed = createLeadConversationStore(f.platform, record, f.check, beforeDispatch);
+  await resumed.resumePrepared("user_conversation", uuid(207));
+  assert.equal(f.sends.length, 1);
+  assert.match(f.sends[0]!.prompt, /baseline-r2/);
+  assert.match(f.sends[0]!.prompt, /decision-r2/);
+  assert.doesNotMatch(f.sends[0]!.prompt, /baseline-r1/);
+  assert.doesNotMatch(f.sends[0]!.prompt, /decision-r1/);
 });
 
 test("same request rechecks its run and never invokes a second send, including after a restart", async () => {
@@ -326,6 +397,31 @@ test("Host render environment metadata is excluded from strict conversation data
   assert.equal((page as Record<string, JsonValue>).totalTurns, 0);
   assert.equal(Object.hasOwn(page as object, "renderEnvironment"), false);
   assert.equal(f.sends.length, 0);
+});
+
+test("public Builder actions read and explicitly send the selected v2 context through generic Host sessions", async () => {
+  const f = fixture();
+  const record = contexts();
+  const stateKey = (stateKey: string) => ({ scopeKind: "company" as const, scopeId: A,
+    namespace: "sonpark.my-builder", stateKey });
+  await f.platform.state.set(stateKey("lead-agent.v1"), { workspaceId: A, revision: 1, selectedAgentId: AGENT });
+  await f.platform.state.set(stateKey("lead-contexts.v2.1"), record as unknown as JsonValue);
+  const contract = createBuilderPlatform();
+  const pageHandler = contract.data.find(item => item.key === "builder.lead-conversation")!;
+  const page = await pageHandler.handler({ companyId: A, contextId: "ui_design", cursor: null }, f.platform);
+  assert.equal((page as Record<string, JsonValue>).channel, "ui_design");
+  const send = contract.actions.find(item => item.key === "builder.send-lead-message")!;
+  await send.handler({ contextId: "ui_design", requestId: uuid(208), text: "Review the current screen flow" }, {
+    ...f.platform, companyId: A, actor: { type: "user", companyId: A },
+  });
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.sends[0]?.sessionId, record.contexts.ui_design);
+  const refreshed = await pageHandler.handler({ companyId: A, contextId: "ui_design", cursor: null }, f.platform);
+  assert.equal((refreshed as Record<string, JsonValue>).totalTurns, 1);
+  await assert.rejects(Promise.resolve().then(() => send.handler({ contextId: "background_planning", requestId: uuid(209), text: "Send direct message" }, {
+    ...f.platform, companyId: A, actor: { type: "user", companyId: A },
+  })), /does not accept direct user messages/);
+  assert.equal(f.sends.length, 1);
 });
 
 test("conversation actions reject non-user scope and internal Lead intake before any execution", async () => {

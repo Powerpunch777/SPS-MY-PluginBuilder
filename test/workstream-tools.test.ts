@@ -224,6 +224,44 @@ test("authority rejects Workers, Lead sessions, mismatched CTO sessions, other C
   assert.equal(f.sets, 0);
 });
 
+test("none of the five v2 Lead contexts can forge CTO read/ACK receipts; independent CTO authority remains valid", async () => {
+  const f = await prepared();
+  await publishWorkstream(publishParams(), leadCtx(f), f.platform);
+  const logicalSessions = [SESSIONS.main, "10101010-1010-4010-8010-101010101010",
+    "20202020-2020-4020-8020-202020202020", "30303030-3030-4030-8030-303030303030",
+    "40404040-4040-4040-8040-404040404040"];
+  f.values.set(f.scopedKey("lead-contexts.v2.1"), { schemaVersion: 2, workspaceId: WORKSPACE,
+    selectionRevision: 1, agentId: LEAD, requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status: "ready",
+    pendingContext: null, contexts: { user_conversation: logicalSessions[0], ui_design: logicalSessions[1],
+      background_planning: logicalSessions[2], question_intake: logicalSessions[3], question_discussion: logicalSessions[4] } });
+  const readParams = { projectId: PROJECT, ctoId: "cto-one", workstreamId: "ws-one" };
+  const ackParams = { projectId: PROJECT, ctoId: "cto-one", workstreamId: "ws-one", expectedBaseRevisionId: "board-r01",
+    revisionId: "forged-logical-ack", specRevision: 1, readiness: "ready", note: "Must be rejected." };
+  const writesBeforeForgery = f.writes;
+  for (const sessionId of logicalSessions) {
+    const registryKey = `project-ctos.v1.${hashText(PROJECT)}`;
+    const currentRegistry = f.values.get(f.scopedKey(registryKey)) as unknown as { schemaVersion: number; workspaceId: string;
+      projectId: string; revision: number; ctos: Array<{ ctoId: string; sessionId: string | null }> };
+    f.values.set(f.scopedKey(registryKey), { ...currentRegistry, revision: currentRegistry.revision + 1,
+      ctos: currentRegistry.ctos.map(cto => cto.ctoId === "cto-one" ? { ...cto, sessionId } : cto) });
+    const forged = f.context(WORKSPACE, LEAD, sessionId);
+    await assert.rejects(readCtoWorkstream(readParams, forged, f.platform), /Lead logical context/);
+    await assert.rejects(acknowledgeWorkstream(ackParams, forged, f.platform), /Lead logical context/);
+  }
+  assert.equal(f.writes, writesBeforeForgery, "the forged reads and ACKs must not change the stored board");
+
+  const registryKey = `project-ctos.v1.${hashText(PROJECT)}`;
+  const currentRegistry = f.values.get(f.scopedKey(registryKey)) as unknown as { schemaVersion: number; workspaceId: string;
+    projectId: string; revision: number; ctos: Array<{ ctoId: string; sessionId: string | null }> };
+  f.values.set(f.scopedKey(registryKey), { ...currentRegistry, revision: currentRegistry.revision + 1,
+    ctos: currentRegistry.ctos.map(cto => cto.ctoId === "cto-one" ? { ...cto, sessionId: SESSIONS.cto1 } : cto) });
+
+  const independent = ctoCtx(f);
+  await readCtoWorkstream(readParams, independent, f.platform);
+  const ack = await acknowledgeWorkstream({ ...ackParams, revisionId: "independent-cto-ack" }, independent, f.platform);
+  assert.equal((ack.data as { status: string }).status, "published");
+});
+
 test("stale board heads and wrong specification revisions conflict without overwriting", async () => {
   const f = await prepared();
   await publishWorkstream(publishParams(), leadCtx(f), f.platform);
