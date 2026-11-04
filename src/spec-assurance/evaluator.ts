@@ -344,6 +344,18 @@ async function evaluateSpecAssuranceWithCoverage(input: AssuranceInput, trustedC
   }
   for (const requirementId of input.scope.requirementIds) {
     gaps.push(makeGap(input, requirementId, "item-decision-status", "approved-specification-item-decision-resolver-unavailable", trustedCoverage));
+    // Coverage evidence is useful even when no Domain Pack applies. Keep missing
+    // requirement-to-source/rule linkage visible instead of relying on a rule loop
+    // that may have no rules to visit.
+    if (coverageAuthority === "verified") {
+      const target = trustedCoverage?.targets.find(item => item.targetKind === "requirement" && item.targetId === requirementId);
+      if (!target || target.status !== "COVERED") {
+        const reason = target?.status ?? "missing-coverage-target";
+        gaps.push(makeGap(input, requirementId, "source-and-coverage-linkage", `coverage-${reason}`, trustedCoverage));
+        if (target?.status === "GAP") failed = true;
+        else unknown = true;
+      }
+    }
   }
   if (!rules.size) for (const requirementId of input.scope.requirementIds) {
     gaps.push(makeGap(input, requirementId, "domain-pack-selector", "no-applicable-domain-rules", trustedCoverage));
