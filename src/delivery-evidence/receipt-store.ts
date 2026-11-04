@@ -160,6 +160,22 @@ export async function listDeliveryAttempts(scope: ReceiptTaskScope, state: Pick<
   return Object.freeze({ attempts: Object.freeze(attempts), hasMore: history.hasMore });
 }
 
+/** Read the latest persisted attempt and revalidate it through the same current bindings as an ID lookup. */
+export async function readLatestCurrentDeliveryAttempt(scope: ReceiptTaskScope,
+  platform: ReceiptHostFacade, authority: CurrentDeliveryAuthority,
+  artifacts: Pick<PluginSpsClient, "artifacts">): Promise<DeliveryAttemptRead> {
+  try {
+    const history = await listDeliveryAttempts(scope, platform.state, 1);
+    const latest = history.attempts[0];
+    if (!latest) return Object.freeze({ status: "missing", journalLinkage: "missing", evidenceAuthority: "unknown",
+      attempt: null, artifactIds: Object.freeze([]), reason: "not-found" });
+    return readCurrentDeliveryAttempt({ ...scope, attemptId: latest.attemptId }, platform, authority, artifacts);
+  } catch {
+    return Object.freeze({ status: "unknown", journalLinkage: "unknown", evidenceAuthority: "unknown",
+      attempt: null, artifactIds: Object.freeze([]), reason: "provider-error" });
+  }
+}
+
 export type RecordAttemptInput = ReceiptTaskScope & Readonly<{
   packet: TaskPacketRecord;
   /** The run ID returned by the real sessions.sendMessage call. */
@@ -239,7 +255,11 @@ export function createDeliveryAttemptProducer() {
   });
 }
 
-/** Re-read an immutable attempt and all current bindings before use. */
+/**
+ * Best-effort revalidation of an immutable attempt against individually read
+ * current bindings. This does not provide an atomic snapshot or prevent a
+ * binding from changing after it was read or after this function returns.
+ */
 export async function readCurrentDeliveryAttempt(input: ReceiptTaskScope & Readonly<{ attemptId: string }> ,
   platform: ReceiptHostFacade, authority: CurrentDeliveryAuthority,
   artifacts: Pick<PluginSpsClient, "artifacts">): Promise<DeliveryAttemptRead> {
@@ -269,11 +289,33 @@ export async function readCurrentDeliveryAttempt(input: ReceiptTaskScope & Reado
     const matched = rows.filter(row => row.companyId === currentAuthority.companyId && row.pluginKey === currentAuthority.pluginKey
       && row.subjectKey === currentAuthority.subjectKey && row.runId === attempt.runId);
     const artifactIds = matched.map(row => row.id).sort();
-    const finalAuthority = await authority.readCurrent(input);
-    if (!finalAuthority || JSON.stringify(finalAuthority) !== JSON.stringify(currentAuthority)) return Object.freeze({ status: "stale", journalLinkage: "matched", evidenceAuthority: "unknown", attempt, artifactIds: [], reason: "authority-revoked" });
     if (attempt.companyId !== currentAuthority.companyId || attempt.pluginKey !== currentAuthority.pluginKey || attempt.subjectKey !== currentAuthority.subjectKey
       || JSON.stringify(artifactIds) !== JSON.stringify([...attempt.artifactIds].sort())) {
       return Object.freeze({ status: "stale", journalLinkage: "matched", evidenceAuthority: "unknown", attempt, artifactIds: Object.freeze(artifactIds), reason: "artifact-changed" });
+    }
+
+    // Admission and artifact reads can yield while bindings change. These
+    // independent reads are best-effort revalidation, not an atomic snapshot
+    // or linearization point: a binding may change after its read or after
+    // this function returns, even when the result is observed/current.
+    const [finalAuthority, finalPlanning, finalHead, finalAdmission] = await Promise.all([
+      authority.readCurrent(input), readPlanningJournalLinkage({ ...input, state }),
+      journal(state, input).current(),
+      platform.agents.sessions.getRequest(attempt.sessionId, currentAuthority.companyId, attempt.requestId),
+    ]);
+    if (!finalAuthority || JSON.stringify(finalAuthority) !== JSON.stringify(currentAuthority)) {
+      return Object.freeze({ status: "stale", journalLinkage: "matched", evidenceAuthority: "unknown", attempt, artifactIds: [], reason: "authority-revoked" });
+    }
+    if (finalPlanning.status !== "matched" || !finalPlanning.packet || !finalPlanning.delivery
+      || taskPacketRecordDigest(finalPlanning.packet, input.projectId, input.ctoId, input.workstreamId) !== attempt.packetRecordSha256
+      || finalPlanning.packet.source.specRevision !== attempt.specRevision
+      || JSON.stringify(finalPlanning.packet.dependencyPins) !== JSON.stringify(attempt.dependencyPins)
+      || finalPlanning.packet.source.requestId !== attempt.planningRequestId
+      || !finalHead || finalHead.revision.attemptId !== attempt.attemptId
+      || !finalAdmission || finalAdmission.requestId !== attempt.requestId || finalAdmission.state !== "submitted"
+      || finalAdmission.runId !== attempt.runId) {
+      return Object.freeze({ status: "stale", journalLinkage: finalPlanning.status === "matched" ? "matched" : "mismatched",
+        evidenceAuthority: "unknown", attempt, artifactIds: [], reason: "planning-changed" });
     }
     return Object.freeze({ status: "observed", journalLinkage: "matched", evidenceAuthority: "unknown", attempt, artifactIds: Object.freeze(artifactIds), reason: "current" });
   } catch {

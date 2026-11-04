@@ -143,6 +143,8 @@ export type DeliveryEvidenceInput = Readonly<{
   /** Claimed identity only: the available SDK has no source revision lookup. */
   sourceRevision: SourceRevision;
   contract?: ApprovedDeliverableContract | null;
+  /** Distinguishes an unavailable lookup from a confirmed absence when no contract row exists. */
+  contractAuthority?: "missing" | "unknown";
   observations?: readonly RequirementObservation[];
   artifactLookup?: ArtifactLookupRequest | null;
   /** SDK execution history is company-scoped; this ID remains an invocation claim. */
@@ -325,7 +327,7 @@ export async function createDeliveryEvidenceManifest(input: DeliveryEvidenceInpu
   }
 
   const contract = input.contract ?? null;
-  const authority = contract === null ? "missing" : contract.authority;
+  const authority = contract === null ? input.contractAuthority ?? "missing" : contract.authority;
   const reference = contract === null ? null : nonblank(contract.reference, "contract.reference");
   const requirements = authority === "approved" ? contract?.requirements ?? [] : [];
   const requirementIds = new Set<string>();
@@ -566,3 +568,6 @@ export async function lookupExecution(client: PluginSpsClient, companyId: string
     return null;
   }
 }
+
+export { prepareCurrentDeliveryEvidence } from "./current-preparation.ts";
+export type { CurrentDeliveryPreparation, CurrentDeliveryPreparationProviders } from "./current-preparation.ts";
