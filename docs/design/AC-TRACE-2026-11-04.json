@@ -4019,7 +4019,9 @@
         "AC-82",
         "AC-105"
       ],
-      "overrides": [],
+      "overrides": [
+        "2026-11-04 user decision, governing contract section 5.2: independent default-created Manager Agent with separate identity, instructions, permissions, project session and work history; existing eligible CLI authentication pool shared without requiring another CLI account; Lead provider/model settings may seed initial defaults and remain individually editable. CTO technical routing, Integration Review design/conflict routing and Main final authority remain required."
+      ],
       "owner": "Lead: final acceptance; integration-feature CTO task binding pending",
       "test_name": null,
       "target_revision": null,
