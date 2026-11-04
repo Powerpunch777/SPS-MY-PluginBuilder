@@ -14,10 +14,8 @@ import {
 } from "./index.ts";
 
 const category = Object.freeze({
-  id: "category-from-documents", sourceId: "category-source", sourceRevisionId: "category-r1",
-  scope: Object.freeze({ id: "scope-1", revisionId: "scope-r1", approval: "approved" as const, evidenceRef: "scope:1" }),
-  allowedCategoryIds: Object.freeze(["category-from-documents", "category-other"]),
-  listCompleteness: "complete" as const, listEvidenceRef: "category-list:1",
+  id: "category-from-documents", sourceId: "category-source",
+  mappingType: "workstream", mappingVersion: "test-mapping-v1", mappingEvidenceRef: "mapping:workstream:v1",
 });
 const identity = Object.freeze({ workspaceId: "w-1", projectId: "p-1", documentId: "d-1", category });
 const hashA = "a".repeat(64);
@@ -80,11 +78,22 @@ test("missing trace, authority, access, source, and index evidence stay UNKNOWN"
   }
 });
 
-test("incomplete category scope and list remain UNKNOWN", () => {
-  const incomplete = { ...category, listCompleteness: "unknown" as const, listEvidenceRef: null };
-  const result = verify(input({ identity: { ...identity, category: incomplete } }));
-  assert.equal(result.status, "UNKNOWN");
-  assert(result.causes.includes("category-unverified"));
+test("logical category tags need a verified server mapping, not user approval or a complete registry", () => {
+  assert.equal(verify().status, "CURRENT");
+  const missingMapping = { ...category, mappingType: null, mappingVersion: null, mappingEvidenceRef: null };
+  const missing = verify(input({ identity: { ...identity, category: missingMapping } }));
+  assert.equal(missing.status, "UNKNOWN");
+  assert(missing.causes.includes("category-unverified"));
+
+  const claims: FreshnessEvidenceClaim[] = [];
+  const mismatched = verify(input(), claim => { claims.push(claim); return claim.kind !== "category-mapping"; });
+  assert.equal(mismatched.status, "UNKNOWN");
+  const mapping = claims.find(claim => claim.kind === "category-mapping");
+  assert(mapping && mapping.kind === "category-mapping");
+  assert.equal(mapping.documentRevisionId, "doc-r1");
+  assert.equal(mapping.sourceId, "category-source");
+  assert.equal(mapping.type, "workstream");
+  assert.equal(mapping.mappingVersion, "test-mapping-v1");
 });
 
 test("a verified complete empty trace proves unaffected despite unrelated changes", () => {
@@ -169,4 +178,70 @@ test("consumer requires trusted verification of the entire evaluation binding", 
   assert.equal(consumeFreshnessEvent(state, candidate, () => { throw new Error("unavailable"); }).status, "evaluation-unverified");
   assert.equal(consumeFreshnessEvent(state, candidate, undefined as unknown as (claim: FreshnessEvaluationClaim) => boolean).status, "evaluation-unverified");
   assert.equal(state.cursor, 0);
+});
+
+test("trusted evaluations recover legacy mappings and accept verified mapping version changes", () => {
+  const unmappedIdentity = Object.freeze({ ...identity, category: Object.freeze({
+    id: category.id, sourceId: category.sourceId, mappingType: null, mappingVersion: null, mappingEvidenceRef: null,
+  }) });
+  const legacyState: FreshnessConsumerState = Object.freeze({
+    ...baseState(), identity: unmappedIdentity,
+    freshness: verify(input({ identity: unmappedIdentity })),
+  });
+  assert.equal(legacyState.freshness.status, "UNKNOWN");
+  const recoveryEvaluation = verify(input({ identity, revisions: { old: snapshot("new", [pinA]), new: snapshot("newer", [pinA]) } }));
+  const recovery = consumeFreshnessEvent(legacyState, event(legacyState, 1, "evt-legacy-recovery", recoveryEvaluation), claim => {
+    assert.deepEqual(claim.identity, identity);
+    assert.deepEqual(claim.evaluatedAgainst, recoveryEvaluation.evaluatedAgainst);
+    return true;
+  });
+  assert.equal(recovery.status, "applied");
+  if (recovery.status !== "applied") return;
+  assert.deepEqual(recovery.state.identity.category, category);
+  assert.deepEqual(recovery.state.freshness.identity.category, category);
+  assert.deepEqual(recovery.state.approval, legacyState.approval);
+  assert.equal(recovery.state.bodyRef, legacyState.bodyRef);
+  assert.deepEqual(recovery.state.historyRefs, legacyState.historyRefs);
+
+  const nextCategory = Object.freeze({ ...category, mappingVersion: "test-mapping-v2", mappingEvidenceRef: "mapping:workstream:v2" });
+  const nextIdentity = Object.freeze({ ...identity, category: nextCategory });
+  const nextEvaluation = verify(input({ identity: nextIdentity,
+    revisions: { old: snapshot("newer", [pinA]), new: snapshot("newest", [pinA]) } }));
+  const update = consumeFreshnessEvent(recovery.state, event(recovery.state, 2, "evt-mapping-v2", nextEvaluation), claim => {
+    assert.deepEqual(claim.identity.category, nextCategory);
+    return true;
+  });
+  assert.equal(update.status, "applied");
+  if (update.status === "applied") assert.equal(update.state.identity.category.mappingVersion, "test-mapping-v2");
+});
+
+test("mapping recovery rejects altered identity, partial mapping, and unverified mapping claims", () => {
+  const unmappedIdentity = Object.freeze({ ...identity, category: Object.freeze({
+    id: category.id, sourceId: category.sourceId, mappingType: null, mappingVersion: null, mappingEvidenceRef: null,
+  }) });
+  const legacyState: FreshnessConsumerState = Object.freeze({ ...baseState(), identity: unmappedIdentity,
+    freshness: verify(input({ identity: unmappedIdentity })) });
+  const mappedEvaluation = verify(input({ identity, revisions: { old: snapshot("new", [pinA]), new: snapshot("newer", [pinA]) } }));
+  let verifierCalls = 0;
+  const wrongDocument = event(legacyState, 1, "evt-wrong-document", {
+    ...mappedEvaluation, identity: Object.freeze({ ...identity, documentId: "another-document" }),
+  });
+  assert.equal(consumeFreshnessEvent(legacyState, wrongDocument, () => { verifierCalls += 1; return true; }).status, "wrong-scope");
+  const wrongCategory = event(legacyState, 1, "evt-wrong-category", {
+    ...mappedEvaluation, identity: Object.freeze({ ...identity, category: Object.freeze({ ...category, id: "another-category" }) }),
+  });
+  assert.equal(consumeFreshnessEvent(legacyState, wrongCategory, () => { verifierCalls += 1; return true; }).status, "wrong-scope");
+  const unverified = consumeFreshnessEvent(legacyState, event(legacyState, 1, "evt-unverified-map", mappedEvaluation), () => {
+    verifierCalls += 1;
+    return false;
+  });
+  assert.equal(unverified.status, "evaluation-unverified");
+  const partialIdentity = Object.freeze({ ...identity, category: Object.freeze({ ...category, mappingEvidenceRef: null }) });
+  const partial = consumeFreshnessEvent(legacyState, event(legacyState, 1, "evt-partial-map", {
+    ...mappedEvaluation, identity: partialIdentity,
+  }), () => { verifierCalls += 1; return true; });
+  assert.equal(partial.status, "evaluation-unverified");
+  assert.equal(verifierCalls, 1);
+  assert.equal(legacyState.identity.category.mappingVersion, null);
+  assert.equal(legacyState.cursor, 0);
 });

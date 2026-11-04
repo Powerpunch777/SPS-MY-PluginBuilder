@@ -6,17 +6,12 @@
 
 export type DocumentCategoryIdentity = Readonly<{
   id: string;
+  /** Canonical A source adapter and record type for this logical category tag. */
   sourceId: string;
-  sourceRevisionId: string;
-  scope: Readonly<{
-    id: string;
-    revisionId: string;
-    approval: "approved" | "unknown";
-    evidenceRef: string | null;
-  }>;
-  allowedCategoryIds: readonly string[];
-  listCompleteness: "complete" | "unknown";
-  listEvidenceRef: string | null;
+  /** Server-owned mapping fields. Missing values keep the evaluation UNKNOWN. */
+  mappingType?: string | null;
+  mappingVersion?: string | null;
+  mappingEvidenceRef?: string | null;
 }>;
 
 export type DocumentIdentity = Readonly<{
@@ -79,9 +74,8 @@ export type DocumentFreshnessInput = Readonly<{
 }>;
 
 export type FreshnessEvidenceClaim =
-  | Readonly<{ kind: "authority"; workspaceId: string; projectId: string; documentId: string; categoryId: string; scopeId: string; scopeRevisionId: string; evidenceRef: string }>
-  | Readonly<{ kind: "category-scope"; workspaceId: string; projectId: string; documentId: string; categoryId: string; scopeId: string; scopeRevisionId: string; approval: "approved" | "unknown"; evidenceRef: string }>
-  | Readonly<{ kind: "category-list"; workspaceId: string; projectId: string; scopeId: string; scopeRevisionId: string; sourceId: string; sourceRevisionId: string; categoryIds: readonly string[]; completeness: "complete" | "unknown"; evidenceRef: string }>
+  | Readonly<{ kind: "authority"; workspaceId: string; projectId: string; documentId: string; evidenceRef: string }>
+  | Readonly<{ kind: "category-mapping"; workspaceId: string; projectId: string; documentId: string; documentRevisionId: string; categoryId: string; sourceId: string; type: string; mappingVersion: string; evidenceRef: string }>
   | Readonly<{ kind: "snapshot-source" | "snapshot-access" | "snapshot-coverage"; workspaceId: string; projectId: string; side: "old" | "new"; revisionId: string; pins: readonly DocumentSourcePin[]; value: string; evidenceRef: string }>
   | Readonly<{ kind: "document-trace"; workspaceId: string; projectId: string; documentId: string; categoryId: string; documentRevisionId: string; oldRevisionId: string; newRevisionId: string; availability: TraceAvailability; dependencies: readonly DocumentSourcePin[]; evidenceRef: string }>;
 
@@ -191,8 +185,27 @@ function canonicalPins(pins: readonly DocumentSourcePin[]): readonly DocumentSou
   return Object.freeze([...pins].map(pin => Object.freeze({ ...pin })).sort((a, b) => a.sourceId.localeCompare(b.sourceId)));
 }
 
-function sameIdentity(a: DocumentIdentity, b: DocumentIdentity): boolean {
-  return JSON.stringify(freezeIdentity(a)) === JSON.stringify(freezeIdentity(b));
+/** Mapping metadata may be established or versioned only by the trusted evaluation verifier. */
+function sameDocumentCategory(a: DocumentIdentity, b: DocumentIdentity): boolean {
+  const left = freezeIdentity(a);
+  const right = freezeIdentity(b);
+  return left.workspaceId === right.workspaceId
+    && left.projectId === right.projectId
+    && left.documentId === right.documentId
+    && left.category.id === right.category.id
+    && left.category.sourceId === right.category.sourceId;
+}
+
+function hasVerifiedMapping(identity: DocumentIdentity): boolean {
+  const category = identity.category;
+  return !!category.mappingType && !!category.mappingVersion && !!category.mappingEvidenceRef;
+}
+
+function hasPartialMapping(identity: DocumentIdentity): boolean {
+  const category = identity.category;
+  const present = [category.mappingType, category.mappingVersion, category.mappingEvidenceRef]
+    .map(value => value != null);
+  return present.some(Boolean) && present.some(value => !value);
 }
 
 function fingerprint(event: FreshnessEvent): string {
@@ -208,10 +221,6 @@ function fingerprint(event: FreshnessEvent): string {
 }
 
 function freezeIdentity(identity: DocumentIdentity): DocumentIdentity {
-  const allowedCategoryIds = identity.category.allowedCategoryIds.map(categoryId => id(categoryId, "identity.category.allowedCategoryIds[]"));
-  if (new Set(allowedCategoryIds).size !== allowedCategoryIds.length) {
-    throw new TypeError("identity.category.allowedCategoryIds contains duplicate IDs.");
-  }
   return Object.freeze({
     workspaceId: id(identity.workspaceId, "identity.workspaceId"),
     projectId: id(identity.projectId, "identity.projectId"),
@@ -219,16 +228,9 @@ function freezeIdentity(identity: DocumentIdentity): DocumentIdentity {
     category: Object.freeze({
       id: id(identity.category.id, "identity.category.id"),
       sourceId: id(identity.category.sourceId, "identity.category.sourceId"),
-      sourceRevisionId: id(identity.category.sourceRevisionId, "identity.category.sourceRevisionId"),
-      scope: Object.freeze({
-        id: id(identity.category.scope.id, "identity.category.scope.id"),
-        revisionId: id(identity.category.scope.revisionId, "identity.category.scope.revisionId"),
-        approval: identity.category.scope.approval,
-        evidenceRef: identity.category.scope.evidenceRef,
-      }),
-      allowedCategoryIds: Object.freeze(allowedCategoryIds.sort()),
-      listCompleteness: identity.category.listCompleteness,
-      listEvidenceRef: identity.category.listEvidenceRef,
+      mappingType: identity.category.mappingType == null ? null : id(identity.category.mappingType, "identity.category.mappingType"),
+      mappingVersion: identity.category.mappingVersion == null ? null : id(identity.category.mappingVersion, "identity.category.mappingVersion"),
+      mappingEvidenceRef: identity.category.mappingEvidenceRef == null ? null : id(identity.category.mappingEvidenceRef, "identity.category.mappingEvidenceRef"),
     }),
   });
 }
@@ -281,15 +283,16 @@ export function evaluateDocumentFreshness(
     try { return verifyEvidence(claim) === true; } catch { return false; }
   };
   const authorityEvidence = input.authority.evidenceRef;
-  if (!authorityEvidence || !isVerified({ kind: "authority", workspaceId: identity.workspaceId, projectId: identity.projectId, documentId: identity.documentId, categoryId: identity.category.id, scopeId: identity.category.scope.id, scopeRevisionId: identity.category.scope.revisionId, evidenceRef: authorityEvidence })) {
+  if (!authorityEvidence || !isVerified({ kind: "authority", workspaceId: identity.workspaceId, projectId: identity.projectId, documentId: identity.documentId, evidenceRef: authorityEvidence })) {
     causes.add("authority-unverified");
   }
-  if (identity.category.scope.approval !== "approved" || !identity.category.scope.evidenceRef
-    || identity.category.listCompleteness !== "complete" || !identity.category.listEvidenceRef
-    || !identity.category.allowedCategoryIds.includes(identity.category.id)
-    || !isVerified({ kind: "category-scope", workspaceId: identity.workspaceId, projectId: identity.projectId, documentId: identity.documentId, categoryId: identity.category.id, scopeId: identity.category.scope.id, scopeRevisionId: identity.category.scope.revisionId, approval: identity.category.scope.approval, evidenceRef: identity.category.scope.evidenceRef ?? "" })
-    || !isVerified({ kind: "category-list", workspaceId: identity.workspaceId, projectId: identity.projectId, scopeId: identity.category.scope.id, scopeRevisionId: identity.category.scope.revisionId, sourceId: identity.category.sourceId, sourceRevisionId: identity.category.sourceRevisionId,
-      categoryIds: identity.category.allowedCategoryIds, completeness: identity.category.listCompleteness, evidenceRef: identity.category.listEvidenceRef ?? "" })) causes.add("category-unverified");
+  const categoryMapping = identity.category.mappingType && identity.category.mappingVersion && identity.category.mappingEvidenceRef && input.trace
+    ? { kind: "category-mapping" as const, workspaceId: identity.workspaceId, projectId: identity.projectId,
+      documentId: identity.documentId, documentRevisionId: input.trace.documentRevisionId, categoryId: identity.category.id,
+      sourceId: identity.category.sourceId, type: identity.category.mappingType,
+      mappingVersion: identity.category.mappingVersion, evidenceRef: identity.category.mappingEvidenceRef }
+    : null;
+  if (!categoryMapping || !isVerified(categoryMapping)) causes.add("category-unverified");
   for (const [side, snapshot] of [["old", input.revisions.old], ["new", input.revisions.new]] as const) {
     const pins = canonicalPins(snapshot.pins);
     const verifySnapshot = (kind: "snapshot-source" | "snapshot-access" | "snapshot-coverage", value: string, evidenceRef: string | null): boolean =>
@@ -358,7 +361,7 @@ export function recommendAffectedDocument(
   freshness: FreshnessEvaluation,
   approval: ApprovalRecord,
 ): FreshnessRecommendation | null {
-  if (freshness.status !== "AFFECTED") return null;
+  if (freshness.status !== "AFFECTED" || !hasVerifiedMapping(freshness.identity)) return null;
   const documentRevisionId = freshness.traceDocumentRevisionId;
   if (!documentRevisionId) return null;
   return Object.freeze({
@@ -386,13 +389,22 @@ export function consumeFreshnessEvent(
     || event.expectedBaseSourceRevisionId !== currentSourceRevisionId) {
     return Object.freeze({ status: "conflict", state });
   }
-  if (event.workspaceId !== state.identity.workspaceId || event.projectId !== state.identity.projectId || !sameIdentity(event.evaluation.identity, state.identity)) {
+  if (event.workspaceId !== state.identity.workspaceId || event.projectId !== state.identity.projectId
+    || !sameDocumentCategory(event.evaluation.identity, state.identity)) {
     return Object.freeze({ status: "wrong-scope", state });
   }
   id(event.evaluationId, "event.evaluationId");
   if (!Number.isSafeInteger(event.sequence) || event.sequence < 1) throw new TypeError("event.sequence must be a positive safe integer.");
   if (!EVENT_KINDS.includes(event.eventKind)) throw new TypeError("event.eventKind is unsupported.");
-  const evaluation = freezeEvaluation(event.evaluation);
+  const suppliedEvaluation = freezeEvaluation(event.evaluation);
+  if (hasPartialMapping(suppliedEvaluation.identity)) return Object.freeze({ status: "evaluation-unverified", state });
+  // A verifier may authenticate claims, but cannot make an absent server mapping
+  // authoritative. Keep the event/cursor semantics while exposing only UNKNOWN.
+  const evaluation = hasVerifiedMapping(suppliedEvaluation.identity) ? suppliedEvaluation : Object.freeze({
+    ...suppliedEvaluation,
+    status: "UNKNOWN" as const,
+    causes: Object.freeze([...new Set([...suppliedEvaluation.causes, "category-unverified" as const])].sort()),
+  });
   if (evaluation.evaluatedAgainst.oldRevisionId !== currentSourceRevisionId
     || evaluation.evaluatedAgainst.oldRevisionId !== event.expectedOldRevisionId
     || evaluation.evaluatedAgainst.newRevisionId !== event.expectedNewRevisionId
@@ -410,6 +422,7 @@ export function consumeFreshnessEvent(
   if (!evaluationVerified) return Object.freeze({ status: "evaluation-unverified", state });
   const next: FreshnessConsumerState = Object.freeze({
     ...state,
+    identity: evaluation.identity,
     cursor: event.sequence,
     evaluationId: event.evaluationId,
     freshness: evaluation,

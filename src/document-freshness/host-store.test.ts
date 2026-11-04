@@ -6,21 +6,19 @@ import type { DocumentIdentity, FreshnessConsumerState, FreshnessEvent } from ".
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const identity: DocumentIdentity = Object.freeze({ workspaceId, projectId: "project-1", documentId: "document-1",
-  category: Object.freeze({ id: "category-1", sourceId: "category-source", sourceRevisionId: "category-r1",
-    scope: Object.freeze({ id: "scope-1", revisionId: "scope-r1", approval: "unknown", evidenceRef: null }),
-    allowedCategoryIds: Object.freeze(["category-1"]), listCompleteness: "unknown", listEvidenceRef: null }) });
+  category: Object.freeze({ id: "category-1", sourceId: "category-source", mappingType: null, mappingVersion: null, mappingEvidenceRef: null }) });
 
-function initialState(): FreshnessConsumerState {
-  const freshness = Object.freeze({ identity, evaluatedAgainst: Object.freeze({ oldRevisionId: "rev-0", newRevisionId: "rev-1" }),
+function initialState(stateIdentity: DocumentIdentity = identity): FreshnessConsumerState {
+  const freshness = Object.freeze({ identity: stateIdentity, evaluatedAgainst: Object.freeze({ oldRevisionId: "rev-0", newRevisionId: "rev-1" }),
     status: "UNKNOWN" as const, causes: Object.freeze(["authority-unverified"] as const), changedSourceIds: Object.freeze([]), traceDocumentRevisionId: null });
-  return Object.freeze({ identity, cursor: 0, evaluationId: "eval-0", freshness,
+  return Object.freeze({ identity: stateIdentity, cursor: 0, evaluationId: "eval-0", freshness,
     approval: Object.freeze({ status: "approved", evidenceRef: "existing-approval" }), bodyRef: "body-r1",
     historyRefs: Object.freeze(["history-r1"]), processedEventIds: Object.freeze([]), processedEvents: Object.freeze([]) });
 }
 
-function event(eventId: string, evaluationId = "eval-1"): FreshnessEvent {
+function event(eventId: string, evaluationId = "eval-1", evaluationIdentity: DocumentIdentity = identity): FreshnessEvent {
   const current = initialState();
-  const evaluation = Object.freeze({ identity, evaluatedAgainst: Object.freeze({ oldRevisionId: "rev-1", newRevisionId: "rev-2" }),
+  const evaluation = Object.freeze({ identity: evaluationIdentity, evaluatedAgainst: Object.freeze({ oldRevisionId: "rev-1", newRevisionId: "rev-2" }),
     status: "UNKNOWN" as const, causes: Object.freeze(["authority-unverified"] as const), changedSourceIds: Object.freeze(["spec-1"]),
     traceDocumentRevisionId: null });
   return Object.freeze({ eventId, workspaceId, projectId: "project-1", sequence: 1, expectedBaseSequence: 0,
@@ -50,8 +48,8 @@ function host(options: Readonly<{ withoutCas?: boolean; failGet?: number }> = {}
   return { state, values, keyReads };
 }
 
-function consumer(state: FreshnessHostState, maxCasAttempts?: number) {
-  return createFreshnessHostConsumer({ identity, state, maxCasAttempts, verifyEvaluation: () => false });
+function consumer(state: FreshnessHostState, maxCasAttempts?: number, verifyEvaluation: () => boolean = () => false) {
+  return createFreshnessHostConsumer({ identity, state, maxCasAttempts, verifyEvaluation });
 }
 
 test("persists only UNKNOWN evaluation and preserves existing approval and body history", async () => {
@@ -165,6 +163,143 @@ test("malformed scoped Host state fails closed", async () => {
   fake.values.set(key.stateKey, { schemaVersion: 1, workspaceId: "other", projectId: "project-1", documentId: "document-1", state: {} });
   assert.equal((await service.read()).status, "corrupt-state");
   assert.equal((await service.consume(event("evt-corrupt"))).status, "corrupt-state");
+});
+
+test("legacy category state normalizes to UNKNOWN and recovers through a verified in-place CAS", async () => {
+  const fake = host();
+  const service = consumer(fake.state);
+  assert.equal((await service.read()).status, "empty");
+  const key = fake.keyReads[0];
+  const legacy = initialState();
+  const legacyCategory = { id: "category-1", sourceId: "category-source", sourceRevisionId: "category-r1",
+    scope: { id: "scope-1", revisionId: "scope-r1", approval: "approved", evidenceRef: "old-approval" },
+    allowedCategoryIds: ["category-1"], listCompleteness: "complete", listEvidenceRef: "old-list" };
+  const legacyIdentity = { workspaceId, projectId: "project-1", documentId: "document-1", category: legacyCategory };
+  const raw: JsonValue = { schemaVersion: 1, workspaceId, projectId: "project-1", documentId: "document-1",
+    state: { ...legacy, identity: legacyIdentity, freshness: { ...legacy.freshness, identity: legacyIdentity,
+      status: "CURRENT", causes: [] } } as unknown as JsonValue };
+  fake.values.set(key.stateKey, raw);
+  const read = await service.read();
+  assert.equal(read.status, "ready");
+  if (read.status === "ready") {
+    assert.equal(read.state.freshness.status, "UNKNOWN");
+    assert(read.state.freshness.causes.includes("category-unverified"));
+    assert.equal(read.state.identity.category.mappingVersion, null);
+  }
+  const mappedIdentity: DocumentIdentity = Object.freeze({ ...identity, category: Object.freeze({
+    id: "category-1", sourceId: "category-source", mappingType: "workstream", mappingVersion: "mapping-v1", mappingEvidenceRef: "mapping-evidence-v1",
+  }) });
+  const rejected = await consumer(fake.state).consume(event("evt-unverified-mapping", "eval-unverified", mappedIdentity));
+  assert.equal(rejected.status, "evaluation-unverified");
+  const verifiedConsumer = createFreshnessHostConsumer({ identity, state: fake.state, verifyEvaluation: () => true });
+  const recoveryEvent = event("evt-persisted", "eval-1", mappedIdentity);
+  const applied = await verifiedConsumer.consume(recoveryEvent);
+  assert.equal(applied.status, "applied");
+  if (applied.status === "applied") {
+    assert.equal(applied.state.cursor, 1);
+    assert.deepEqual(applied.state.identity.category, mappedIdentity.category);
+    assert.deepEqual(applied.state.approval, legacy.approval);
+    assert.equal(applied.state.bodyRef, legacy.bodyRef);
+    assert.deepEqual(applied.state.historyRefs, legacy.historyRefs);
+  }
+  const persisted = fake.values.get(key.stateKey) as unknown as { state: FreshnessConsumerState };
+  assert.deepEqual(persisted.state.identity.category, mappedIdentity.category);
+  assert.equal(persisted.state.cursor, 1);
+  assert.deepEqual(persisted.state.processedEventIds, ["evt-persisted"]);
+  assert.equal((await verifiedConsumer.consume(recoveryEvent)).status, "duplicate");
+  const restarted = createFreshnessHostConsumer({ identity, state: fake.state, verifyEvaluation: () => true });
+  const restartedRead = await restarted.read();
+  assert.equal(restartedRead.status, "ready");
+  if (restartedRead.status === "ready") {
+    assert.deepEqual(restartedRead.state.identity.category, mappedIdentity.category);
+    assert.deepEqual(restartedRead.state.approval, legacy.approval);
+    assert.equal(restartedRead.state.bodyRef, legacy.bodyRef);
+    assert.deepEqual(restartedRead.state.historyRefs, legacy.historyRefs);
+  }
+});
+
+test("mapping updates require a bound verifier and cannot change persisted document or category identity", async () => {
+  const fake = host();
+  const v1: DocumentIdentity = Object.freeze({ ...identity, category: Object.freeze({
+    id: "category-1", sourceId: "category-source", mappingType: "workstream", mappingVersion: "mapping-v1", mappingEvidenceRef: "mapping-evidence-v1",
+  }) });
+  const v2: DocumentIdentity = Object.freeze({ ...identity, category: Object.freeze({ ...v1.category,
+    mappingVersion: "mapping-v2", mappingEvidenceRef: "mapping-evidence-v2" }) });
+  const stateV1 = initialState(v1);
+  assert.equal((await consumer(fake.state).initialize(stateV1)).status, "ready");
+  const rejected = await consumer(fake.state, undefined, () => false).consume(event("evt-untrusted-v2", "eval-untrusted", v2));
+  assert.equal(rejected.status, "evaluation-unverified");
+  const afterReject = await consumer(fake.state).read();
+  assert.equal(afterReject.status, "ready");
+  if (afterReject.status === "ready") {
+    assert.equal(afterReject.state.identity.category.mappingVersion, "mapping-v1");
+    assert.equal(afterReject.state.cursor, 0);
+  }
+
+  const wrongDocument = Object.freeze({ ...v2, documentId: "another-document" });
+  assert.equal((await consumer(fake.state, undefined, () => true).consume(event("evt-wrong-document", "eval-wrong-document", wrongDocument))).status, "wrong-scope");
+  const wrongCategory = Object.freeze({ ...v2, category: Object.freeze({ ...v2.category, id: "another-category" }) });
+  assert.equal((await consumer(fake.state, undefined, () => true).consume(event("evt-wrong-category", "eval-wrong-category", wrongCategory))).status, "wrong-scope");
+  const wrongSource = Object.freeze({ ...v2, category: Object.freeze({ ...v2.category, sourceId: "another-source" }) });
+  assert.equal((await consumer(fake.state, undefined, () => true).consume(event("evt-wrong-source", "eval-wrong-source", wrongSource))).status, "wrong-scope");
+
+  const applied = await consumer(fake.state, undefined, () => true).consume(event("evt-trusted-v2", "eval-v2", v2));
+  assert.equal(applied.status, "applied");
+  if (applied.status === "applied") {
+    assert.equal(applied.state.identity.category.mappingVersion, "mapping-v2");
+    assert.equal(applied.state.cursor, 1);
+    assert.deepEqual(applied.state.approval, stateV1.approval);
+    assert.equal(applied.state.bodyRef, stateV1.bodyRef);
+    assert.deepEqual(applied.state.historyRefs, stateV1.historyRefs);
+  }
+});
+
+test("Host consumer rejects partially present category mappings even when the verifier returns true", async () => {
+  const fake = host();
+  const initial = initialState();
+  const service = consumer(fake.state);
+  assert.equal((await service.initialize(initial)).status, "ready");
+  const [key] = fake.keyReads;
+  const before = structuredClone(fake.values.get(key.stateKey));
+  let verifierCalls = 0;
+  const partialIdentity: DocumentIdentity = Object.freeze({ ...identity, category: Object.freeze({
+    id: "category-1", sourceId: "category-source", mappingType: "workstream", mappingVersion: "mapping-v1", mappingEvidenceRef: null,
+  }) });
+  const trusted = createFreshnessHostConsumer({ identity, state: fake.state, verifyEvaluation() {
+    verifierCalls += 1;
+    return true;
+  } });
+
+  const result = await trusted.consume(event("evt-partial-mapping", "eval-partial", partialIdentity));
+  assert.equal(result.status, "evaluation-unverified");
+  assert.equal(verifierCalls, 0);
+  assert.deepEqual(fake.values.get(key.stateKey), before);
+  const read = await trusted.read();
+  assert.equal(read.status, "ready");
+  if (read.status === "ready") {
+    assert.equal(read.state.cursor, 0);
+    assert.deepEqual(read.state.approval, initial.approval);
+    assert.equal(read.state.bodyRef, initial.bodyRef);
+    assert.deepEqual(read.state.historyRefs, initial.historyRefs);
+  }
+});
+
+test("legacy evaluation category mismatch is corrupt instead of being silently normalized", async () => {
+  const fake = host();
+  const service = consumer(fake.state);
+  await service.read();
+  const [key] = fake.keyReads;
+  const legacyCategory = { id: "category-1", sourceId: "category-source", sourceRevisionId: "category-r1",
+    scope: { id: "scope-1", revisionId: "scope-r1", approval: "approved", evidenceRef: "old-approval" },
+    allowedCategoryIds: ["category-1"], listCompleteness: "complete", listEvidenceRef: "old-list" };
+  const otherCategory = { ...legacyCategory, id: "different-category", allowedCategoryIds: ["different-category"] };
+  const row = initialState();
+  const raw: JsonValue = { schemaVersion: 1, workspaceId, projectId: "project-1", documentId: "document-1",
+    state: { ...row, identity: { ...identity, category: legacyCategory }, freshness: { ...row.freshness,
+      identity: { ...identity, category: otherCategory } } } as unknown as JsonValue };
+  fake.values.set(key.stateKey, raw);
+  assert.equal((await service.read()).status, "corrupt-state");
+  assert.deepEqual(fake.values.get(key.stateKey), raw);
 });
 
 test("oversized consumer state is rejected before any Host CAS write", async () => {

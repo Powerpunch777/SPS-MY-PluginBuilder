@@ -61,23 +61,52 @@ function stringList(value: unknown, label: string): readonly string[] {
   return Object.freeze(result);
 }
 
+const CATEGORY_FIELDS = ["id", "sourceId", "mappingType", "mappingVersion", "mappingEvidenceRef"] as const;
+const LEGACY_CATEGORY_FIELDS = ["id", "sourceId", "sourceRevisionId", "scope", "allowedCategoryIds", "listCompleteness", "listEvidenceRef"] as const;
+
+function categoryIdentity(value: unknown, label: string): Readonly<{
+  id: string; sourceId: string; mappingType: string | null; mappingVersion: string | null; mappingEvidenceRef: string | null;
+}> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`Invalid ${label}.`);
+  const keys = Reflect.ownKeys(value);
+  let mappingType: string | null = null, mappingVersion: string | null = null, mappingEvidenceRef: string | null = null;
+  let category: Record<string, unknown>;
+  if (keys.some(key => key === "scope")) {
+    category = record(value, LEGACY_CATEGORY_FIELDS, label);
+    identifier(category.sourceRevisionId, `${label}.sourceRevisionId`);
+    const scope = record(category.scope, ["id", "revisionId", "approval", "evidenceRef"], `${label}.scope`);
+    identifier(scope.id, `${label}.scope.id`); identifier(scope.revisionId, `${label}.scope.revisionId`);
+    if (scope.approval !== "approved" && scope.approval !== "unknown") throw new TypeError(`Invalid ${label} legacy approval.`);
+    if (scope.evidenceRef !== null) identifier(scope.evidenceRef, `${label}.scope.evidenceRef`);
+    const allowed = stringList(category.allowedCategoryIds, `${label}.allowedCategoryIds`);
+    if (!allowed.includes(category.id as string) || category.listCompleteness !== "complete" && category.listCompleteness !== "unknown") {
+      throw new TypeError(`Invalid ${label} legacy category list.`);
+    }
+    if (category.listEvidenceRef !== null) identifier(category.listEvidenceRef, `${label}.listEvidenceRef`);
+  } else {
+    category = record(value, CATEGORY_FIELDS, label);
+    mappingType = nullableIdentifier(category.mappingType, `${label}.mappingType`);
+    mappingVersion = nullableIdentifier(category.mappingVersion, `${label}.mappingVersion`);
+    mappingEvidenceRef = nullableIdentifier(category.mappingEvidenceRef, `${label}.mappingEvidenceRef`);
+    if ([mappingType, mappingVersion, mappingEvidenceRef].some(item => item !== null)
+      && [mappingType, mappingVersion, mappingEvidenceRef].some(item => item === null)) {
+      throw new TypeError(`Incomplete ${label} mapping.`);
+    }
+  }
+  return Object.freeze({ id: identifier(category.id, `${label}.id`), sourceId: identifier(category.sourceId, `${label}.sourceId`),
+    mappingType, mappingVersion, mappingEvidenceRef });
+}
+
+function nullableIdentifier(value: unknown, label: string): string | null {
+  return value === undefined || value === null ? null : identifier(value, label);
+}
+
 function validateState(value: unknown, scope: Readonly<{ workspaceId: string; projectId: string; documentId: string }>): FreshnessConsumerState {
   const row = record(value, ["identity", "cursor", "evaluationId", "freshness", "approval", "bodyRef", "historyRefs", "processedEventIds", "processedEvents"], "freshness consumer state");
   const identity = record(row.identity, ["workspaceId", "projectId", "documentId", "category"], "document identity");
-  const category = record(identity.category, ["id", "sourceId", "sourceRevisionId", "scope", "allowedCategoryIds", "listCompleteness", "listEvidenceRef"], "category identity");
-  const categoryScope = record(category.scope, ["id", "revisionId", "approval", "evidenceRef"], "category scope");
-  const categoryId = identifier(category.id, "category ID");
-  identifier(category.sourceId, "category source ID");
-  identifier(category.sourceRevisionId, "category source revision ID");
-  identifier(categoryScope.id, "category scope ID");
-  identifier(categoryScope.revisionId, "category scope revision ID");
-  if (categoryScope.approval !== "approved" && categoryScope.approval !== "unknown") throw new TypeError("Invalid category scope approval.");
-  if (categoryScope.evidenceRef !== null) identifier(categoryScope.evidenceRef, "category scope evidence reference");
-  const allowedCategoryIds = stringList(category.allowedCategoryIds, "allowed category IDs");
-  if (!allowedCategoryIds.includes(categoryId) || category.listCompleteness !== "complete" && category.listCompleteness !== "unknown") {
-    throw new TypeError("Invalid category identity.");
-  }
-  if (category.listEvidenceRef !== null) identifier(category.listEvidenceRef, "category list evidence reference");
+  const category = categoryIdentity(identity.category, "category identity");
+  const categoryId = category.id;
+  const hasCategoryMapping = category.mappingType !== null && category.mappingVersion !== null && category.mappingEvidenceRef !== null;
   const workspaceId = identifier(identity.workspaceId, "workspace ID");
   const projectId = identifier(identity.projectId, "project ID");
   const documentId = identifier(identity.documentId, "document ID");
@@ -96,6 +125,8 @@ function validateState(value: unknown, scope: Readonly<{ workspaceId: string; pr
     throw new TypeError("Invalid freshness causes.");
   }
   const causes = [...new Set(causeValues as FreshnessCause[])];
+  if (!hasCategoryMapping && !causes.includes("category-unverified")) causes.push("category-unverified");
+  const normalizedStatus = hasCategoryMapping ? freshness.status : "UNKNOWN";
   const changedSourceIds = stringList(freshness.changedSourceIds, "changed source IDs");
   if (freshness.traceDocumentRevisionId !== null) identifier(freshness.traceDocumentRevisionId, "trace document revision ID");
   const approval = record(row.approval, ["status", "evidenceRef"], "approval record");
@@ -114,24 +145,16 @@ function validateState(value: unknown, scope: Readonly<{ workspaceId: string; pr
     || processedEvents.some((event, index) => event.eventId !== processedEventIds[index])) throw new TypeError("Processed event indexes disagree.");
   // Rebuild from parsed JSON so no mutable Host object aliases escape.
   const normalizedIdentity: DocumentIdentity = Object.freeze({ workspaceId, projectId, documentId, category: Object.freeze({
-    id: categoryId, sourceId: category.sourceId as string, sourceRevisionId: category.sourceRevisionId as string,
-    scope: Object.freeze({ id: categoryScope.id as string, revisionId: categoryScope.revisionId as string,
-      approval: categoryScope.approval, evidenceRef: categoryScope.evidenceRef as string | null }),
-    allowedCategoryIds, listCompleteness: category.listCompleteness, listEvidenceRef: category.listEvidenceRef as string | null,
+    ...category,
   }) });
   const evaluationIdentity = record(freshness.identity, ["workspaceId", "projectId", "documentId", "category"], "evaluation identity");
-  const evalCategory = record(evaluationIdentity.category, ["id", "sourceId", "sourceRevisionId", "scope", "allowedCategoryIds", "listCompleteness", "listEvidenceRef"], "evaluation category identity");
-  const evalScope = record(evalCategory.scope, ["id", "revisionId", "approval", "evidenceRef"], "evaluation category scope");
+  const evalCategory = categoryIdentity(evaluationIdentity.category, "evaluation category identity");
   if (evaluationIdentity.workspaceId !== workspaceId || evaluationIdentity.projectId !== projectId || evaluationIdentity.documentId !== documentId
-    || evalCategory.id !== categoryId || evalCategory.sourceId !== category.sourceId || evalCategory.sourceRevisionId !== category.sourceRevisionId
-    || evalScope.id !== categoryScope.id || evalScope.revisionId !== categoryScope.revisionId || evalScope.approval !== categoryScope.approval
-    || evalScope.evidenceRef !== categoryScope.evidenceRef || evalCategory.listCompleteness !== category.listCompleteness
-    || evalCategory.listEvidenceRef !== category.listEvidenceRef
-    || JSON.stringify(evalCategory.allowedCategoryIds) !== JSON.stringify(allowedCategoryIds)) throw new TypeError("Evaluation identity does not match the persisted document identity.");
+    || JSON.stringify(evalCategory) !== JSON.stringify(category)) throw new TypeError("Evaluation identity does not match the persisted document identity.");
   return Object.freeze({ identity: normalizedIdentity, cursor: row.cursor as number, evaluationId,
     freshness: Object.freeze({ identity: normalizedIdentity,
       evaluatedAgainst: Object.freeze({ oldRevisionId: evaluatedAgainst.oldRevisionId as string, newRevisionId: evaluatedAgainst.newRevisionId as string }),
-      status: freshness.status, causes: Object.freeze(causes), changedSourceIds,
+      status: normalizedStatus, causes: Object.freeze(causes), changedSourceIds,
       traceDocumentRevisionId: freshness.traceDocumentRevisionId as string | null }),
     approval: Object.freeze({ status: approval.status as FreshnessConsumerState["approval"]["status"], evidenceRef: approval.evidenceRef as string | null }),
     bodyRef: row.bodyRef as string | null, historyRefs, processedEventIds, processedEvents: Object.freeze(processedEvents) });
@@ -212,6 +235,9 @@ export function createFreshnessHostConsumer(input: Readonly<{
         if (loaded.read.status !== "ready") return Object.freeze({ status: loaded.read.status, state: lastState });
         const current = loaded.read.state;
         lastState = current;
+        // Decoding a legacy category is read-only normalization. Its null mapping is
+        // replaced durably only by a verifier-approved transition below, in the same CAS
+        // that advances the event cursor and preserves approval/body/history references.
         const transition = consumeFreshnessEvent(current, event, input.verifyEvaluation);
         if (transition.status !== "applied") return transition;
         let value: JsonValue;
@@ -222,7 +248,10 @@ export function createFreshnessHostConsumer(input: Readonly<{
         }
         try {
           const receipt = await input.state.compareAndSet(key, { exists: true, value: loaded.raw! }, value);
-          if (receipt?.swapped === true) return Object.freeze({ status: "applied", state: transition.state });
+          if (receipt?.swapped === true) {
+            // Return the exact state represented by the committed Host envelope.
+            return Object.freeze({ status: "applied", state: decode(value) });
+          }
         } catch { /* Retry only through the same event ID and exact CAS base; success is idempotently observed. */ }
       }
       const latest = await load();
