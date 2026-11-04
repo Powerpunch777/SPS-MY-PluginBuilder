@@ -208,3 +208,20 @@ Lead Main은 전체 제품의 승인 설계·QA 증거·산출물과 패킷 및 
 ---
 **변경 이력:** 2026-11-04 — CTO의 검증 완료 체크포인트 기반 wake, Integration Manager/Lead Integration Review 2개 논리 세션 추가, 기술·정책 이슈 분리, 완료/통합 상태 분리, Final Integration Packet 및 AC-INT-01~16 추가.
 2026-11-05 — 기존 Integration Review에 사용자용 최종 검토·승인 페이지 연결, Main G7 적격 후보의 불변 요청·사용자 전용 조치·기존 문서/Revision 재사용 및 변경본 재승인 경계 명시. AC-APP-01~14는 별도 추가안과 통합 추적표로 관리한다.
+
+## 11. 범용 권한·Host 사전 위임 확정
+
+2026-11-05 사용자가 [역할 권한·범용 위임 추가안](SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md)을 확정했다.
+Builder는 업무 역할·템플릿, Core는 범용 기술 권한의 발급·검증·철회, Host 관리자는 범위별
+자동 실행 위임, 사용자는 제품·계약·가격·최종 납품 결정을 소유한다. Manager 전용 Core 예외는 만들지 않는다.
+
+사전 승인된 Host/Workspace/Plugin/역할/Node/Runner에서 Manager는 별도 Agent 등록/CLI 계정 없이
+기존 적격 공용 풀로 실행하되 Lead와 Agent·설정·권한·세션·기록은 분리한다. 위임은 실행만
+허용하고 Git/파일/CI/일반 Node 관리/사용자 승인 권한을 자동 부여하지 않는다. 검증 CTO 이벤트와
+현재 통합 계약·기술 권한을 별도 검증한다. 만료·철회·한도·이력 및 실제 진행 실행의 취소/종료를 관리한다.
+
+기본 역할·작업 임시·Host 위임·사용자 승인을 구분하며 정상 범위는 반복 승인 없이 실행한다.
+범위 확대·교차 Workspace·보호 자원·사용자 고유 결정은 위임으로 우회하지 못한다. QA의 명시된
+테스트/설정 수정은 독립성·대상 버전·증거 무조작을 유지한다. Core API 검사만으로 OS 파일/프로세스/
+Secret 격리를 주장하지 않는다. 기존 실제 계약 재사용과 중립 확장·호환성 확인이 필요하며 아직
+없는 기능이나 paused Agent를 실제 실행/보호 완료로 해석하지 않는다.

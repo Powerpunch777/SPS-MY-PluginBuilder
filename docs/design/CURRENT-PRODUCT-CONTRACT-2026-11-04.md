@@ -3,11 +3,11 @@
 기준일: 2026-11-05. 사용자 확정 결정을 통합한 현행 제품 기준이다.
 새 정책을 승인하거나 구현·테스트 완료를 선언하는 문서는 아니다.
 원래 v15·UI v9·CSAS v0.8의 비충돌 요구는 그대로 유지한다.
-문서센터·최신성 보완 v1.1, 통합 담당 추가 설계(2026-11-04), 최종 검토·승인 페이지 추가안(2026-11-05)과 이후 사용자 확정 결정을 함께 적용한다.
+문서센터·최신성 보완 v1.1, 통합 담당 추가 설계(2026-11-04), 최종 검토·승인 및 범용 권한·Host 사전 위임 추가안(2026-11-05)과 이후 사용자 확정 결정을 함께 적용한다.
 
 ## 1. 읽는 순서와 제품 경계
 
-제품 목표는 사용자 최신 결정, 이 통합 계약, [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
+제품 목표는 사용자 최신 결정, 이 통합 계약, [범용 권한·Host 사전 위임 추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md), [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
 CSAS v0.8의 유효 조항, v15의 비충돌 조항 순으로 해석한다.
 실제 구현 가능성과 보안 권한은 별도로 현재 Core/SDK 계약에서 검증한다.
 기술 미지원은 제품 요구를 삭제하는 근거가 아니며, 미지원/미검증으로 기록한다.
@@ -223,6 +223,30 @@ Artifact/Revision을 참조·미리보기하고 복제된 정본이나 독립 �
 
 추가 인수 기준 AC-APP-01~14는 기존 추적표에 통합한다. 예시 상태명·필드명을 정식
 스키마나 구현 완료로 간주하지 않으며, 기존 납품/Revision 저장 기능의 확장을 우선한다.
+
+### 5.5 역할 정책과 범용 기술 권한·Host 사전 위임
+
+2026-11-05 사용자 확정에 따라 Builder는 업무 역할과 권한 템플릿을 정의하고, Core는
+Agent/CLI/Runner/파일/프로세스/Secret/Node/Workspace·Artifact/네트워크의 범용 기술 권한을
+발급·검증·관리·철회한다. Core에 Builder 전용 역할이나 Manager 예외 권한을 하드코딩하지 않는다.
+[추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md)의
+역할별 책임과 기본 권한·작업 임시 권한·Host 사전 위임·사용자 전용 승인을 모두 적용한다.
+
+Host 관리자가 승인한 Host/Workspace/Plugin/역할/Node/Runner 범위에서는 독립 Manager가
+Agent별 수동 등록·새 CLI 계정 없이 실행한다. 실제 적격 인증 풀 배정은 Core가 맡으며
+인증정보를 노출하지 않는다. 위임은 Agent 실행만 허용하고 파일/Git/CI/일반 Node 관리나
+납품 승인 권한을 함께 주지 않는다. 승인 CTO 완료 이벤트·통합 계약과 현재 별도 권한을 검증한다.
+만료·철회·동시 실행 한도·이력을 관리하고, 신규 차단과 실제 진행 실행 취소/종료를 구분한다.
+
+권한은 실제 Workspace/Plugin/주체/대상 자원/작업 범위/기간에 결속한다. 정상 승인 범위의
+반복 요청은 없애되 범위 확대·다른 Workspace·보호 자원 변경·사용자 전용 결정은 우회할 수 없다.
+QA Worker의 명시된 테스트/설정 수정은 허용하되 검증 독립성·실제 대상 결속·결과 무조작을 유지한다.
+Main 공식 발행 및 사용자 제품·계약·가격·최종 납품 결정 경계는 그대로 유지한다.
+
+기존 실제 Core/SDK 계약을 우선 재사용하고 필요한 중립 확장과 호환성을 별도로 보고한다.
+설계 승인을 runtime Host 관리자 Grant나 구현 완료로 바꾸지 않는다. API/Workspace 검사만으로
+CLI의 OS 파일·프로세스·Secret 격리가 보장되지 않으며 실제 OS 통제/샌드박스 검증이 필요하다.
+기존 216개 원문 AC는 유지하고 추가 정책은 추적표의 파생 검증 overlay로 관리한다.
 
 ## 6. CSAS와 G0~G7
 

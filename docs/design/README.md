@@ -1,7 +1,7 @@
 # SPS Plugin Builder — 설계·기술 조사·UI 묶음
 
 - **현재 제품 기준은 [통합 제품 계약](CURRENT-PRODUCT-CONTRACT-2026-11-04.md)을 먼저 읽는다.**
-  v15·CSAS v0.8·상담 개정·문서센터 v1.1·통합 담당·최종 검토·승인 페이지 추가 설계와 후속 사용자 결정을 통합한다.
+  v15·CSAS v0.8·상담 개정·문서센터 v1.1·통합 담당·최종 검토·승인·범용 권한과 후속 사용자 결정을 통합한다.
   Lead 6세션과 별도 Integration Manager, 레거시 전환 제외, 실시간 수집/명시 분석,
   G0~G7 및 선택형 Shell 경계를 한곳에서 확인한다.
   옛 문서의 비충돌 요구와 역사 근거는 보존하며 이 링크가 구현 완료를 뜻하지 않는다.
@@ -18,6 +18,12 @@
 
 ## 최신 확정 개정
 
+- [범용 권한·Host 사전 위임 (2026-11-05)](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md):
+  Builder가 업무 역할/템플릿, Core가 범용 기술 권한/강제, Host 관리자가 실행 범위/위임,
+  사용자가 최종 사업적 결정을 소유한다. 역할 기본·작업 임시·사전 위임·사용자 승인을 분리하고
+  독립 Manager의 공용 풀 실행과 만료/철회/한도/실제 종료를 검증한다. Core 역할 하드코딩이나
+  권한 자동 확대는 금지하며, API 검사와 OS 격리는 별개다. 기존 원문 AC 216개를 유지하고
+  이 결정에서 도출한 POLICY-AUTH-01~14는 별도 overlay의 NOT_RUN 검사로 추적한다.
 - [Lead 최종 검토·승인 페이지 (2026-11-05)](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md):
   기존 Integration Review에 좌측 Lead 영역의 사용자 승인 페이지를 연결한다.
   Lead 6세션·별도 Manager를 유지하며 새 Agent/중복 승인 DB를 추가하지 않는다.
