@@ -3,6 +3,18 @@
 2026-11-01 사용자 결정. 통합 설계 v15와 HTML UI v9를 대체하지 않고, 실제
 제품에 적용할 시각 기준과 예외를 명시한다.
 
+## 2026-11-04 통합 상태 표시와 내부 세션
+
+[현행 제품 계약](../CURRENT-PRODUCT-CONTRACT-2026-11-04.md)과
+[통합 담당 추가 설계](../01_Design/SPS_Builder_Integration_Design_20261104.md)를 함께 적용한다.
+Lead는 Integration Review를 포함한 6개 논리 세션이고 Integration Manager는 별도다.
+이 결정이 7개 사용자 채팅 메뉴나 상주 AI를 요구하지 않는다. 기존 Main·UI Design·
+미결정사항 진입과 검정·중립 회색을 보존한다. 설계 시각화에는 CTO 검증 상태와 통합
+상태를 따로 표시하고 Revision·QA·commit/artifact·보류 원인·담당·다음 조치로 연결한다.
+통합 보류로 과거 QA를 지우지 않으며 무효가 확인된 근거는 재검증 필요로 구분한다.
+문서센터는 통합 시도·이슈·결정·E2E·Final Integration Packet을 정식 원본에서 조회한다.
+실제 연결 전에는 상태/wake/실행을 시연 데이터로 완료처럼 표시하지 않는다.
+
 ## 2026-11-02 플랫폼 경계 우선순위
 
 2026-11-02 최신 Core–Plugin 설계 기준은 이 날짜 이전의 UI 배치 문구보다 우선한다.

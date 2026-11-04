@@ -1,11 +1,12 @@
 # SPS Plugin Builder — 설계·기술 조사·UI 묶음
 
 - **현재 제품 기준은 [통합 제품 계약](CURRENT-PRODUCT-CONTRACT-2026-11-04.md)을 먼저 읽는다.**
-  v15·CSAS v0.8·상담 개정·문서센터 v1.1·후속 사용자 결정을 통합한다. 5세션, 레거시 전환 제외,
-  실시간 수집/명시 분석, G0~G7 및 선택형 Shell 경계를 한곳에서 확인한다.
+  v15·CSAS v0.8·상담 개정·문서센터 v1.1·통합 담당 추가 설계·후속 사용자 결정을 통합한다.
+  Lead 6세션과 별도 Integration Manager, 레거시 전환 제외, 실시간 수집/명시 분석,
+  G0~G7 및 선택형 Shell 경계를 한곳에서 확인한다.
   옛 문서의 비충돌 요구와 역사 근거는 보존하며 이 링크가 구현 완료를 뜻하지 않는다.
-- [현행 인수 기준 추적표](AC-TRACE-2026-11-04.md): v15 118 + CSAS 44 + 상담 8 + 문서센터 16의
-  원문 정의 186개를 소스 해시와 함께 추적한다. 레거시 6개는 제외이며, 정의 수는
+- [현행 인수 기준 추적표](AC-TRACE-2026-11-04.md): v15 118 + CSAS 44 + 상담 8 + 문서센터 16 + 통합 16의
+  원문 정의 202개를 소스 해시와 함께 추적한다. 레거시 6개는 제외이며, 정의 수는
   합격 개수나 서로 독립된 요구 개수가 아니다. 실제 AC 전체 인수 상태는 별도로 갱신한다.
 - `01_Design/`: 최신 통합 설계서 v15 (Lead/CTO/Worker/QA 및 기술 선정 반영)
 - `02_Tech_Research/`: 기술 스택 조사·선정 근거
@@ -17,6 +18,12 @@
 
 ## 최신 확정 개정
 
+- [Integration Manager·Lead Integration Review (2026-11-04)](01_Design/SPS_Builder_Integration_Design_20261104.md):
+  사용자 직접 확정과 함께 적용한다. Lead 6번째 Integration Review와 별도 Manager,
+  CTO VERIFIED/통합 상태 분리, 지속 이벤트·중복 방지·부분 통합, 기술 오류 CTO 환류와
+  설계 충돌 Review 경로, Final Integration Packet과 Main 최종 점검·사용자 납품 구성
+  확정이다. 원문 `초안` 표시는 책임/라우팅 결정을 미정으로 되돌리지 않는다.
+  AC-INT-01~16을 NOT_RUN으로 추가했으며 임시 CAO에 새 AI Lead를 만드는 지시가 아니다.
 - [Project Document Center·최신성 보완 v1.1 (2026-11-04)](01_Design/SPS_Builder_Project_Document_Center_and_Freshness_Addendum_v1.1_2026-11-04.md):
   좌측 `문서`와 중앙 문서센터, 통합 기준선·상세 링크, 검색·필터·비교·Markdown,
   승인과 최신성의 분리, 영향 문서만 새 초안으로 갱신하는 계약이다. 새 AI 세션이나
@@ -26,7 +33,7 @@
 - [상담 Connector·명시적 분석·설계 변경관리 (2026-11-04)](01_Design/CONSULTATION-CONNECTOR-AND-CHANGE-CONTROL-2026-11-04.md):
   실시간 수집과 AI 분석을 분리한다. 사용자 명시 분석 후 초기 설계를 작성하고,
   최초 Baseline 이후 CR은 영향 분석·사용자 승인·새 Revision을 거친다.
-  v15 §2C의 수동 Batch-only 정책보다 우선하며 CSAS D3·Revision·G5·5세션에 적용한다.
+  v15 §2C의 수동 Batch-only 정책보다 우선하며 CSAS D3·Revision·G5·현행 Lead 세션에 적용한다.
   실제 플랫폼 Connector 제공·연동·구현 완료를 선언하는 문서는 아니다.
 
 ## 검토 중인 개정안

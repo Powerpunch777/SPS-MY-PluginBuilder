@@ -3,8 +3,12 @@
 > Current product policy is consolidated in
 > [the current product contract](../design/CURRENT-PRODUCT-CONTRACT-2026-11-04.md).
 > Historical three-session, Batch-only, or unconditional "not Primary" wording
-> below is not current policy. Five contexts, optional Host-governed Shell choice,
-> latest consultation/change control and explicit deferrals take precedence.
+> below is not current policy. Six Lead contexts plus a separate Integration
+> Manager, optional Host-governed Shell choice, latest consultation/change
+> control and explicit deferrals take precedence. CTO verification and project
+> integration are distinct; full integration/E2E precedes Main final review and
+> the user's exact delivery-version confirmation. See the 2026-11-04 integration
+> addendum and AC-INT-01 through AC-INT-16, which remain NOT_RUN until verified.
 > Historical tests and baseline labels are not present-source acceptance.
 
 ## 최신 목표와 현재 작업 범위 (2026-11-02)

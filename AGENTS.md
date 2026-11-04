@@ -7,3 +7,5 @@
 - 제품 범위와 화면은 [통합 설계 v15](docs/design/README.md)와 승인된 [UI 적용 기준](docs/design/03_UI/UI-IMPLEMENTATION-CONTRACT-2026-11-01.md)을 따른다. UI v9 구조를 유지하고, 검정·중립 회색 스타일은 Builder 플러그인 영역에만 적용한다.
 - 비공개 Core 코드를 이 저장소에 복사하지 않는다. Core/SDK의 허용된 API 경계를 우회하지 않는다.
 - 연결되지 않은 기능을 실제처럼 꾸민 UI, 세션, 실행, 완료·검증 상태로 표현하지 않는다. 기능이나 계약이 없으면 미연결 또는 사용 불가 상태로 분명히 둔다.
+- 현행 통합 제품 계약을 먼저 읽는다. Lead는 Integration Review를 포함한 6개 논리 세션이며, Integration Manager는 별도 프로젝트 논리 세션이다. 옛 3/5세션 문구보다 최신 사용자 결정을 우선하고 임시 CAO 개발 조직을 제품 실행 엔진으로 복제하지 않는다.
+- CTO VERIFIED와 통합 상태·과거 QA 이력은 분리한다. 검증 완료 이벤트는 Manager로, 기술 오류는 CTO로, 설계/교차 계약 충돌은 Integration Review로 보낸다. 전체 통합/E2E 이후 Main이 최종 점검·납품 초안을 준비하며 사용자가 정확한 납품 버전을 확정한다.
