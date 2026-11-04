@@ -82,6 +82,7 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
       },
       onRefresh() {},
       onImportConsultation: async () => {},
+      onImportConsultationBatch: async () => {},
       onOpenHtmlPreview() {},
     };
     const html = renderToStaticMarkup(createElement(BuilderShell, props));

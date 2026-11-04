@@ -19,6 +19,7 @@ import { invalidateLiveScopeOnCleanup, resumePreparedMessageInScope } from "./pr
 export function BuilderPage() {
   const context = useHostContext();
   const state = usePluginData<unknown>("builder.snapshot");
+  const consultationBatchesData = usePluginData<unknown>("builder.consultation-batches");
   const lead = usePluginData<unknown>("builder.lead-agents");
   const logicalContexts = usePluginData<unknown>("builder.lead-contexts");
   const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
@@ -38,8 +39,8 @@ export function BuilderPage() {
   const selectLead = usePluginAction<{ agentId: string | null; expectedRevision: number }, { saved: boolean; executionStarted: boolean }>("builder.select-lead-agent");
   const prepareLeadContexts = usePluginAction<{ agentId: string; expectedRevision: number; requestId: string },
     { saved: boolean; requestId: string; status: "ready"; contextsReady: true }>("builder.prepare-lead-contexts");
-  const importText = usePluginAction<{ requestId: string; text: string }, { saved: boolean; analysisStarted: boolean }>("builder.import-consultation");
-  const pending = useRef<{ workspaceId: string; text: string; requestId: string } | null>(null);
+  const confirmBatch = usePluginAction<{ id: string; sourceName: string; text: string; fromLine: number; throughLine: number; allowDuplicate: boolean },
+    { saved: boolean; analysisStarted: boolean; sourceId: string; sha256: string; status: "incomplete" }>("builder.confirm-consultation-batch");
   const pendingMessage = useRef<{ workspaceId: string; channel: LeadConversationId; text: string; questionContext: QuestionContext | null; requestId: string } | null>(null);
   const liveScope = useRef<{ key: string; token: object } | null>(null);
   const current = useMemo(() => {
@@ -261,14 +262,11 @@ export function BuilderPage() {
       } finally { logicalContexts.refresh(); }
     }}
     loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? ctoQuestionsView.error ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); lead.refresh(); logicalContexts.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
-      if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
-      if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
-        pending.current = { workspaceId, text, requestId: crypto.randomUUID() };
-      }
-      const result = await importText({ requestId: pending.current.requestId, text });
-      if (result.saved !== true || result.analysisStarted !== false) throw new Error("Unexpected consultation import result.");
-      pending.current = null;
-      state.refresh();
+    consultationBatches={Array.isArray(consultationBatchesData.data) ? consultationBatchesData.data as import("../consultation-import/batch.ts").ConsultationBatchSummary[] : []}
+    onRefresh={() => { state.refresh(); consultationBatchesData.refresh(); lead.refresh(); logicalContexts.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultationBatch={async input => {
+      if (state.loading || state.error || current.error || !context.companyId) throw new Error("Workspace data is not ready.");
+      const result = await confirmBatch(input);
+      if (result.saved !== true || result.analysisStarted !== false || result.status !== "incomplete") throw new Error("Unexpected consultation Batch result.");
+      state.refresh(); consultationBatchesData.refresh();
     }} />;
 }

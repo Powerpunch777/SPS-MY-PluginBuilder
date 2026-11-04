@@ -9,6 +9,7 @@ import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
 import { DesignDraftSummary } from "./DesignDraftSummary.tsx";
+import { ConsultationBatchImport } from "./ConsultationBatchImport.tsx";
 import { leadSendFailureMessage } from "../lead-send-feedback.ts";
 import { performConversationControlAction } from "./prepared-message-resume.ts";
 import { isNearTranscriptBottom, transcriptScrollAction, type TranscriptPage } from "./transcript-scroll.ts";
@@ -283,7 +284,7 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
         <div className="builder-header-actions">
           {actions}<span className="builder-agent-dot">{actor ? actorInitial(actor) : "LEAD"}</span>
           <span className={`builder-lead-status${enabled ? " is-ready" : ""}`}>{actor ? "읽기 전용" : enabled ? "전송 준비됨" : props.conversation?.active ? "실행 확인 중" : "미연결"}</span>
-          {!readOnly && props.onImportConsultation && <button aria-expanded={importOpen} aria-label="상담 텍스트 가져오기" className="builder-icon-button" onClick={() => setImportOpen(open => !open)} type="button"><Upload /><span className="builder-refresh-label">상담 가져오기</span></button>}
+          {!readOnly && props.onImportConsultationBatch && <button aria-expanded={importOpen} aria-label="상담 텍스트 가져오기" className="builder-icon-button" onClick={() => setImportOpen(open => !open)} type="button"><Upload /><span className="builder-refresh-label">상담 가져오기</span></button>}
           <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">작업 기록</span></button>
         </div>
       </div>
@@ -292,7 +293,7 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
       {!readOnly && <ConversationControls channel={channel} props={props} />}
       <MessageList actor={actor} messages={messages} followLatest={Boolean(actor) || !props.conversationHasNewer} />
       {readOnly ? <div className="builder-composer-note" style={{ padding: 13 }}>이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.</div> : <>
-        {importOpen && props.onImportConsultation && <ConsultationImport onImport={props.onImportConsultation} />}
+        {importOpen && props.onImportConsultationBatch && <ConsultationBatchImport batches={props.consultationBatches} onConfirm={props.onImportConsultationBatch} />}
         <MessageComposer channel={channel} enabled={enabled} onSend={props.onSendMessage} />
       </>}
     </section>

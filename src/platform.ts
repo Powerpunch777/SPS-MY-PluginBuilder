@@ -35,6 +35,7 @@ import { createLeadMemoryStore } from "./lead-memory-store.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { parseDesignDraft } from "./domain/design-drafts.ts";
 import { createDesignDraftStore, type AuthoredDesignDraft } from "./design-draft-store.ts";
+import { MAX_CONSULTATION_BATCHES, previewConsultationBatch, readConsultationBatches, saveConsultationBatch, validateBatchInput } from "./consultation-import/batch.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -96,6 +97,28 @@ export async function importConsultation(companyId: string, params: Record<strin
     await platform.state.set(key(companyId), validated as unknown as JsonValue);
     return { saved: true, analysisStarted: false, revision: validated.revision };
   });
+}
+
+export async function confirmConsultationBatch(companyId: string, input: unknown, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  if (typeof platform.state.compareAndSet !== "function") {
+    throw new Error("Unsupported Host: atomic state.compareAndSet is required for consultation Batch storage; no Main source was imported.");
+  }
+  const batch = validateBatchInput(input);
+  const preview = previewConsultationBatch(batch);
+  const previous = await readConsultationBatches(companyId, platform);
+  if (previous.length >= MAX_CONSULTATION_BATCHES && !previous.some(item => item.id === batch.id)) {
+    throw new Error("Workspace Batch index is full; no Main source was imported and no new Batch was published.");
+  }
+  if (previous.some(item => item.id !== batch.id && item.sha256 === preview.sha256) && !batch.allowDuplicate) {
+    throw new Error("같은 원문 해시의 Batch가 있습니다. 중복 저장 확인 후 다시 진행해 주세요.");
+  }
+  const saved = await saveConsultationBatch(companyId, { ...batch, createdAt: new Date().toISOString() }, `consultation-${batch.id}`, platform);
+  // Preserve the immutable source before attempting Main consumption. If Main
+  // persistence fails, the same ID and exact input can safely resume the import.
+  const result = await importConsultation(companyId, { requestId: batch.id, text: preview.selectedText }, platform);
+  return { saved: true, analysisStarted: false, sourceId: saved.sourceId, sha256: saved.sha256,
+    revision: result.revision, status: saved.status };
 }
 
 function leadAgentKey(companyId: string) {
@@ -855,6 +878,8 @@ export function createBuilderPlatform() {
       return await readUserCtoQuestions(companyId, params.projectId, platform) as unknown as JsonValue;
     } }, { key: "builder.snapshot", handler: async (params, platform) =>
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.consultation-batches", handler: async (params, platform) =>
+      await readConsultationBatches(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>
       await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-sessions", handler: async (params, platform) =>
@@ -887,7 +912,9 @@ export function createBuilderPlatform() {
       // Core includes its authorized companyId in action parameters. It is
       // envelope metadata, never a user-selected destination or domain field.
       return importConsultation(context.companyId, userActionInput(params, context), context);
-    } }, { key: "builder.select-lead-agent", handler: async (params, context) =>
+    } }, { key: "builder.confirm-consultation-batch", handler: async (params, context) =>
+      confirmConsultationBatch(context.companyId, userActionInput(params, context), context)
+    }, { key: "builder.select-lead-agent", handler: async (params, context) =>
       selectLeadAgent(context.companyId, userActionInput(params, context), context) },
     { key: "builder.prepare-lead-sessions", handler: async (params, context) =>
       prepareLeadSessions(context.companyId, userActionInput(params, context), context) },
