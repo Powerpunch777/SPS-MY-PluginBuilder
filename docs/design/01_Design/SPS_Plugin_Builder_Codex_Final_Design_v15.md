@@ -1,5 +1,9 @@
 # SPS Plugin Builder (Solution Builder) — Codex 최종 통합 설계 및 인수인계
 
+> **현행 통합 기준:** [현재 제품 계약](../CURRENT-PRODUCT-CONTRACT-2026-11-04.md)을
+> 먼저 따른다. 아래의 3세션·레거시 전환·상담 Batch-only 등 후속 결정과 충돌하는
+> 옛 조항은 현행 구현 지시가 아니다. 원문·ID는 역사와 비충돌 요구 추적을 위해 보존한다.
+
 > **2026-11-04 확정 개정:** 상담 수집·분석·Baseline 이후 변경관리는
 > [Connector·명시적 분석 개정](CONSULTATION-CONNECTOR-AND-CHANGE-CONTROL-2026-11-04.md)을 우선한다.
 > 아래 §2C의 수동 Batch-only/실시간 수집 비목표 및 AC-51의 상충 문구는 역사 정책이다.

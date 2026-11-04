@@ -1,5 +1,12 @@
 # Builder v15 Full Completion Plan
 
+> Current product policy is consolidated in
+> [the current product contract](../design/CURRENT-PRODUCT-CONTRACT-2026-11-04.md).
+> Historical three-session, Batch-only, or unconditional "not Primary" wording
+> below is not current policy. Five contexts, optional Host-governed Shell choice,
+> latest consultation/change control and explicit deferrals take precedence.
+> Historical tests and baseline labels are not present-source acceptance.
+
 ## 최신 목표와 현재 작업 범위 (2026-11-02)
 
 ### 프로젝트 CTO 등록 후속 기록
