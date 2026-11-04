@@ -109,6 +109,8 @@ export interface BuilderSnapshot {
 }
 
 export interface BuilderShellProps {
+  consultationBatches?: import("../consultation-import/batch.ts").ConsultationBatchSummary[];
+  onImportConsultationBatch?(input: { id: string; sourceName: string; text: string; fromLine: number; throughLine: number; allowDuplicate: boolean }): Promise<void>;
   designDraft?: import("./design-drafts.ts").DesignDraft | null;
   designDraftResolvedQuestionIds?: readonly string[];
   designDraftLoading?: boolean;
