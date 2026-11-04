@@ -8,6 +8,14 @@
   회색으로 적용한다. Core 테마와 구분하며, 미구현 기능은 위치를 유지하고
   사용 불가 상태로 표시한다. 임시 밝은 UI는 최종 기준이 아니다.
 
+## 최신 확정 개정
+
+- [상담 Connector·명시적 분석·설계 변경관리 (2026-11-04)](01_Design/CONSULTATION-CONNECTOR-AND-CHANGE-CONTROL-2026-11-04.md):
+  실시간 수집과 AI 분석을 분리한다. 사용자 명시 분석 후 초기 설계를 작성하고,
+  최초 Baseline 이후 CR은 영향 분석·사용자 승인·새 Revision을 거친다.
+  v15 §2C의 수동 Batch-only 정책보다 우선하며 CSAS D3·Revision·G5·5세션에 적용한다.
+  실제 플랫폼 Connector 제공·연동·구현 완료를 선언하는 문서는 아니다.
+
 ## 검토 중인 개정안
 
 - [명세 검증 G1~G6 통합 개정안 (2026-11-02)](proposals/SPECIFICATION-GATES-INTEGRATION-DRAFT-2026-11-02.md)
