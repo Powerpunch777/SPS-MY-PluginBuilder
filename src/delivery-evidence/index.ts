@@ -9,6 +9,10 @@ import type {
 import type { SpsAgentSessionRunResult } from "@sonparkserver/plugin-sdk/platform";
 import type { CtoDelivery } from "../domain/cto-deliveries.ts";
 import type { TaskPacketRecord } from "../domain/task-packets.ts";
+import { createCtoDeliveryStore, workstreamInstructionDigest } from "../cto-delivery-store.ts";
+import { createTaskPacketStore } from "../task-packet-tools.ts";
+import type { RevisionState } from "../solution-revision-store.ts";
+import type { SpsPlatformStateClient } from "@sonparkserver/plugin-sdk/platform";
 
 export type EvidenceStatus = "missing" | "not-run" | "failed" | "passed" | "unknown";
 export type SourceRevision = Readonly<{ kind: "git-commit" | "source-manifest" | "other"; value: string }>;
@@ -79,6 +83,58 @@ export type DeliveryReceiptKey = Readonly<Pick<DeliveryReceipt,
 export interface DeliveryReceiptStore {
   record(receipt: DeliveryReceipt): Promise<void>;
   getForTask(key: DeliveryReceiptKey): Promise<DeliveryReceipt | null>;
+}
+
+export type PersistedPlanningLookup = Readonly<{
+  workspaceId: string;
+  projectId: string;
+  ctoId: string;
+  workstreamId: string;
+  taskId: string;
+  taskRevision: number;
+  state: Pick<SpsPlatformStateClient, "get" | "compareAndSet">;
+}>;
+
+/**
+ * Reads the existing published Task Packet and CTO delivery journals. A match
+ * establishes planning provenance only; the current contracts contain no G4
+ * Worker dispatch receipt or artifact binding.
+ */
+export async function readPersistedPlanningRecords(input: PersistedPlanningLookup): Promise<Readonly<{
+  status: "matched" | "missing" | "mismatched";
+  packet: TaskPacketRecord | null;
+  delivery: CtoDelivery | null;
+  provenance: "builder-state-journals";
+  dispatchEvidence: "unavailable";
+}>> {
+  nonblank(input.workspaceId, "workspaceId");
+  nonblank(input.projectId, "projectId");
+  nonblank(input.ctoId, "ctoId");
+  nonblank(input.workstreamId, "workstreamId");
+  nonblank(input.taskId, "taskId");
+  if (!Number.isSafeInteger(input.taskRevision) || input.taskRevision < 1) throw new TypeError("taskRevision must be a positive safe integer.");
+  const state: RevisionState = { get: key => input.state.get(key), compareAndSet: input.state.compareAndSet
+    ? (key, expected, value) => input.state.compareAndSet!(key, expected, value) : undefined };
+  const [packetBoard, currentDelivery] = await Promise.all([
+    createTaskPacketStore(input.workspaceId, input.projectId, input.ctoId, input.workstreamId, state).current(),
+    createCtoDeliveryStore(input.workspaceId, input.projectId, input.ctoId, state).current(),
+  ]);
+  const packet = packetBoard?.revision.packets.find(row => row.packet.taskId === input.taskId
+    && row.packet.revision === input.taskRevision) ?? null;
+  const otherTaskRevisionExists = packetBoard?.revision.packets.some(row => row.packet.taskId === input.taskId) ?? false;
+  const delivery = currentDelivery?.revision ?? null;
+  if (!packet || !delivery) return Object.freeze({ status: otherTaskRevisionExists || (packet !== null && delivery === null) ? "mismatched" : "missing",
+    packet, delivery, provenance: "builder-state-journals", dispatchEvidence: "unavailable" });
+  const linked = packet.packet.projectId === input.projectId && packet.packet.ctoId === input.ctoId
+    && packet.packet.workstreamId === input.workstreamId
+    && delivery.projectId === input.projectId && delivery.ctoId === input.ctoId
+    && delivery.instruction.spec.id === input.workstreamId
+    && packet.source.workstreamId === input.workstreamId
+    && packet.source.specRevision === delivery.instruction.spec.revision
+    && packet.source.requestId === delivery.requestId
+    && packet.source.instructionSha256 === workstreamInstructionDigest(delivery.instruction);
+  return Object.freeze({ status: linked ? "matched" : "mismatched", packet, delivery,
+    provenance: "builder-state-journals", dispatchEvidence: "unavailable" });
 }
 
 export type DeliveryEvidenceInput = Readonly<{

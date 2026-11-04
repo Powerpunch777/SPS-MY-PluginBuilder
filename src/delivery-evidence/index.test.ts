@@ -4,12 +4,18 @@ import type { PluginSpsArtifact, PluginSpsClient, PluginSpsModelRun, PluginSpsRu
 import type { SpsAgentSessionRunResult } from "@sonparkserver/plugin-sdk/platform";
 import type { CtoDelivery } from "../domain/cto-deliveries.ts";
 import type { TaskPacketRecord } from "../domain/task-packets.ts";
+import type { WorkstreamRecord } from "../domain/workstreams.ts";
+import { ctoDeliveryRequestId } from "../domain/cto-deliveries.ts";
+import { createCtoDeliveryStore, workstreamInstructionDigest } from "../cto-delivery-store.ts";
+import { createTaskPacketStore } from "../task-packet-tools.ts";
+import type { JsonValue } from "@sonparkserver/plugin-sdk/platform";
 import {
   adaptAgentSessionRun,
   adaptModelRun,
   adaptNodeRun,
   createDeliveryEvidenceManifest,
   lookupExecution,
+  readPersistedPlanningRecords,
   type ApprovedDeliverableContract,
   type DeliveryEvidenceInput,
   type DeliveryReceipt,
@@ -52,6 +58,56 @@ function receiptStore(value: DeliveryReceipt | null = receipt): DeliveryReceiptS
   return { record: async () => {}, getForTask: async (_key: DeliveryReceiptKey) => value };
 }
 
+function memoryState() {
+  const values = new Map<string, JsonValue>();
+  return {
+    get: async (key: { stateKey: string }) => values.get(key.stateKey) ?? null,
+    compareAndSet: async (key: { stateKey: string }, expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue) => {
+      const current = values.get(key.stateKey);
+      const matches = expected.exists ? current !== undefined && JSON.stringify(current) === JSON.stringify(expected.value) : current === undefined;
+      if (matches) values.set(key.stateKey, value);
+      return { swapped: matches };
+    },
+  };
+}
+
+const workspaceId = "11111111-1111-4111-8111-111111111111";
+const uuid = "22222222-2222-4222-8222-222222222222";
+const workstream: WorkstreamRecord = {
+  spec: { projectId: "project-1", id: "workstream-1", revision: 1, sourceSpecRevisionId: "spec-1", assignedCtoId: "cto-1",
+    title: "Evidence", goal: "Record delivery evidence", scopeNodeIds: ["node-1"], included: ["delivery evidence"], excluded: [],
+    dependencies: [], interfaceContracts: [], technologyDecisionsRef: "tech-1", reuseCandidates: [], acceptance: ["Persist planning source"],
+    evidenceRequired: ["source record"], openQuestions: [] },
+  sourceBaselineRevisionId: "baseline-1", baselineDigest: "a".repeat(64), technologyDigest: "b".repeat(64), ctoAgentId: uuid,
+  ctoSessionId: "33333333-3333-4333-8333-333333333333",
+  author: { agentId: uuid, sessionId: "33333333-3333-4333-8333-333333333333", runId: "44444444-4444-4444-8444-444444444444", selectionRevision: 1 },
+  createdAt: "2026-11-04T00:00:00.000Z", change: { previousRevision: null, reason: "initial", diff: "initial", impactNodeIds: [],
+    impactInterfaceContracts: [], impactTaskIds: [], effectiveFrom: "now" }, receipt: null,
+};
+
+async function publishPlanningRecords() {
+  const state = memoryState();
+  const requestId = ctoDeliveryRequestId(workspaceId, "project-1", "cto-1", workstream);
+  const instructionSha256 = workstreamInstructionDigest(workstream);
+  const storedPacket: TaskPacketRecord = { ...packet,
+    source: { ...packet.source, requestId, specRevision: 1, instructionSha256 },
+    author: { agentId: uuid, sessionId: workstream.ctoSessionId, runId: "55555555-5555-4555-8555-555555555555" },
+  };
+  const taskStore = createTaskPacketStore(workspaceId, "project-1", "cto-1", "workstream-1", state);
+  assert.equal((await taskStore.publish({ expectedBaseRevisionId: null, revision: { projectId: "project-1", ctoId: "cto-1",
+    workstreamId: "workstream-1", revisionId: "packet-board-1", packets: [storedPacket] } })).status, "published");
+  const deliveryStore = createCtoDeliveryStore(workspaceId, "project-1", "cto-1", state);
+  assert.equal((await deliveryStore.publish({ expectedBaseRevisionId: null, revision: {
+    schemaVersion: 1, workspaceId, projectId: "project-1", ctoId: "cto-1", revisionId: "delivery-1", requestId,
+    boardRevisionId: "workstream-board-1", instruction: workstream,
+    requestedBy: { agentId: uuid, sessionId: workstream.ctoSessionId, runId: "55555555-5555-4555-8555-555555555555", selectionRevision: 1 },
+    executionPolicy: { mode: "plugin-tools-only-v1", toolNames: ["builder.acknowledge-workstream", "builder.read-cto-workstream"] },
+    createdAt: "2026-11-04T00:00:00.000Z", phase: "submitted", runId: "66666666-6666-4666-8666-666666666666",
+    cancellationRequested: false, termination: "not_applicable", outputState: "not_ready", answer: null,
+  } })).status, "published");
+  return { state, storedPacket };
+}
+
 test("missing contract and QA remain not-run; caller source identity is explicitly unverified", async () => {
   const manifest = await createDeliveryEvidenceManifest(input());
   assert.equal(manifest.enforcement, "none");
@@ -62,6 +118,26 @@ test("missing contract and QA remain not-run; caller source identity is explicit
   assert.equal(manifest.qa.status, "not-run");
   assert.equal(manifest.qa.independentlyVerified, false);
   assert.equal(manifest.artifactLookup.status, "not-run");
+});
+
+test("persisted Task Packet and CTO delivery journals bind planning provenance only", async () => {
+  const { state, storedPacket } = await publishPlanningRecords();
+  const lookup = { workspaceId, projectId: "project-1", ctoId: "cto-1", workstreamId: "workstream-1", taskId: "task-1", taskRevision: 3, state };
+  const persisted = await readPersistedPlanningRecords(lookup);
+  assert.equal(persisted.status, "matched");
+  assert.equal(persisted.packet?.packet.taskId, storedPacket.packet.taskId);
+  assert.equal(persisted.delivery?.requestId, storedPacket.source.requestId);
+  assert.equal(persisted.provenance, "builder-state-journals");
+  assert.equal(persisted.dispatchEvidence, "unavailable");
+
+  const stale = await readPersistedPlanningRecords({ ...lookup, taskRevision: 2 });
+  assert.equal(stale.status, "mismatched");
+  assert.equal(stale.dispatchEvidence, "unavailable");
+
+  const absent = await readPersistedPlanningRecords({ ...lookup, state: memoryState() });
+  assert.equal(absent.status, "missing");
+  assert.equal(absent.packet, null);
+  assert.equal(absent.delivery, null);
 });
 
 test("forged passed observation, provenance, and command/exit zero stay claims with UNKNOWN status", async () => {
