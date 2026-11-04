@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
+import type { JsonValue, SpsActionContext, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { LEAD_CONTEXTS } from "../domain/lead-contexts.ts";
 import { createDesignBaselineStore } from "../design-baseline-tools.ts";
 import { createDesignDraftStore } from "../design-draft-store.ts";
 import { createLeadMemoryStore } from "../lead-memory-store.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
-import { createLeadContextKnowledge } from "./index.ts";
+import { createLeadContextKnowledge, createLeadContextKnowledgeForUserAction } from "./index.ts";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const agentId = "22222222-2222-4222-8222-222222222222";
@@ -86,6 +86,11 @@ function persistedTurn() {
     outputState: "not_ready", cancellationRequested: false, termination: "not_applicable" };
 }
 
+function actionContext(fixture: ReturnType<typeof makeFixture>, overrides: Record<string, unknown> = {}) {
+  return { ...fixture.platform, companyId: workspaceId, actor: { type: "user", companyId: workspaceId, userId: "user-1" },
+    ...overrides } as unknown as SpsActionContext;
+}
+
 test("preparation derives identities and current baseline from Host authority, not caller-supplied session records", async () => {
   const fixture = makeFixture();
   const service = await createLeadContextKnowledge({ runContext: fixture.runContext, projectId, platform: fixture.platform });
@@ -129,7 +134,7 @@ test("selection changes and nonmember sessions invalidate preparation", async ()
   const fixture = makeFixture();
   const service = await createLeadContextKnowledge({ runContext: fixture.runContext, projectId, platform: fixture.platform });
   fixture.values.set(stateKey("lead-agent.v1"), { workspaceId, revision: 2, selectedAgentId: agentId });
-  await assert.rejects(service.prepare(), /selection changed|authority changed/i);
+  await assert.rejects(service.prepare(), /selection changed|authority changed|selection is unavailable/i);
 
   const invalid = makeFixture();
   await assert.rejects(createLeadContextKnowledge({ runContext: { ...invalid.runContext,
@@ -317,5 +322,85 @@ test("source lookup rejects a persisted internal-context turn even when its ID i
     sessionId: sessionIds[2], channel: "background_planning" });
   const service = await createLeadContextKnowledge({ runContext: fixture.runContext, projectId, platform: fixture.platform });
   await assert.rejects(service.querySources([{ sourceId, fromLine: 1, throughLine: 1 }]), /unavailable|not.*source|user/i);
+  assert.equal(fixture.agentCalls, 0);
+});
+
+test("authenticated user action reads current Knowledge and cited original source without starting AI", async () => {
+  const fixture = makeFixture();
+  await createDesignBaselineStore(workspaceId, projectId, fixture.state).publish({ expectedBaseRevisionId: null, revision: baseline() });
+  fixture.values.set(stateKey(`lead-chat.turn.v1.${requestId}`), persistedTurn());
+  const service = await createLeadContextKnowledgeForUserAction({ actionContext: actionContext(fixture), projectId,
+    contextId: "user_conversation" });
+  const snapshot = await service.prepare();
+  assert.equal(snapshot.identity.contextId, "user_conversation");
+  assert.equal(snapshot.identity.sessionId, sessionIds[0]);
+  assert.equal(snapshot.formalDesignRevision?.revisionId, "baseline-r1");
+  assert.equal((await service.querySources([{ sourceId, fromLine: 1, throughLine: 2 }]))[0]?.text, "first line\r\nsecond line");
+  assert.equal(fixture.agentCalls, 0);
+});
+
+test("user action producer rejects foreign tenant, non-user actor, invalid context and invalid project", async () => {
+  const fixture = makeFixture();
+  const action = actionContext(fixture);
+  await assert.rejects(createLeadContextKnowledgeForUserAction({ actionContext: { ...action, companyId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+    projectId, contextId: "user_conversation" }), /authenticated user action/);
+  await assert.rejects(createLeadContextKnowledgeForUserAction({ actionContext: actionContext(fixture,
+    { actor: { type: "agent", companyId: workspaceId, agentId } }), projectId, contextId: "user_conversation" }), /authenticated user action/);
+  await assert.rejects(createLeadContextKnowledgeForUserAction({ actionContext: action,
+    projectId, contextId: "not-a-context" as never }), /context ID/);
+  await assert.rejects(createLeadContextKnowledgeForUserAction({ actionContext: action,
+    projectId: "bad\u0000project", contextId: "user_conversation" }), /project ID/);
+});
+
+test("user action producer enforces current selection and project source isolation", async () => {
+  const fixture = makeFixture();
+  const service = await createLeadContextKnowledgeForUserAction({ actionContext: actionContext(fixture), projectId,
+    contextId: "user_conversation" });
+  fixture.values.set(stateKey("lead-agent.v1"), { workspaceId, revision: 2, selectedAgentId: agentId });
+  await assert.rejects(service.prepare(), /selection changed|authority changed|selection is unavailable/i);
+
+  const other = makeFixture();
+  await createDesignBaselineStore(workspaceId, projectId, other.state).publish({ expectedBaseRevisionId: null, revision: baseline() });
+  const isolated = await createLeadContextKnowledgeForUserAction({ actionContext: actionContext(other), projectId: "other-project",
+    contextId: "user_conversation" });
+  assert.equal((await isolated.prepare()).formalDesignRevision, null);
+  await assert.rejects(isolated.querySources([{ sourceId, fromLine: 1, throughLine: 1 }]), /absent from current Workspace\/project/);
+});
+
+test("user action source reads reject uncited, altered, unavailable, internal and invalid-range sources", async () => {
+  const fixture = makeFixture();
+  const service = await createLeadContextKnowledgeForUserAction({ actionContext: actionContext(fixture), projectId,
+    contextId: "user_conversation" });
+  await assert.rejects(service.querySources([{ sourceId, fromLine: 1, throughLine: 1 }]), /absent from current Workspace\/project/);
+  await assert.rejects(service.querySources([{ sourceId, fromLine: 0, throughLine: 1 }]), /Invalid source range/);
+
+  await createDesignBaselineStore(workspaceId, projectId, fixture.state).publish({ expectedBaseRevisionId: null, revision: baseline() });
+  fixture.values.set(stateKey(`lead-chat.turn.v1.${requestId}`), { ...persistedTurn(), text: "altered" });
+  await assert.rejects(service.querySources([{ sourceId, fromLine: 1, throughLine: 1 }]), /unavailable|does not match.*digest/i);
+
+  const unavailable = makeFixture();
+  await createDesignBaselineStore(workspaceId, projectId, unavailable.state).publish({ expectedBaseRevisionId: null, revision: baseline() });
+  const unavailableService = await createLeadContextKnowledgeForUserAction({ actionContext: actionContext(unavailable), projectId,
+    contextId: "user_conversation" });
+  await assert.rejects(unavailableService.querySources([{ sourceId, fromLine: 1, throughLine: 1 }]), /unavailable|missing/i);
+});
+
+test("user action producer keeps consultation originals unsupported and does not relax tool authority", async () => {
+  const fixture = makeFixture();
+  const consultationId = "consultation-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const currentDraft = draft("draft-r1", "spec-r1", "graph-r1");
+  await createDesignDraftStore(workspaceId, projectId, { selectionRevision: 1, agentId }, fixture.state).publish({
+    expectedBaseRevisionId: null,
+    revision: { status: "draft", selectionRevision: 1, author: { agentId, sessionId: sessionIds[0], runId },
+      sourceDigests: [{ id: consultationId, sha256: "a".repeat(64) }], createdAt: "2026-11-04T00:00:00.000Z",
+      draft: { ...currentDraft, sourceIds: [consultationId] } },
+  });
+  const actionService = await createLeadContextKnowledgeForUserAction({ actionContext: actionContext(fixture), projectId,
+    contextId: "user_conversation" });
+  await assert.rejects(actionService.querySources([{ sourceId: consultationId, fromLine: 1, throughLine: 1 }]), /Consultation original-text lookup is unsupported/);
+  await assert.rejects(createLeadContextKnowledge({ runContext: { companyId: workspaceId, agentId, runId }, projectId,
+    platform: fixture.platform }), /Invalid Builder tool fields/);
+  const strictToolService = await createLeadContextKnowledge({ runContext: fixture.runContext, projectId, platform: fixture.platform });
+  assert.equal((await strictToolService.prepare()).identity.contextId, "user_conversation");
   assert.equal(fixture.agentCalls, 0);
 });

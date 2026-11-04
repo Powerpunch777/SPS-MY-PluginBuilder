@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
+import type { SpsActionContext, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { LEAD_CONTEXTS, type BuilderLeadContexts, type LeadContextId } from "../domain/lead-contexts.ts";
+import { resolveLeadContext } from "../domain/lead-contexts.ts";
+import { parseLeadAgentBinding } from "../domain/lead-agent.ts";
+import { readLeadContexts } from "../lead-context-store.ts";
 import { readLeadUserSource } from "../lead-conversations.ts";
 import { parseLeadToolContext, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
 import { createDesignBaselineStore } from "../design-baseline-tools.ts";
@@ -158,31 +161,106 @@ export async function createLeadContextKnowledge(input: Readonly<{
   platform: SpsPlatformInvocationContext;
 }>) {
   const host = parseLeadToolContext(input.runContext);
-  if (typeof input.projectId !== "string" || !input.projectId.trim() || input.projectId.length > 160
-    || /[\u0000-\u001f\u007f]/u.test(input.projectId)
-    || host.projectId !== undefined && host.projectId !== input.projectId) {
-    throw new TypeError("A bounded project ID matching any Host-supplied project binding is required.");
-  }
+  validateProjectId(input.projectId);
+  if (host.projectId !== undefined && host.projectId !== input.projectId) throw new TypeError("A bounded project ID matching any Host-supplied project binding is required.");
   const authority = await resolveLeadToolAuthority(host, input.platform);
   const contexts = authority.contexts;
   const contextId = authority.logicalContext;
   if (!contexts || !contextId) throw new Error("Knowledge preparation requires the current five-context Lead selection; legacy sessions are unsupported.");
-  const workspaceId = host.companyId;
-  const projectId = input.projectId;
-  const selection = { selectionRevision: authority.selectionRevision, agentId: host.agentId };
-  const state = input.platform.state as typeof input.platform.state & RevisionState;
+  return createKnowledgeService({ workspaceId: host.companyId, projectId: input.projectId, contexts, contextId,
+    sessionId: host.sessionId, selectionRevision: authority.selectionRevision, agentId: host.agentId,
+    platform: input.platform, check: authority.check });
+}
+
+/**
+ * Authenticated user-read producer for UI actions. The Host action context is
+ * the source of Workspace and actor identity; no run/session identity is
+ * accepted from UI input. `contextId` selects only among the current stored
+ * five-context Host sessions and grants read access only.
+ */
+export async function createLeadContextKnowledgeForUserAction(input: Readonly<{
+  actionContext: SpsActionContext;
+  projectId: string;
+  contextId: LeadContextId;
+}>) {
+  const action = input.actionContext;
+  if (!action || typeof action !== "object" || typeof action.companyId !== "string"
+    || !UUID.test(action.companyId) || !action.actor || typeof action.actor !== "object"
+    || action.actor.type !== "user" || action.actor.companyId !== action.companyId) {
+    throw new Error("Knowledge UI reads require an authenticated user action in the current Workspace.");
+  }
+  validateProjectId(input.projectId);
+  if (!LEAD_CONTEXTS.includes(input.contextId)) throw new TypeError("A current Lead context ID is required.");
+  const workspaceId = action.companyId;
+  const platform = action;
+
+  async function resolve() {
+    const rawBinding = await platform.state.get({ scopeKind: "company", scopeId: workspaceId,
+      namespace: "sonpark.my-builder", stateKey: "lead-agent.v1" });
+    const binding = parseLeadAgentBinding(rawBinding ?? { workspaceId, revision: 0, selectedAgentId: null }, workspaceId);
+    if (!binding.selectedAgentId) throw new Error("The current Builder Lead selection is unavailable.");
+    const contexts = await readLeadContexts(workspaceId, platform);
+    if (!contexts) throw new Error("The current five-context Lead selection is unavailable; legacy sessions are unsupported.");
+    const sessionId = contexts.contexts[input.contextId];
+    if (!sessionId || contexts.status !== "ready") throw new Error("The requested Lead context is not currently ready.");
+    const resolved = resolveLeadContext(contexts, { workspaceId, agentId: binding.selectedAgentId, sessionId },
+      { selectionRevision: binding.revision, agentId: binding.selectedAgentId });
+    if (resolved !== input.contextId) throw new Error("The requested Lead context is not authorized by the current selection.");
+    const latestRaw = await platform.state.get({ scopeKind: "company", scopeId: workspaceId,
+      namespace: "sonpark.my-builder", stateKey: "lead-agent.v1" });
+    const latest = parseLeadAgentBinding(latestRaw ?? { workspaceId, revision: 0, selectedAgentId: null }, workspaceId);
+    if (latest.revision !== binding.revision || latest.selectedAgentId !== binding.selectedAgentId) {
+      throw new Error("Lead Agent selection changed. Refresh before reading Knowledge.");
+    }
+    return { binding, contexts, sessionId };
+  }
+
+  const initial = await resolve();
+  const check = async () => {
+    const current = await resolve();
+    if (current.binding.revision !== initial.binding.revision
+      || current.binding.selectedAgentId !== initial.binding.selectedAgentId
+      || current.sessionId !== initial.sessionId
+      || JSON.stringify(current.contexts) !== JSON.stringify(initial.contexts)) {
+      throw new Error("Lead user-read authority changed. Refresh before continuing.");
+    }
+  };
+  return createKnowledgeService({ workspaceId, projectId: input.projectId, contexts: initial.contexts,
+    contextId: input.contextId, sessionId: initial.sessionId, selectionRevision: initial.binding.revision,
+    agentId: initial.binding.selectedAgentId!, platform, check });
+}
+
+function validateProjectId(projectId: string): void {
+  if (typeof projectId !== "string" || !projectId.trim() || projectId.length > 160
+    || /[\u0000-\u001f\u007f]/u.test(projectId)) throw new TypeError("A bounded Builder project ID is required.");
+}
+
+function createKnowledgeService(input: Readonly<{
+  workspaceId: string;
+  projectId: string;
+  contexts: BuilderLeadContexts;
+  contextId: LeadContextId;
+  sessionId: string;
+  selectionRevision: number;
+  agentId: string;
+  platform: SpsPlatformInvocationContext;
+  check: () => Promise<void>;
+}>) {
+  const { workspaceId, projectId, contexts, contextId, sessionId, selectionRevision, agentId, platform } = input;
+  const selection = { selectionRevision, agentId };
+  const state = platform.state as typeof platform.state & RevisionState;
   const baselineStore = createDesignBaselineStore(workspaceId, projectId, state);
   const draftStore = createDesignDraftStore(workspaceId, projectId, selection, state);
   const memoryStore = createLeadMemoryStore(workspaceId, projectId, state);
 
   async function currentRecords() {
-    await authority.check();
+    await input.check();
     const baseline = await baselineStore.current();
-    await authority.check();
+    await input.check();
     const draft = await draftStore.current();
-    await authority.check();
+    await input.check();
     const memory = await memoryStore.current();
-    await authority.check();
+    await input.check();
     return { baseline, draft, memory };
   }
 
@@ -190,12 +268,12 @@ export async function createLeadContextKnowledge(input: Readonly<{
     async prepare(): Promise<LeadContextKnowledgeSnapshot> {
       const { baseline, draft, memory } = await currentRecords();
       const selectedSessionId = contexts.contexts[contextId];
-      if (!selectedSessionId || selectedSessionId !== host.sessionId) throw new Error("The authorized Lead session identity changed.");
+      if (!selectedSessionId || selectedSessionId !== sessionId) throw new Error("The authorized Lead session identity changed.");
       const revision = baseline?.revision;
       const decisions = draft?.revision.decisions ?? [];
       return Object.freeze({
         consistency: "independent-current-journal-reads",
-        identity: Object.freeze({ workspaceId, projectId, selectionRevision: contexts.selectionRevision,
+        identity: Object.freeze({ workspaceId, projectId, selectionRevision,
           agentId: contexts.agentId, contextId, sessionId: selectedSessionId }),
         formalDesignRevision: revision ? Object.freeze({ revisionId: revision.revisionId,
           sourceDraftRevisionId: revision.sourceDraftRevisionId,
@@ -226,9 +304,9 @@ export async function createLeadContextKnowledge(input: Readonly<{
         }
         if (range.sourceId.startsWith("consultation-")) throw new Error("Consultation original-text lookup is unsupported by the current source API.");
         if (!range.sourceId.startsWith("lead-turn:")) throw new Error(`Source ${range.sourceId} has no supported original-text lookup.`);
-        await authority.check();
-        const source = await readLeadUserSource(range.sourceId.slice("lead-turn:".length), contexts, input.platform);
-        await authority.check();
+        await input.check();
+        const source = await readLeadUserSource(range.sourceId.slice("lead-turn:".length), contexts, platform);
+        await input.check();
         if (source.id !== range.sourceId) throw new Error(`Source ${range.sourceId} does not match a persisted user turn in the current Workspace selection.`);
         const sourceSha256 = hash(source.text);
         const citedDigests = evidence.digests.get(range.sourceId) ?? [];
@@ -245,7 +323,7 @@ export async function createLeadContextKnowledge(input: Readonly<{
           verification: "persisted-workspace-lead-turn-cited-by-current-project-record",
           fromLine: range.fromLine, throughLine: range.throughLine, text: excerpt }));
       }
-      await authority.check();
+      await input.check();
       return Object.freeze(output);
     },
   });
