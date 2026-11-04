@@ -10,7 +10,11 @@ import type { UiRevision } from "../ui-contracts/domain.ts";
 import type { ChangeImpactResult } from "../change-impact/index.ts";
 import { createSolutionRevisionStore, type RevisionState } from "../solution-revision-store.ts";
 import { createUiContractStore } from "../ui-contracts/store.ts";
+import { createTaskPacketStore } from "../task-packet-tools.ts";
+import { createWorkstreamStore } from "../workstream-tools.ts";
+import { createCtoDeliveryStore } from "../cto-delivery-store.ts";
 import type { BuilderGateId, EvidencePin, GateScopeSnapshot } from "./index.ts";
+import { isHostBoundRegistry } from "./provider-brand.ts";
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 const samePin = (left: EvidencePin, right: EvidencePin): boolean => left.sourceId === right.sourceId
@@ -280,9 +284,10 @@ async function resolveBuilderGateRegistryFromProvider(input: ResolveRegistryInpu
     catch { unknown("recheck-current-authority"); authority = null; }
   }
 
-  // No production-owned provider is currently wired to this adapter interface.
-  // Caller-supplied adapters can support fixture consistency, never authorization.
-  required.add("trusted-production-registry-unavailable");
+  // Injected adapters remain useful for deterministic validation tests, but
+  // cannot become a production authority path. The code-owned Host factory is
+  // the only source allowed to omit this dependency.
+  if (!isHostBoundRegistry(registry)) required.add("trusted-production-registry-unavailable");
   const requiredLookups = [...required].sort((a, b) => a.localeCompare(b, "en"));
   const base = { gateId: input.gateId, target: input.expected, status: "UNKNOWN" as const,
     requiredLookups: Object.freeze(requiredLookups), checker,
@@ -320,28 +325,162 @@ export type CurrentRevisionJournal<T> = Readonly<{
   current(): Promise<Readonly<{ sequence: number; revision: T }> | null>;
   publishedRevision(revisionId: string, maximum?: number): Promise<Readonly<{ sequence: number; revision: T }> | null>;
 }>;
-export async function lookupJournalCurrentRevision<T>(journal: CurrentRevisionJournal<T>, revisionId: string,
+export type NormalizedRecordDigest = Readonly<{ revisionId: string; normalizedRecordSha256: string }>;
+export type CurrentJournalRevision = Readonly<{ sequence: number; revisionId: string }>;
+/**
+ * Read the current revision identity from the validated journal API. `found`
+ * means the journal contains this current validated record; it is not proof
+ * of source bytes, authority, approval, or approved current business state.
+ */
+export async function lookupJournalCurrentRevision<T>(journal: CurrentRevisionJournal<T>, expectedRevisionId: string,
   getRevisionId: (revision: T) => string, pin: EvidencePin): Promise<RegistryLookup<EvidencePin>> {
-  const current = await journal.current();
-  if (!current || getRevisionId(current.revision) !== revisionId || pin.revisionId !== revisionId) return { status: "missing" };
-  // The journal's digest is not exposed by its read API. Resolve source bytes
-  // separately; never represent this revision match as source verification.
-  return { status: "found", value: Object.freeze({ ...pin, revisionId }) };
+  try {
+    const current = await journal.current();
+    if (!current || getRevisionId(current.revision) !== expectedRevisionId
+      || pin.revisionId !== expectedRevisionId) return { status: "missing" };
+    // Preserve the original four-argument consumer contract. The returned pin
+    // is the caller's value after a current journal ID match; it is not derived
+    // from journal bytes and must never be used as original-source proof.
+    return { status: "found", value: pin };
+  } catch {
+    return { status: "unavailable", reason: "revision-journal-unavailable-or-invalid" };
+  }
 }
 
-/** Current Graph revision adapter backed by the existing immutable CAS journal. */
+/**
+ * Digest of JSON.stringify(record) returned by the validated journal API;
+ * `found` means stored validated-record digest match only, not journal
+ * envelope/source-byte proof, authority, approval, or approved current
+ * business state.
+ */
+export async function lookupJournalCurrentRecordDigest<T>(journal: CurrentRevisionJournal<T>, revisionId: string,
+  getRevisionId: (revision: T) => string, expectedNormalizedRecordSha256: string): Promise<RegistryLookup<NormalizedRecordDigest>> {
+  try {
+    const current = await journal.current();
+    if (!current || getRevisionId(current.revision) !== revisionId) return { status: "missing" };
+    // This is only a digest of the normalized record returned by the journal.
+    // The journal's head digest covers its full envelope; this is not source-byte verification.
+    const bytes = new TextEncoder().encode(JSON.stringify(current.revision));
+    const normalizedRecordSha256 = sha256(bytes);
+    const actual = Object.freeze({ revisionId, normalizedRecordSha256 });
+    return normalizedRecordSha256 === expectedNormalizedRecordSha256 ? { status: "found", value: actual } : { status: "missing" };
+  } catch {
+    return { status: "unavailable", reason: "revision-journal-unavailable-or-invalid" };
+  }
+}
+
+/**
+ * Current Graph revision adapter backed by the existing immutable CAS journal.
+ * `found` means a stored validated current journal record, not source proof,
+ * authority, approval, or approved current business state.
+ */
 export async function lookupCurrentSolutionRevision(workspaceId: string, projectId: string, state: RevisionState,
   expectedRevisionId: string): Promise<RegistryLookup<Readonly<{ sequence: number; revisionId: string }>>> {
-  const current = await createSolutionRevisionStore(workspaceId, projectId, state).current();
-  if (!current || current.revision.graphRevisionId !== expectedRevisionId) return { status: "missing" };
-  return { status: "found", value: Object.freeze({ sequence: current.sequence, revisionId: current.revision.graphRevisionId }) };
+  try {
+    const current = await createSolutionRevisionStore(workspaceId, projectId, state).current();
+    if (!current || current.revision.graphRevisionId !== expectedRevisionId) return { status: "missing" };
+    return { status: "found", value: Object.freeze({ sequence: current.sequence, revisionId: current.revision.graphRevisionId }) };
+  } catch {
+    return { status: "unavailable", reason: "solution-revision-journal-unavailable-or-invalid" };
+  }
 }
 
-/** Formal UI revision adapter uses the existing UI store and its current Lead authority checks. */
+/**
+ * Digest of JSON.stringify(record) returned by the validated current journal
+ * API; `found` is stored validated-record identity only, not authority,
+ * approval, or approved current business state.
+ */
+export async function lookupCurrentSolutionRevisionRecordDigest(workspaceId: string, projectId: string, state: RevisionState,
+  expectedRevisionId: string, expectedNormalizedRecordSha256: string): Promise<RegistryLookup<NormalizedRecordDigest>> {
+  try {
+    const journal = createSolutionRevisionStore(workspaceId, projectId, state);
+    return await lookupJournalCurrentRecordDigest(journal, expectedRevisionId, revision => revision.graphRevisionId,
+      expectedNormalizedRecordSha256);
+  } catch {
+    return { status: "unavailable", reason: "solution-revision-journal-unavailable-or-invalid" };
+  }
+}
+
+/**
+ * Reads a validated formal UI record through the existing publication lookup.
+ * `found` means that stored record passed that lookup's checks; it does not
+ * independently prove source bytes or current approved business state.
+ */
 export async function lookupPublishedFormalUiRevision(workspaceId: string, projectId: string, state: RevisionState,
   revisionId: string, runContext: unknown, platform: SpsPlatformInvocationContext): Promise<RegistryLookup<UiRevision>> {
-  const store = createUiContractStore(workspaceId, projectId, state);
-  const found = await store.publishedFormal(revisionId, runContext as Parameters<typeof store.publishedFormal>[1], platform);
-  if (!found || found.revision.publication !== "formal") return { status: "missing" };
-  return { status: "found", value: found.revision };
+  try {
+    const store = createUiContractStore(workspaceId, projectId, state);
+    const found = await store.publishedFormal(revisionId, runContext as Parameters<typeof store.publishedFormal>[1], platform);
+    if (!found || found.revision.publication !== "formal") return { status: "missing" };
+    return { status: "found", value: found.revision };
+  } catch {
+    return { status: "unavailable", reason: "published-formal-ui-revision-unavailable-or-unauthorized" };
+  }
+}
+
+/**
+ * Reads the current formal UI head through the existing current Lead authority
+ * check. `found` is a validated stored record returned after that check, not
+ * proof of original source bytes or a broader approval decision.
+ */
+export async function lookupCurrentFormalUiRevision(workspaceId: string, projectId: string, state: RevisionState,
+  runContext: unknown, platform: SpsPlatformInvocationContext): Promise<RegistryLookup<UiRevision>> {
+  try {
+    const store = createUiContractStore(workspaceId, projectId, state);
+    const found = await store.currentFormal(runContext as Parameters<typeof store.currentFormal>[0], platform);
+    if (!found || found.revision.publication !== "formal") return { status: "missing" };
+    return { status: "found", value: found.revision };
+  } catch {
+    return { status: "unavailable", reason: "current-formal-ui-revision-unavailable-or-unauthorized" };
+  }
+}
+
+/**
+ * Reads a Task Packet only from the current validated persisted board for its
+ * exact project/CTO/Workstream tuple. `found` means stored validated record
+ * only, not authority, approval, or approved current business state.
+ */
+export async function lookupCurrentTaskPacketRecord(workspaceId: string, projectId: string, ctoId: string,
+  workstreamId: string, taskId: string, state: RevisionState): Promise<RegistryLookup<TaskPacketRecord>> {
+  try {
+    const board = await createTaskPacketStore(workspaceId, projectId, ctoId, workstreamId, state).current();
+    if (!board) return { status: "missing" };
+    const matches = board.revision.packets.filter(record => record.packet.taskId === taskId);
+    return matches.length === 1 ? { status: "found", value: matches[0] } : { status: "missing" };
+  } catch {
+    return { status: "unavailable", reason: "current-task-packet-board-unavailable-or-invalid" };
+  }
+}
+
+/**
+ * Reads a Workstream only from the current validated persisted board. `found`
+ * means stored validated record only, not authority, approval, or approved
+ * current business state.
+ */
+export async function lookupCurrentWorkstreamRecord(workspaceId: string, projectId: string,
+  workstreamId: string, state: RevisionState): Promise<RegistryLookup<WorkstreamRecord>> {
+  try {
+    const board = await createWorkstreamStore(workspaceId, projectId, state).current();
+    if (!board) return { status: "missing" };
+    const matches = board.revision.workstreams.filter(record => record.spec.id === workstreamId);
+    return matches.length === 1 ? { status: "found", value: matches[0] } : { status: "missing" };
+  } catch {
+    return { status: "unavailable", reason: "current-workstream-board-unavailable-or-invalid" };
+  }
+}
+
+/**
+ * Reads a CTO delivery only from its current validated project/CTO journal.
+ * `found` means stored validated record only, not execution proof, authority,
+ * approval, or approved current business state.
+ */
+export async function lookupCurrentCtoDeliveryRecord(workspaceId: string, projectId: string, ctoId: string,
+  workstreamId: string, state: RevisionState): Promise<RegistryLookup<CtoDelivery>> {
+  try {
+    const current = await createCtoDeliveryStore(workspaceId, projectId, ctoId, state).current();
+    if (!current || current.revision.instruction.spec.id !== workstreamId) return { status: "missing" };
+    return { status: "found", value: current.revision };
+  } catch {
+    return { status: "unavailable", reason: "current-cto-delivery-unavailable-or-invalid" };
+  }
 }
