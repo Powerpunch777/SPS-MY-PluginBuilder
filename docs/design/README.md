@@ -1,12 +1,12 @@
 # SPS Plugin Builder — 설계·기술 조사·UI 묶음
 
 - **현재 제품 기준은 [통합 제품 계약](CURRENT-PRODUCT-CONTRACT-2026-11-04.md)을 먼저 읽는다.**
-  v15·CSAS v0.8·상담 개정·문서센터 v1.1·통합 담당 추가 설계·후속 사용자 결정을 통합한다.
+  v15·CSAS v0.8·상담 개정·문서센터 v1.1·통합 담당·최종 검토·승인 페이지 추가 설계와 후속 사용자 결정을 통합한다.
   Lead 6세션과 별도 Integration Manager, 레거시 전환 제외, 실시간 수집/명시 분석,
   G0~G7 및 선택형 Shell 경계를 한곳에서 확인한다.
   옛 문서의 비충돌 요구와 역사 근거는 보존하며 이 링크가 구현 완료를 뜻하지 않는다.
-- [현행 인수 기준 추적표](AC-TRACE-2026-11-04.md): v15 118 + CSAS 44 + 상담 8 + 문서센터 16 + 통합 16의
-  원문 정의 202개를 소스 해시와 함께 추적한다. 레거시 6개는 제외이며, 정의 수는
+- [현행 인수 기준 추적표](AC-TRACE-2026-11-04.md): v15 118 + CSAS 44 + 상담 8 + 문서센터 16 + 통합 16 + 최종 승인 14의
+  원문 정의 216개를 소스 해시와 함께 추적한다. 레거시 6개는 제외이며, 정의 수는
   합격 개수나 서로 독립된 요구 개수가 아니다. 실제 AC 전체 인수 상태는 별도로 갱신한다.
 - `01_Design/`: 최신 통합 설계서 v15 (Lead/CTO/Worker/QA 및 기술 선정 반영)
 - `02_Tech_Research/`: 기술 스택 조사·선정 근거
@@ -18,6 +18,13 @@
 
 ## 최신 확정 개정
 
+- [Lead 최종 검토·승인 페이지 (2026-11-05)](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md):
+  기존 Integration Review에 좌측 Lead 영역의 사용자 승인 페이지를 연결한다.
+  Lead 6세션·별도 Manager를 유지하며 새 Agent/중복 승인 DB를 추가하지 않는다.
+  Main의 실제 Packet/G7 적격 후보, 문서센터 정본·파일/문서 해시와 Revision을 재사용하고
+  실제 사용자만 승인·수정 요청·보류를 제출한다. 필수 QA/G6/G7 미통과·stale 요청은
+  직접 API에서도 차단한다. 과거 승인 보존·변경본 재승인·재시도 멱등성과 고객 전달/
+  외부 배포·QA 상태의 분리를 AC-APP-01~14로 추적하며 신규 인수 상태는 NOT_RUN이다.
 - [Integration Manager·Lead Integration Review (2026-11-04)](01_Design/SPS_Builder_Integration_Design_20261104.md):
   사용자 직접 확정과 함께 적용한다. Lead 6번째 Integration Review와 별도 Manager,
   CTO VERIFIED/통합 상태 분리, 지속 이벤트·중복 방지·부분 통합, 기술 오류 CTO 환류와

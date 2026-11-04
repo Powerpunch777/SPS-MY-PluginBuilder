@@ -4,6 +4,7 @@
 > 적용: **최종 SPS Plugin Builder 제품**의 Lead/CTO/Worker/QA/설계 시각화/Graph/Revision/CSAS G5·G6·G7  
 > 제외: Builder 개발을 위해 임시 사용 중인 CAO의 실행 조직 자체를 필수 제품 구조로 복제하지 않는다.  
 > 출처: 기존 Builder v15, CSAS v0.8, Project Document Center v1.1 및 2026-11-04 사용자 추가 결정. 기존 GitHub 코드에 반영 완료되었다는 뜻이 아니다.
+> 2026-11-05 확정 개정: [최종 검토·승인 페이지 추가안](SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md)을 함께 적용한다. 기존 Integration Review의 내부 검토는 유지하고 사용자 승인 페이지를 제공한다. 새 Agent/일곱 번째 Lead 세션/중복 승인 저장소를 추가하지 않는다.
 
 ## 0. 사용자 제안과 설계 결론
 
@@ -24,7 +25,7 @@
 | Background | Lead | 기술·Reuse·Workstream 분할 준비 | 필요시 백그라운드 |
 | Question Intake | Lead | CTO의 일반 설계 질문과 원문/승인 근거 조회 | 필요시 내부 |
 | Question Discussion | Lead | 사용자 결정을 요구하는 미결정사항 협의 | 사용자 대화 |
-| **Integration Review** | **Lead 6번째** | 통합 과정의 교차 Workstream 문제·설계 충돌·결정권 확인 | **이벤트 수신 시 wake** |
+| **Integration Review** | **Lead 6번째** | 교차 Workstream 문제·설계 충돌 검토 및 사용자용 `최종 검토·승인` 요청·응답 연결 | **내부 이벤트 처리 + 사용자 승인 페이지** |
 | **Integration Manager** | **Lead 밖의 별도 통합 담당** | CTO 완료 이벤트 수집·조건부 통합·통합 CI/E2E 및 문제 분류 | **이벤트 수신 시 wake** |
 | CTO | 프로젝트별 Workstream | 담당 Workstream의 개발/내부 통합/테스트·QA 책임 | 기존 독립 세션 |
 | Worker/QA | CTO 관할 | 작업 실행/테스트 및 증거 생성 | 작업별 실행 |
@@ -91,6 +92,7 @@ Workstream별 통합 상태는 다음 상태를 별도로 가진다.
 - **조건부:** 기술적 충돌 중 담당 CTO 권한 내 해결 가능한 문제는 해당 CTO에 반송(Lead 불필요).
 - **조건부 wake:** 교차 Workstream 계약 충돌, 사용자 결정이 필요한 요구사항/행동 변화, 승인 명세와 구현 상충, 통합 전략 변경이 요구되는 문제는 Integration Review를 wake.
 - **최종 wake:** 전체 통합 빌드·E2E/회귀 QA·Gate가 통과한 뒤 Lead Main을 wake해 최종 설계·인수 점검.
+- **최종 승인 요청:** Main이 실제 Packet·승인 Revision·필수 QA 및 G7을 확인한 후보만 불변 참조로 발행하고, 기존 Integration Review의 사용자 승인 페이지에 게시한다. 화면 렌더링/AI 메시지는 승인이 아니다.
 
 ## 4. 통합 가능성 판단
 
@@ -161,7 +163,7 @@ Integration Manager는 전체 요구된 Workstream의 통합 성공과 정의된
 - 납품 산출물 후보 목록 및 초안 문서 참조
 - CSAS G6의 상태 및 별도 G7 점검 필요사항
 
-Lead Main은 전체 제품의 승인 설계·QA 증거·산출물과 패킷을 재확인한다. 미완료 또는 계약 변경 사유가 있으면 관련 작업으로 환류한다. 통과 시 납품물 목록/설치·사용법·제한사항 초안을 준비하여 **사용자에게 최종 확인**을 요청한다. 고객 전달/계약·결제 확정·외부 배포는 사용자 책임이며 통합 완료와 자동으로 동일시하지 않는다.
+Lead Main은 전체 제품의 승인 설계·QA 증거·산출물과 패킷 및 G7을 재확인한다. 미완료 또는 계약 변경 사유가 있으면 관련 작업으로 환류한다. 적격 후보만 납품물 목록/파일·문서 해시/설치·사용법·제한사항의 불변 스냅샷 참조로 확정 요청을 만들고, Integration Review의 **최종 검토·승인 페이지**에 게시한다. 실제 권한 있는 사용자의 승인·수정 요청·보류를 서버에서 처리하고 필수 QA/G6/G7 미통과나 stale 요청은 승인해도 확정하지 않는다. 기존 Revision/문서센터/감사 경로를 재사용하며 변경본은 새 후보로 재승인하고 옛 이력은 보존한다. 고객 전달/계약·결제 확정·외부 배포는 사용자 책임이며 통합 완료·패키지 버전 확정과 자동으로 동일시하지 않는다.
 
 ## 8. 추가 인수 기준 초안
 
@@ -205,3 +207,4 @@ Lead Main은 전체 제품의 승인 설계·QA 증거·산출물과 패킷을 �
 
 ---
 **변경 이력:** 2026-11-04 — CTO의 검증 완료 체크포인트 기반 wake, Integration Manager/Lead Integration Review 2개 논리 세션 추가, 기술·정책 이슈 분리, 완료/통합 상태 분리, Final Integration Packet 및 AC-INT-01~16 추가.
+2026-11-05 — 기존 Integration Review에 사용자용 최종 검토·승인 페이지 연결, Main G7 적격 후보의 불변 요청·사용자 전용 조치·기존 문서/Revision 재사용 및 변경본 재승인 경계 명시. AC-APP-01~14는 별도 추가안과 통합 추적표로 관리한다.
