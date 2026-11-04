@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createTaskPacketStore } from "../task-packet-tools.ts";
 import { parseTaskPacketRecord } from "../domain/task-packets.ts";
-import { createBuilderGateRecordLibrary } from "./records.ts";
-import { BUILDER_GATE_IDS } from "./index.ts";
+import { createBuilderGateRecordLibrary, requirementRuleProposalPin, type BuilderGateRegistryDependencies } from "./records.ts";
+import { BUILDER_GATE_IDS, evaluateBuilderGates } from "./index.ts";
 import type { GateScopeSnapshot } from "./index.ts";
 
 const W = "11111111-1111-4111-8111-111111111111";
@@ -50,8 +50,8 @@ function hostFixture() {
     execution: { ...executionIdentity, sessionId, companyId, runId },
   }) } } } as unknown as SpsPlatformInvocationContext;
   const runContext = { companyId: W, agentId: MAIN_AGENT, sessionId: MAIN_SESSION, runId: RUN_ID, projectId: P };
-  const library = () => createBuilderGateRecordLibrary(W, P, platform,
-    { kind: "lead", runContext, formalPublication: true });
+  const library = (dependencies?: BuilderGateRegistryDependencies) => createBuilderGateRecordLibrary(W, P, platform,
+    { kind: "lead", runContext, formalPublication: true }, dependencies);
   return { values, state, platform, runContext, library, setRunOutput(text: string) { runOutput = text; },
     setExecutionIdentity(identity: typeof executionIdentity) { executionIdentity = identity; } };
 }
@@ -71,6 +71,59 @@ function qaPacket() {
     author: { agentId: MAIN_AGENT, sessionId: MAIN_SESSION, runId: RUN_ID }, createdAtISO: "2026-11-04T00:00:00.000Z",
     dependencyPins: [] }, P, CTO, WORKSTREAM);
 }
+
+function requirementProposal(revisionId = "proposal-r1", revision = 1, previousRevisionId: string | null = null) {
+  return { proposalId: "links-and-rules", revisionId, previousRevisionId, revision, scopeId: WORKSTREAM,
+    baseline: { sourceId: "design-baseline", revisionId: "baseline-r4", sha256: "1".repeat(64) },
+    specification: { sourceId: "spec", revisionId: "spec-r9", sha256: "2".repeat(64) },
+    graph: { sourceId: "graph", revisionId: "graph-r3", sha256: "3".repeat(64) },
+    links: [{ requirementId: "REQ-1", originals: [{ sourceId: "original-contract", revisionId: "contract-r8", sha256: "4".repeat(64) }] }],
+    rulePacks: [{ packId: "safety", version: "4.2", sha256: "5".repeat(64) }] } as const;
+}
+
+test("requirement/rule proposals preserve exact version pins and formalize only after an A-owned event lookup", async () => {
+  const fixture = hostFixture(), proposal = requirementProposal(), library = fixture.library();
+  assert.equal((await library.publishRequirementRuleProposal(null, proposal)).status, "published");
+  assert.equal((await library.publishRequirementRuleProposal("stale", { ...proposal, revisionId: "proposal-r2",
+    previousRevisionId: "proposal-r1", revision: 2 })).status, "conflict");
+  const proposal2 = { ...proposal, revisionId: "proposal-r2", previousRevisionId: "proposal-r1", revision: 2,
+    rulePacks: [{ packId: "safety", version: "4.3", sha256: "6".repeat(64) }] };
+  assert.equal((await library.publishRequirementRuleProposal("proposal-r1", proposal2)).status, "published");
+  const historical = await library.publishedRequirementRuleProposal("links-and-rules", "proposal-r1");
+  assert.equal(historical.status, "found");
+  if (historical.status === "found") assert.equal(historical.value.rulePacks[0]?.version, "4.2");
+  assert.equal((await library.currentRequirementRuleProposal("links-and-rules")).status, "found");
+  assert.equal((await library.currentBaselineApproval("links-and-rules", "proposal-r2")).status, "missing");
+  const withoutVerifier = await library.recordBaselineApproval(null, "links-and-rules", "proposal-r2", "approval-event-1", "approval-r1");
+  assert.equal(withoutVerifier.status, "unavailable");
+
+  const pin = requirementRuleProposalPin({ schemaVersion: 1, workspaceId: W, projectId: P, ...proposal2 });
+  const event = { eventId: "approval-event-1", workspaceId: W, projectId: P, scopeId: WORKSTREAM,
+    proposal: pin, baseline: proposal2.baseline, specification: proposal2.specification, graph: proposal2.graph,
+    actor: { agentId: MAIN_AGENT, sessionId: MAIN_SESSION, runId: RUN_ID, selectionRevision: 7 },
+    userSource: { sourceId: "lead-turn:12345678-1234-4234-8234-123456789abc", sha256: "7".repeat(64) } };
+  const verifiedByA = fixture.library({ lookupCurrentRevision: async () => ({ status: "missing" }),
+    lookupSource: async () => ({ status: "missing" }), lookupCheckerAdmission: async () => ({ status: "missing" }),
+    lookupProductQaAdmission: async () => ({ status: "missing" }),
+    lookupBaselineApprovalEvent: async eventId => eventId === event.eventId ? { status: "found", value: event } : { status: "missing" } });
+  const approved = await verifiedByA.recordBaselineApproval(null, "links-and-rules", "proposal-r2", event.eventId, "approval-r1");
+  assert.equal(approved.status, "found");
+  const approvalValue = "value" in approved ? approved.value : undefined;
+  assert.ok(approvalValue);
+  assert.equal(approvalValue?.state, "formalized");
+  assert.equal(approvalValue?.proposalSha256, pin.sha256);
+  assert.equal(approvalValue?.event.userSource.sourceId, event.userSource.sourceId);
+  assert.equal((await verifiedByA.currentBaselineApproval("links-and-rules", "proposal-r2")).status, "found");
+
+  const mismatchedA = fixture.library({ lookupCurrentRevision: async () => ({ status: "missing" }),
+    lookupSource: async () => ({ status: "missing" }), lookupCheckerAdmission: async () => ({ status: "missing" }),
+    lookupProductQaAdmission: async () => ({ status: "missing" }), lookupBaselineApprovalEvent: async () => ({ status: "found", value: {
+      ...event, proposal: { ...event.proposal, sha256: "0".repeat(64) },
+    } }) });
+  const mismatch = await mismatchedA.recordBaselineApproval("approval-r1", "links-and-rules", "proposal-r2", event.eventId, "approval-r2");
+  assert.equal(mismatch.status, "unavailable");
+  assert.equal((await mismatchedA.currentBaselineApproval("links-and-rules", "proposal-r2")).status, "found");
+});
 
 test("Host-bound gate and checker journals isolate scope, preserve immutable history, and stay UNKNOWN for A-owned trace", async () => {
   const fixture = hostFixture(), library = fixture.library(), scope1 = snapshot("scope-r1"), scope2 = snapshot("scope-r2");
@@ -137,6 +190,124 @@ test("SDK contexts and state facades with malformed fields, accessors, or altere
   const incompleteState = { get: fixture.state.get };
   assert.throws(() => make({ ...fixture.platform, state: incompleteState }), /Malformed SDK state facade/u);
   assert.equal(fixture.values.size, before);
+});
+
+test("fully pinned Host-library lookups can resolve and produce a PASS-capable G6 result; missing or revoked admission stays UNKNOWN", async () => {
+  const fixture = hostFixture();
+  const proposalInput = requirementProposal();
+  const sourceBytes = new TextEncoder().encode("approved original requirement source");
+  const originalPin = { sourceId: "original-contract", revisionId: "contract-r8", sha256: sha("approved original requirement source") };
+  const proposalValue = { ...proposalInput, links: [{ requirementId: "REQ-1", originals: [originalPin] }] };
+  const proposalRecord = { schemaVersion: 1 as const, workspaceId: W, projectId: P, ...proposalValue };
+  const proposalPin = requirementRuleProposalPin(proposalRecord);
+  const targetPins = [proposalPin, proposalValue.baseline, proposalValue.specification, proposalValue.graph, originalPin];
+  const target = Object.freeze({ ...snapshot("scope-with-approval-r1"), pins: Object.freeze(targetPins) });
+  const pinBytes = new Map(targetPins.map((pin, index) => [pin.sourceId, new TextEncoder().encode(`pinned source ${index}`)]));
+  pinBytes.set(originalPin.sourceId, sourceBytes);
+
+  const libraryWithoutAdmission = fixture.library();
+  assert.equal((await libraryWithoutAdmission.publishRequirementRuleProposal(null, proposalValue)).status, "published");
+  assert.equal((await libraryWithoutAdmission.publishScope(null, target)).status, "published");
+  const checker = { checkerId: "g6-checker", checkerVersion: "3", revisionId: "checker-r1",
+    implementation: originalPin } as const;
+  assert.equal((await libraryWithoutAdmission.publishChecker(null, checker)).status, "published");
+
+  const board = createTaskPacketStore(W, P, CTO, WORKSTREAM, fixture.state);
+  const packet = qaPacket();
+  assert.equal((await board.publish({ expectedBaseRevisionId: null, revision: { projectId: P, ctoId: CTO,
+    workstreamId: WORKSTREAM, revisionId: "qa-board-r1", packets: [packet] } })).status, "published");
+  const artifactText = "QA run report: all planned checks passed.";
+  const qaRecord = { recordId: `${target.scopeId}\u0000${target.revisionId}`, revisionId: "qa-r1", target,
+    task: { ctoId: CTO, workstreamId: WORKSTREAM, taskId: "qa-task", taskRevision: 1 }, testPlan: packet.packet.testPlan!,
+    run: { agentId: QA_AGENT, sessionId: QA_SESSION, runId: QA_RUN }, command: "node --test product-suite", exitCode: 0,
+    result: "passed" as const, artifact: { sourceId: `host-run-output:${QA_RUN}`, revisionId: QA_RUN,
+      sha256: sha(artifactText), text: artifactText }, sourcePins: target.pins };
+  assert.equal((await libraryWithoutAdmission.publishProductQa(null, qaRecord)).status, "published");
+
+  const event = { eventId: "approval-event-exact-r1", workspaceId: W, projectId: P, scopeId: WORKSTREAM,
+    proposal: proposalPin, baseline: proposalValue.baseline, specification: proposalValue.specification, graph: proposalValue.graph,
+    actor: { agentId: MAIN_AGENT, sessionId: MAIN_SESSION, runId: RUN_ID, selectionRevision: 7 },
+    userSource: { sourceId: "lead-turn:12345678-1234-4234-8234-123456789abc", sha256: "7".repeat(64) } };
+  let checkerAdmitted = true, qaAdmitted = true, sourceChanged = false, revisionStale = false, approvalEventCurrent = true;
+  const dependencies: BuilderGateRegistryDependencies = {
+    lookupCurrentRevision: async (_scope, pin) => !revisionStale
+      && targetPins.some(item => JSON.stringify(item) === JSON.stringify(pin))
+      ? { status: "found", value: pin } : { status: "missing" },
+    lookupSource: async (sourceId, scopeId, revisionId) => {
+      const pin = targetPins.find(item => item.sourceId === sourceId && item.revisionId === revisionId);
+      const bytes = sourceChanged && sourceId === originalPin.sourceId
+        ? new TextEncoder().encode("changed original requirement source") : pinBytes.get(sourceId);
+      return pin && bytes ? { status: "found", value: { sourceId, scopeId, revisionId, bytes } } : { status: "missing" };
+    },
+    lookupCheckerAdmission: async record => checkerAdmitted
+      ? { status: "found", value: { checkerId: record.checkerId, checkerVersion: record.checkerVersion,
+        implementation: record.implementation } }
+      : { status: "missing" },
+    lookupProductQaAdmission: async record => qaAdmitted
+      ? { status: "found", value: { actorId: QA_AGENT, target: record.target, command: record.command,
+        exitCode: record.exitCode, result: record.result, report: { sourceId: record.artifact.sourceId,
+          revisionId: record.artifact.revisionId, sha256: record.artifact.sha256 } } }
+      : { status: "missing" },
+    lookupBaselineApprovalEvent: async eventId => approvalEventCurrent && eventId === event.eventId
+      ? { status: "found", value: event } : { status: "missing" },
+  };
+  const library = fixture.library(dependencies);
+  const approval = await library.recordBaselineApproval(null, proposalValue.proposalId, proposalValue.revisionId, event.eventId, "approval-r1");
+  assert.equal(approval.status, "found");
+  const request = { gateId: "G6" as const, expected: target, checkerId: checker.checkerId,
+    checkerVersion: checker.checkerVersion,
+    authority: { kind: "lead" as const, runContext: fixture.runContext, platform: fixture.platform, formalPublication: true },
+    requireQa: true, evidenceRefs: [originalPin], jointBaselineApproval: { proposalId: proposalValue.proposalId,
+      proposal: proposalPin, baseline: proposalValue.baseline, specification: proposalValue.specification, graph: proposalValue.graph } };
+  const resolved = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(resolved.status, "RESOLVED", JSON.stringify(resolved.requiredLookups));
+  const evaluation = evaluateBuilderGates([{ current: target,
+    requirements: [{ gateId: "G6", checkerId: checker.checkerId, checkerVersion: checker.checkerVersion,
+      requireAuthority: true, requireQa: true }],
+    evidence: [{ gateId: "G6", target, evidenceRefs: [originalPin], registry: resolved }] }]);
+  assert.equal(evaluation.scopes[0]?.gates[0]?.verdict, "PASS");
+
+  sourceChanged = true;
+  const changedSource = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(changedSource.status, "UNKNOWN");
+  assert.ok(changedSource.requiredLookups.includes("lookup-original-source:original-contract"));
+  sourceChanged = false;
+  revisionStale = true;
+  const staleRevision = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(staleRevision.status, "UNKNOWN");
+  assert.ok(staleRevision.requiredLookups.some(value => value.includes("current-revision")));
+  revisionStale = false;
+
+  checkerAdmitted = false;
+  const checkerRevoked = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(checkerRevoked.status, "UNKNOWN");
+  assert.ok(checkerRevoked.requiredLookups.includes("lookup-approved-checker-registry-current-pin"));
+  checkerAdmitted = true;
+  qaAdmitted = false;
+  const qaRevoked = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(qaRevoked.status, "UNKNOWN");
+  assert.ok(qaRevoked.requiredLookups.includes("lookup-independent-qa-evidence"));
+  qaAdmitted = true;
+
+  fixture.values.set(`${W}/sonpark.my-builder/lead-agent.v1`, { workspaceId: W, revision: 8,
+    selectedAgentId: "99999999-9999-4999-8999-999999999999" });
+  const authorityRevoked = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(authorityRevoked.status, "UNKNOWN");
+  assert.ok(authorityRevoked.requiredLookups.includes("resolve-current-lead-authority"));
+  fixture.values.set(`${W}/sonpark.my-builder/lead-agent.v1`, { workspaceId: W, revision: 7, selectedAgentId: MAIN_AGENT });
+
+  approvalEventCurrent = false;
+  const eventRevoked = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(eventRevoked.status, "UNKNOWN");
+  assert.ok(eventRevoked.requiredLookups.includes("lookup-joint-baseline-approval"));
+  approvalEventCurrent = true;
+
+  const approvalHead = [...fixture.values.keys()].find(key => key.includes("gate-approval-head.v1."));
+  assert.ok(approvalHead);
+  fixture.values.delete(approvalHead!);
+  const approvalRevoked = await (await import("./registry.ts")).resolveBuilderGateRegistry(request, library.registry);
+  assert.equal(approvalRevoked.status, "UNKNOWN");
+  assert.ok(approvalRevoked.requiredLookups.includes("lookup-joint-baseline-approval"));
 });
 
 test("factory captures the original SDK state facade and ignores later platform.state replacement", async () => {

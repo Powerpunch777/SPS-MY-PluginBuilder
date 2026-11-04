@@ -15,6 +15,7 @@ import { createWorkstreamStore } from "../workstream-tools.ts";
 import { createCtoDeliveryStore } from "../cto-delivery-store.ts";
 import type { BuilderGateId, EvidencePin, GateScopeSnapshot } from "./index.ts";
 import { isHostBoundRegistry } from "./provider-brand.ts";
+import type { BaselineApprovalRecord, RequirementRuleProposalRecord } from "./records.ts";
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 const samePin = (left: EvidencePin, right: EvidencePin): boolean => left.sourceId === right.sourceId
@@ -69,6 +70,14 @@ export type StoredQaEvidence = Readonly<{
   result: "passed" | "failed" | "unknown";
   report: EvidencePin;
 }>;
+export type JointBaselineApproval = Readonly<{ proposal: RequirementRuleProposalRecord; approval: BaselineApprovalRecord }>;
+export type JointBaselineApprovalTarget = Readonly<{
+  proposalId: string;
+  proposal: EvidencePin;
+  baseline: EvidencePin;
+  specification: EvidencePin;
+  graph: EvidencePin;
+}>;
 
 /**
  * Registry adapter boundary. These are lookups of stored/current records, not
@@ -81,6 +90,7 @@ export type BuilderGateRegistry = Readonly<{
   lookupSource?: (sourceId: string, scopeId: string, revisionId: string) => Promise<RegistryLookup<StoredGateSource>>;
   lookupChecker?: (checkerId: string, checkerVersion: string) => Promise<RegistryLookup<StoredChecker>>;
   lookupIndependentQa?: (target: GateScopeSnapshot) => Promise<RegistryLookup<StoredQaEvidence>>;
+  lookupJointBaselineApproval?: (target: JointBaselineApprovalTarget) => Promise<RegistryLookup<JointBaselineApproval>>;
   resolveAuthority?: (request: GateAuthorityRequest) => Promise<ResolvedGateAuthority>;
 }>;
 
@@ -129,6 +139,8 @@ export type ResolveRegistryInput = Readonly<{
   authority: GateAuthorityRequest;
   requireQa: boolean;
   evidenceRefs: readonly EvidencePin[];
+  /** Exact user-approved requirement/rule proposal and baseline revision. Omission stays UNKNOWN. */
+  jointBaselineApproval?: JointBaselineApprovalTarget;
 }>;
 
 const UNAVAILABLE = (name: string): RegistryLookup<never> => ({ status: "unavailable", reason: `${name}-provider-unavailable` });
@@ -207,6 +219,59 @@ async function resolveBuilderGateRegistryFromProvider(input: ResolveRegistryInpu
     for (const issue of await currentTaskDependencyIssues(registry ?? {}, input.expected, currentScope.records.taskPacket)) unknown(issue);
   }
 
+  if (input.evidenceRefs.length === 0) unknown("lookup-original-source-references-missing");
+  const evidenceRefKeys = new Set<string>();
+  for (const pin of input.evidenceRefs) {
+    const key = `${pin.sourceId}\u0000${pin.revisionId}`;
+    if (evidenceRefKeys.has(key)) unknown(`lookup-original-source-reference-duplicate:${pin.sourceId}`);
+    evidenceRefKeys.add(key);
+    if (!input.expected.pins.some(expected => samePin(expected, pin))) unknown(`lookup-original-source-reference-unpinned:${pin.sourceId}`);
+  }
+
+  if (!input.jointBaselineApproval || !registry?.lookupJointBaselineApproval) {
+    unknown("lookup-joint-baseline-approval");
+  } else {
+    const target = input.jointBaselineApproval;
+    const targetPins = [target.proposal, target.baseline, target.specification, target.graph];
+    for (const pin of targetPins) {
+      if (!input.expected.pins.some(expected => samePin(expected, pin))) unknown(`lookup-joint-baseline-pin:${pin.sourceId}`);
+    }
+    const found = await safeLookup("lookup-joint-baseline-approval",
+      () => registry.lookupJointBaselineApproval!(target));
+    if (found.status !== "found") unknown("lookup-joint-baseline-approval");
+    else {
+      const { proposal, approval } = found.value;
+      const proposalPin = {
+        sourceId: `builder-gate-proposal:${proposal.proposalId}`,
+        revisionId: proposal.revisionId,
+        sha256: createHash("sha256").update(JSON.stringify({ schemaVersion: proposal.schemaVersion,
+          workspaceId: proposal.workspaceId, projectId: proposal.projectId, scopeId: proposal.scopeId,
+          proposalId: proposal.proposalId, revisionId: proposal.revisionId, previousRevisionId: proposal.previousRevisionId,
+          revision: proposal.revision, baseline: proposal.baseline, specification: proposal.specification,
+          graph: proposal.graph, links: proposal.links, rulePacks: proposal.rulePacks })).digest("hex"),
+      };
+      if (proposal.proposalId !== target.proposalId || !samePin(proposalPin, target.proposal)
+        || !samePin(proposal.baseline, target.baseline) || !samePin(proposal.specification, target.specification)
+        || !samePin(proposal.graph, target.graph) || proposal.scopeId !== input.expected.scopeId
+        || approval.proposalRevisionId !== proposal.revisionId || approval.proposalSha256 !== proposalPin.sha256
+        || approval.state !== "formalized" || !samePin(approval.event.proposal, target.proposal)
+        || !samePin(approval.event.baseline, target.baseline) || !samePin(approval.event.specification, target.specification)
+        || !samePin(approval.event.graph, target.graph)) unknown("lookup-joint-baseline-approval-current-exact-binding");
+      for (const link of proposal.links) for (const original of link.originals) {
+        const source = await safeLookup("lookup-joint-baseline-original-source",
+          () => registry.lookupSource!(original.sourceId, input.expected.scopeId, original.revisionId));
+        if (!registry.lookupSource || source.status !== "found" || source.value.sourceId !== original.sourceId
+          || source.value.scopeId !== input.expected.scopeId || source.value.revisionId !== original.revisionId
+          || sha256(source.value.bytes) !== original.sha256) unknown(`lookup-joint-baseline-original-source:${original.sourceId}`);
+        const current = await safeLookup("lookup-joint-baseline-current-revision",
+          () => registry.lookupCurrentRevision!(input.expected.scopeId, original));
+        if (!registry.lookupCurrentRevision || current.status !== "found" || !samePin(current.value, original)) {
+          unknown(`lookup-joint-baseline-current-revision:${original.sourceId}`);
+        }
+      }
+    }
+  }
+
   if (!registry?.lookupSource) unknown("lookup-original-source-bytes");
   else for (const pin of input.evidenceRefs) {
     const found = await safeLookup("lookup-original-source-bytes", () => registry.lookupSource!(pin.sourceId, input.expected.scopeId, pin.revisionId));
@@ -231,7 +296,10 @@ async function resolveBuilderGateRegistryFromProvider(input: ResolveRegistryInpu
       ? "resolve-current-lead-authority" : "resolve-current-cto-planning-authority");
     else authority = await registry.resolveAuthority(input.authority);
     if (authority) {
-    if (authority.workspaceId !== input.expected.workspaceId || authority.scopeId !== input.expected.scopeId) {
+    const authorityScopeMatches = input.authority.kind === "lead"
+      ? authority.scopeId === input.expected.projectId || authority.scopeId === input.expected.scopeId
+      : authority.scopeId === input.expected.scopeId;
+    if (authority.workspaceId !== input.expected.workspaceId || !authorityScopeMatches) {
       unknown("resolve-current-authority-scope");
     }
     }
@@ -289,7 +357,8 @@ async function resolveBuilderGateRegistryFromProvider(input: ResolveRegistryInpu
   // the only source allowed to omit this dependency.
   if (!isHostBoundRegistry(registry)) required.add("trusted-production-registry-unavailable");
   const requiredLookups = [...required].sort((a, b) => a.localeCompare(b, "en"));
-  const base = { gateId: input.gateId, target: input.expected, status: "UNKNOWN" as const,
+  const status = requiredLookups.length === 0 && isHostBoundRegistry(registry) ? "RESOLVED" as const : "UNKNOWN" as const;
+  const base = { gateId: input.gateId, target: input.expected, status,
     requiredLookups: Object.freeze(requiredLookups), checker,
     resolved: Object.freeze({ currentScope, authority: requiredLookups.length === 0 ? authority : null, qa, sources: Object.freeze(sources) }),
     limitations: Object.freeze(["The Registry adapter must read authoritative stored records and return their original scope/revision identity.",

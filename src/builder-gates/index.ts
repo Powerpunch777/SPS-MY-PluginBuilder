@@ -1,7 +1,9 @@
 import { isTrustedRegistryResolution, type RegistryResolution } from "./registry.ts";
 export { createBuilderGateRecordLibrary } from "./records.ts";
 export type { BuilderGateRecordLibrary, BuilderGateScopeRecord, CheckerImplementationRecord,
-  BuilderGateRegistryDependencies, GateLibraryAuthority, ProductQaRecord } from "./records.ts";
+  BuilderGateRegistryDependencies, GateLibraryAuthority, ProductQaRecord, RequirementOriginalLink,
+  ApplicableRulePack, RequirementRuleProposalRecord, BaselineApprovalEvent, BaselineApprovalRecord } from "./records.ts";
+export { requirementRuleProposalPin } from "./records.ts";
 
 export const BUILDER_GATE_IDS = ["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7"] as const;
 export type BuilderGateId = typeof BUILDER_GATE_IDS[number];

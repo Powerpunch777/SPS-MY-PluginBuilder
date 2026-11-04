@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { lookupCurrentTaskPacketRecord } from "./registry.ts";
 import type { BuilderGateRegistry, GateAuthorityRequest, RegistryLookup, StoredChecker,
-  StoredGateScope, StoredGateSource, StoredQaEvidence } from "./registry.ts";
+  StoredGateScope, StoredGateSource, StoredQaEvidence, JointBaselineApprovalTarget } from "./registry.ts";
 import type { EvidencePin, GateScopeSnapshot } from "./index.ts";
 import type { TaskPacketTestPlan } from "../domain/task-packets.ts";
 import { createRevisionJournal, type RevisionState } from "../solution-revision-store.ts";
@@ -66,6 +66,100 @@ function parseSnapshot(value: unknown, workspaceId: string, projectId: string): 
     revisionId: id(input.revisionId, "revisionId"), pins: Object.freeze(pins) });
 }
 
+const proposalSourceId = (proposalId: string) => `builder-gate-proposal:${proposalId}`;
+export function requirementRuleProposalPin(record: RequirementRuleProposalRecord): EvidencePin {
+  const canonical = { schemaVersion: record.schemaVersion, workspaceId: record.workspaceId, projectId: record.projectId,
+    scopeId: record.scopeId, proposalId: record.proposalId, revisionId: record.revisionId,
+    previousRevisionId: record.previousRevisionId, revision: record.revision, baseline: record.baseline,
+    specification: record.specification, graph: record.graph, links: record.links, rulePacks: record.rulePacks };
+  return Object.freeze({ sourceId: proposalSourceId(record.proposalId), revisionId: record.revisionId,
+    sha256: sha256(stableJson(canonical)) });
+}
+
+function parseProposal(value: unknown, workspaceId: string, projectId: string, proposalId: string): RequirementRuleProposalRecord {
+  const input = row(value, ["schemaVersion", "workspaceId", "projectId", "scopeId", "proposalId", "revisionId", "previousRevisionId",
+    "revision", "baseline", "specification", "graph", "links", "rulePacks"], "requirement/rule proposal");
+  if (input.schemaVersion !== 1 || input.workspaceId !== workspaceId || input.projectId !== projectId || input.proposalId !== proposalId) {
+    throw new TypeError("Proposal is cross-scope or unsupported.");
+  }
+  const scopeId = id(input.scopeId, "scopeId"), revisionId = id(input.revisionId, "revisionId");
+  if (!Number.isSafeInteger(input.revision) || (input.revision as number) < 1
+    || input.revision === 1 && input.previousRevisionId !== null
+    || input.revision !== 1 && (typeof input.previousRevisionId !== "string" || !input.previousRevisionId.trim())) {
+    throw new TypeError("Proposal revision lineage is invalid.");
+  }
+  const baseline = parsePin(input.baseline, "baseline"), specification = parsePin(input.specification, "specification");
+  const graph = parsePin(input.graph, "graph");
+  if (new Set([baseline.sourceId, specification.sourceId, graph.sourceId]).size !== 3) {
+    throw new TypeError("Baseline, Spec and Graph pins must identify distinct sources.");
+  }
+  const links = Object.freeze(denseList(input.links, 1, 512, "proposal links").map((item, index) => {
+    const link = row(item, ["requirementId", "originals"], `links[${index}]`);
+    const originals = Object.freeze(denseList(link.originals, 1, 32, `links[${index}].originals`)
+      .map((pin, pinIndex) => parsePin(pin, `links[${index}].originals[${pinIndex}]`)));
+    if (new Set(originals.map(pin => `${pin.sourceId}\u0000${pin.revisionId}`)).size !== originals.length) {
+      throw new TypeError(`links[${index}] contains duplicate original references.`);
+    }
+    return Object.freeze({ requirementId: id(link.requirementId, `links[${index}].requirementId`), originals });
+  }));
+  if (new Set(links.map(link => link.requirementId)).size !== links.length) throw new TypeError("Proposal requirement links must be unique.");
+  const rulePacks = Object.freeze(denseList(input.rulePacks, 1, 128, "proposal rule packs").map((item, index) => {
+    const pack = row(item, ["packId", "version", "sha256"], `rulePacks[${index}]`);
+    if (typeof pack.sha256 !== "string" || !HASH.test(pack.sha256)) throw new TypeError(`rulePacks[${index}].sha256 is invalid.`);
+    return Object.freeze({ packId: id(pack.packId, `rulePacks[${index}].packId`),
+      version: id(pack.version, `rulePacks[${index}].version`), sha256: pack.sha256 });
+  }));
+  if (new Set(rulePacks.map(pack => `${pack.packId}\u0000${pack.version}`)).size !== rulePacks.length) {
+    throw new TypeError("Proposal rule pack versions must be unique.");
+  }
+  return Object.freeze({ schemaVersion: 1, workspaceId, projectId, scopeId, proposalId, revisionId,
+    previousRevisionId: input.previousRevisionId === null ? null : id(input.previousRevisionId, "previousRevisionId"),
+    revision: input.revision as number, baseline, specification, graph, links, rulePacks });
+}
+
+function parseApprovalEvent(value: unknown, workspaceId: string, projectId: string,
+  proposal: RequirementRuleProposalRecord): BaselineApprovalEvent {
+  const input = row(value, ["eventId", "workspaceId", "projectId", "scopeId", "proposal", "baseline", "specification", "graph", "actor", "userSource"], "baseline approval event");
+  const actorInput = row(input.actor, ["agentId", "sessionId", "runId", "selectionRevision"], "approval actor");
+  const sourceInput = row(input.userSource, ["sourceId", "sha256"], "approval user source");
+  const event = Object.freeze({ eventId: id(input.eventId, "eventId"), workspaceId: id(input.workspaceId, "event.workspaceId"),
+    projectId: id(input.projectId, "event.projectId"), scopeId: id(input.scopeId, "event.scopeId"),
+    proposal: parsePin(input.proposal, "event.proposal"), baseline: parsePin(input.baseline, "event.baseline"),
+    specification: parsePin(input.specification, "event.specification"), graph: parsePin(input.graph, "event.graph"),
+    actor: Object.freeze({ agentId: id(actorInput.agentId, "actor.agentId"), sessionId: id(actorInput.sessionId, "actor.sessionId"),
+      runId: id(actorInput.runId, "actor.runId"), selectionRevision: actorInput.selectionRevision as number }),
+    userSource: Object.freeze({ sourceId: id(sourceInput.sourceId, "userSource.sourceId"), sha256: sourceInput.sha256 as string }) });
+  if (event.workspaceId !== workspaceId || event.projectId !== projectId || event.scopeId !== proposal.scopeId
+    || stableJson(event.proposal) !== stableJson(requirementRuleProposalPin(proposal))
+    || stableJson(event.baseline) !== stableJson(proposal.baseline)
+    || stableJson(event.specification) !== stableJson(proposal.specification)
+    || stableJson(event.graph) !== stableJson(proposal.graph)
+    || !UUID.test(event.actor.agentId) || !UUID.test(event.actor.sessionId) || !UUID.test(event.actor.runId)
+    || !Number.isSafeInteger(event.actor.selectionRevision) || event.actor.selectionRevision < 1
+    || !/^lead-turn:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(event.userSource.sourceId)
+    || typeof event.userSource.sha256 !== "string" || !HASH.test(event.userSource.sha256)) {
+    throw new TypeError("Approval event does not bind the exact proposal, baseline, Spec, Graph and user-turn provenance.");
+  }
+  return event;
+}
+
+function parseApprovalRecord(value: unknown, workspaceId: string, projectId: string,
+  proposal: RequirementRuleProposalRecord): BaselineApprovalRecord {
+  const input = row(value, ["schemaVersion", "workspaceId", "projectId", "scopeId", "proposalId", "revisionId",
+    "proposalRevisionId", "proposalSha256", "event", "state"], "baseline approval record");
+  const pin = requirementRuleProposalPin(proposal);
+  if (input.schemaVersion !== 1 || input.workspaceId !== workspaceId || input.projectId !== projectId
+    || input.scopeId !== proposal.scopeId || input.proposalId !== proposal.proposalId
+    || input.proposalRevisionId !== proposal.revisionId || input.proposalSha256 !== pin.sha256 || input.state !== "formalized"
+    || typeof input.proposalSha256 !== "string" || !HASH.test(input.proposalSha256)) {
+    throw new TypeError("Baseline approval record does not bind the exact proposal version.");
+  }
+  return Object.freeze({ schemaVersion: 1, workspaceId, projectId, scopeId: proposal.scopeId,
+    proposalId: proposal.proposalId, revisionId: id(input.revisionId, "approval.revisionId"),
+    proposalRevisionId: proposal.revisionId, proposalSha256: pin.sha256,
+    event: parseApprovalEvent(input.event, workspaceId, projectId, proposal), state: "formalized" });
+}
+
 function parseTestPlan(value: unknown): TaskPacketTestPlan {
   const input = row(value, ["environment", "steps", "expectedResults", "passCriteria"], "TestPlan");
   const list = (field: unknown, label: string) => {
@@ -85,6 +179,62 @@ export type BuilderGateScopeRecord = Readonly<{
   scopeId: string;
   revisionId: string;
   snapshot: GateScopeSnapshot;
+}>;
+
+export type RequirementOriginalLink = Readonly<{
+  requirementId: string;
+  originals: readonly EvidencePin[];
+}>;
+
+export type ApplicableRulePack = Readonly<{
+  packId: string;
+  version: string;
+  sha256: string;
+}>;
+
+/** AI proposal only. This record never carries or implies approval. */
+export type RequirementRuleProposalRecord = Readonly<{
+  schemaVersion: 1;
+  workspaceId: string;
+  projectId: string;
+  scopeId: string;
+  proposalId: string;
+  revisionId: string;
+  previousRevisionId: string | null;
+  revision: number;
+  baseline: EvidencePin;
+  specification: EvidencePin;
+  graph: EvidencePin;
+  links: readonly RequirementOriginalLink[];
+  rulePacks: readonly ApplicableRulePack[];
+}>;
+
+/** Exact A-owned Main approval event, returned only by its verified lookup. */
+export type BaselineApprovalEvent = Readonly<{
+  eventId: string;
+  workspaceId: string;
+  projectId: string;
+  scopeId: string;
+  proposal: EvidencePin;
+  baseline: EvidencePin;
+  specification: EvidencePin;
+  graph: EvidencePin;
+  actor: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number }>;
+  userSource: Readonly<{ sourceId: string; sha256: string }>;
+}>;
+
+/** A durable reference to one exact proposal and its verified A-owned event. */
+export type BaselineApprovalRecord = Readonly<{
+  schemaVersion: 1;
+  workspaceId: string;
+  projectId: string;
+  scopeId: string;
+  proposalId: string;
+  revisionId: string;
+  proposalRevisionId: string;
+  proposalSha256: string;
+  event: BaselineApprovalEvent;
+  state: "formalized";
 }>;
 
 export type CheckerImplementationRecord = Readonly<{
@@ -126,6 +276,8 @@ export type BuilderGateRegistryDependencies = Readonly<{
   lookupSource: NonNullable<BuilderGateRegistry["lookupSource"]>;
   lookupCheckerAdmission: (record: CheckerImplementationRecord) => Promise<RegistryLookup<StoredChecker>>;
   lookupProductQaAdmission: (record: ProductQaRecord) => Promise<RegistryLookup<StoredQaEvidence>>;
+  /** A-owned factory must verify actual Main/Lead authority, current user turn and exact pinned revisions. */
+  lookupBaselineApprovalEvent?: (eventId: string, proposal: RequirementRuleProposalRecord) => Promise<RegistryLookup<BaselineApprovalEvent>>;
 }>;
 
 function parseScopeRecord(value: unknown, workspaceId: string, projectId: string, scopeId: string): BuilderGateScopeRecord {
@@ -264,7 +416,7 @@ export function createBuilderGateRecordLibrary(workspaceId: string, projectId: s
       const authority = await authorize(); const receipt = await state.compareAndSet!(...args); await authority.check(); return receipt;
     } : undefined,
   });
-  const journal = <T>(kind: "gate-scope" | "gate-checker" | "gate-product-qa", logicalId: string,
+  const journal = <T>(kind: "gate-scope" | "gate-checker" | "gate-product-qa" | "gate-proposal" | "gate-approval", logicalId: string,
     parse: (value: unknown) => T, revisionId: (value: T) => string) => {
     const scopedProjectKey = `${kind}-${sha256(`${workspaceId}\u0000${projectId}\u0000${logicalId}`)}`;
     return createRevisionJournal(workspaceId, scopedProjectKey, authorizedState(), { prefix: kind, parse, revisionId });
@@ -293,6 +445,36 @@ export function createBuilderGateRecordLibrary(workspaceId: string, projectId: s
       if (!found) return { status: "missing" };
       return { status: "found", value: Object.freeze({ snapshot: found.revision.snapshot, records: Object.freeze({}) }) };
     } catch { return { status: "unavailable", reason: "published-gate-scope-unavailable-or-unauthorized" }; }
+  }
+
+  async function currentProposal(proposalIdValue: string): Promise<RegistryLookup<RequirementRuleProposalRecord>> {
+    try {
+      const proposalId = id(proposalIdValue, "proposalId");
+      const found = await journal("gate-proposal", proposalId,
+        value => parseProposal(value, workspaceId, projectId, proposalId), value => value.revisionId).current();
+      return found ? { status: "found", value: found.revision } : { status: "missing" };
+    } catch { return { status: "unavailable", reason: "current-proposal-unavailable-or-unauthorized" }; }
+  }
+
+  async function publishedProposal(proposalIdValue: string, revisionIdValue: string): Promise<RegistryLookup<RequirementRuleProposalRecord>> {
+    try {
+      const proposalId = id(proposalIdValue, "proposalId"), revisionId = id(revisionIdValue, "revisionId");
+      const found = await journal("gate-proposal", proposalId,
+        value => parseProposal(value, workspaceId, projectId, proposalId), value => value.revisionId).publishedRevision(revisionId);
+      return found ? { status: "found", value: found.revision } : { status: "missing" };
+    } catch { return { status: "unavailable", reason: "published-proposal-unavailable-or-unauthorized" }; }
+  }
+
+  async function currentBaselineApproval(proposalIdValue: string, proposalRevisionIdValue: string): Promise<RegistryLookup<BaselineApprovalRecord>> {
+    try {
+      const proposalId = id(proposalIdValue, "proposalId"), proposalRevisionId = id(proposalRevisionIdValue, "proposalRevisionId");
+      const proposalResult = await publishedProposal(proposalId, proposalRevisionId);
+      if (proposalResult.status !== "found") return proposalResult;
+      const key = `${proposalId}\u0000${proposalRevisionId}`;
+      const found = await journal("gate-approval", key,
+        value => parseApprovalRecord(value, workspaceId, projectId, proposalResult.value), value => value.revisionId).current();
+      return found ? { status: "found", value: found.revision } : { status: "missing" };
+    } catch { return { status: "unavailable", reason: "baseline-approval-unavailable-or-unauthorized" }; }
   }
 
   async function readCheckerRecord(checkerIdValue: string, checkerVersionValue: string): Promise<RegistryLookup<CheckerImplementationRecord>> {
@@ -398,6 +580,29 @@ export function createBuilderGateRecordLibrary(workspaceId: string, projectId: s
       ? readScope(scope) : Promise.resolve({ status: "missing" as const }),
     lookupChecker: readApprovedChecker,
     lookupIndependentQa: readProductQa,
+    lookupJointBaselineApproval: async (target: JointBaselineApprovalTarget) => {
+      const proposal = await currentProposal(target.proposalId);
+      if (proposal.status !== "found") return proposal;
+      const pin = requirementRuleProposalPin(proposal.value);
+      if (stableJson(pin) !== stableJson(target.proposal)
+        || stableJson(proposal.value.baseline) !== stableJson(target.baseline)
+        || stableJson(proposal.value.specification) !== stableJson(target.specification)
+        || stableJson(proposal.value.graph) !== stableJson(target.graph)) return { status: "missing" as const };
+      const approval = await currentBaselineApproval(target.proposalId, proposal.value.revisionId);
+      if (approval.status !== "found") return approval;
+      if (!dependencies?.lookupBaselineApprovalEvent) {
+        return { status: "unavailable" as const, reason: "a-owned-current-main-approval-event-verifier-not-wired" };
+      }
+      try {
+        const authority = await authorize();
+        const event = await dependencies.lookupBaselineApprovalEvent(approval.value.event.eventId, proposal.value);
+        await authority.check();
+        if (event.status !== "found"
+          || stableJson(parseApprovalEvent(event.value, workspaceId, projectId, proposal.value))
+            !== stableJson(approval.value.event)) return { status: "missing" as const };
+      } catch { return { status: "unavailable" as const, reason: "a-owned-current-main-approval-event-unverified" }; }
+      return { status: "found" as const, value: Object.freeze({ proposal: proposal.value, approval: approval.value }) };
+    },
     // A owns source trace/sourceId binding and shared callers. Never fabricate
     // an original-source lookup from a pin or from this record journal.
     lookupSource: async (sourceId, scopeId, revisionId): Promise<RegistryLookup<StoredGateSource>> => {
@@ -426,6 +631,8 @@ export function createBuilderGateRecordLibrary(workspaceId: string, projectId: s
       "Gate scope snapshots, checker identity/version records, and product QA observations are persisted in Builder CAS journals; publishing them does not approve them.",
       "Checker approval and implementation source bytes require BuilderGateRegistryDependencies.lookupCheckerAdmission and lookupSource.",
       "Product QA is an actual Host run observation bound to the current QA Task Packet/TestPlan and exact output; independent admission requires lookupProductQaAdmission.",
+      "Requirement/rule-pack records are AI proposals only. Formalization is recorded only after the A-owned Main approval-event lookup returns exact matching provenance.",
+      "A proposal or approval record does not imply gate PASS, future approval, or runtime enforcement.",
       "Original source pins and current approved revision identity require A-owned lookupSource and lookupCurrentRevision dependencies.",
       "No shared Lead/CTO/QA caller is wired here; A must call this library at its existing publication/dispatch paths.",
     ]),
@@ -435,6 +642,66 @@ export function createBuilderGateRecordLibrary(workspaceId: string, projectId: s
       const revision: BuilderGateScopeRecord = Object.freeze({ schemaVersion: 1, workspaceId, projectId,
         scopeId: parsed.scopeId, revisionId: parsed.revisionId, snapshot: parsed });
       return publish(store, expectedBaseRevisionId, revision);
+    },
+    async publishRequirementRuleProposal(expectedBaseRevisionId: string | null,
+      value: Omit<RequirementRuleProposalRecord, "schemaVersion" | "workspaceId" | "projectId">) {
+      const proposalId = id(value.proposalId, "proposalId");
+      const store = journal("gate-proposal", proposalId,
+        record => parseProposal(record, workspaceId, projectId, proposalId), record => record.revisionId);
+      const current = await store.current();
+      const previous = current?.revision ?? null;
+      if ((previous?.revisionId ?? null) !== expectedBaseRevisionId) {
+        return { status: "conflict" as const, actualBaseRevisionId: previous?.revisionId ?? null };
+      }
+      if (value.revision !== (previous?.revision ?? 0) + 1
+        || value.previousRevisionId !== (previous?.revisionId ?? null)) {
+        throw new TypeError("Proposal revisions must append to the exact prior proposal revision.");
+      }
+      const revision = parseProposal({ schemaVersion: 1, workspaceId, projectId, ...value }, workspaceId, projectId, proposalId);
+      return publish(store, expectedBaseRevisionId, revision);
+    },
+    async currentRequirementRuleProposal(proposalId: string) { return currentProposal(proposalId); },
+    async publishedRequirementRuleProposal(proposalId: string, revisionId: string) { return publishedProposal(proposalId, revisionId); },
+    async recordBaselineApproval(expectedBaseRevisionId: string | null, proposalIdValue: string,
+      proposalRevisionIdValue: string, eventIdValue: string, approvalRevisionIdValue: string) {
+      if (authorityRequest.kind !== "lead" || !authorityRequest.formalPublication) {
+        return { status: "unavailable" as const, reason: "formal-baseline-approval-requires-lead-main-authority" };
+      }
+      const proposalId = id(proposalIdValue, "proposalId"), proposalRevisionId = id(proposalRevisionIdValue, "proposalRevisionId");
+      const eventId = id(eventIdValue, "eventId"), approvalRevisionId = id(approvalRevisionIdValue, "approvalRevisionId");
+      const proposalResult = await publishedProposal(proposalId, proposalRevisionId);
+      if (proposalResult.status !== "found") return proposalResult;
+      if (!dependencies?.lookupBaselineApprovalEvent) {
+        return { status: "unavailable" as const, reason: "a-owned-main-approval-event-verifier-not-wired" };
+      }
+      let event: BaselineApprovalEvent;
+      try {
+        const authority = await authorize();
+        const lookup = await dependencies.lookupBaselineApprovalEvent(eventId, proposalResult.value);
+        await authority.check();
+        if (lookup.status !== "found") return lookup;
+        event = parseApprovalEvent(lookup.value, workspaceId, projectId, proposalResult.value);
+        if (event.eventId !== eventId) return { status: "unavailable", reason: "a-owned-approval-event-id-mismatch" };
+      } catch {
+        return { status: "unavailable", reason: "a-owned-main-approval-event-unverified-or-unauthorized" };
+      }
+      const logicalId = `${proposalId}\u0000${proposalRevisionId}`;
+      const store = journal("gate-approval", logicalId,
+        record => parseApprovalRecord(record, workspaceId, projectId, proposalResult.value), record => record.revisionId);
+      const current = await store.current();
+      const previousRevisionId = current?.revision.revisionId ?? null;
+      if (previousRevisionId !== expectedBaseRevisionId) {
+        return { status: "conflict" as const, actualBaseRevisionId: previousRevisionId };
+      }
+      const pin = requirementRuleProposalPin(proposalResult.value);
+      const record = parseApprovalRecord({ schemaVersion: 1, workspaceId, projectId, scopeId: proposalResult.value.scopeId,
+        proposalId, revisionId: approvalRevisionId, proposalRevisionId, proposalSha256: pin.sha256, event, state: "formalized" },
+      workspaceId, projectId, proposalResult.value);
+      const result = await publish(store, expectedBaseRevisionId, record);
+      return result.status === "published" ? { status: "found" as const, value: record } : result;
+    },
+    async currentBaselineApproval(proposalId: string, proposalRevisionId: string) {
+      return currentBaselineApproval(proposalId, proposalRevisionId);
     },
     async publishChecker(expectedBaseRevisionId: string | null,
       value: Omit<CheckerImplementationRecord, "schemaVersion" | "workspaceId" | "projectId" | "admissionStatus">) {
