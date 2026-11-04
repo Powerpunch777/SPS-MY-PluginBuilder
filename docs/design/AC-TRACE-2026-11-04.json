@@ -4080,7 +4080,7 @@
         "AC-INT-15"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4101,7 +4101,7 @@
         "AC-INT-15"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4122,7 +4122,7 @@
         "AC-INT-13"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4144,7 +4144,7 @@
         "AC-DOC-06"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4166,7 +4166,7 @@
         "AC-DOC-16"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4188,7 +4188,7 @@
         "AC-INT-16"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4210,7 +4210,7 @@
         "AC-INT-13"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4233,7 +4233,7 @@
         "AC-INT-07"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4256,7 +4256,7 @@
         "AC-INT-16"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4277,7 +4277,7 @@
         "AC-INT-14"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4299,7 +4299,7 @@
         "AC-INT-10"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4321,7 +4321,7 @@
         "AC-INT-15"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4343,7 +4343,7 @@
         "AC-INT-16"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
@@ -4366,7 +4366,7 @@
         "AC-INT-07"
       ],
       "overrides": [],
-      "owner": "CTO-A: page/shared action wiring; CTO-B: existing delivery journal/server gate; new-contract task revision binding pending; Lead: final acceptance",
+      "owner": "CTO-A: BUILDER-CP3-UI-APPROVAL-IMPLEMENT and DOCUMENTS-IMPLEMENT; CTO-B: BUILDER-CP3-DELIVERABLES-IMPLEMENT; corresponding independent QA; bound APP20261105-R2; Lead: final acceptance",
       "test_name": null,
       "target_revision": null,
       "state": "NOT_RUN",
