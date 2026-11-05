@@ -18,12 +18,15 @@
 
 ## 최신 확정 개정
 
-- [CLI Pool·시스템 완료·선택적 Wake (2026-11-05)](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md):
-  단일 활성 계정과 독립 Session ID, 시스템 완료 이벤트의 RUNNING/DONE/INTERRUPTED/IDLE,
-  전환으로 실제 중단된 Run만 continue, 완료 직후 전환/지연 이벤트/중복 복구의 최종 CAS 검증을 확정한다.
+- [CLI Pool·시스템 완료·무메시지 Wake (2026-11-05)](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md):
+  단일 활성 계정과 독립 Session ID, RUNNING/DONE/INTERRUPTED/WAITING_CAPACITY/IDLE,
+  실제 중단된 미완료 Run만 thread/resume 뒤 turn/start + input: [] + 실제 관측 toolOutput으로 복구한다.
+  continue 사용자 메시지를 추가하지 않고 완료 직후 전환/지연 이벤트/중복 복구의 최종 CAS·활성 Turn 검사를 유지한다.
   DONE은 업무 완료/QA가 아니며 별도 보고 Agent·중복 원장을 만들지 않는다. PREPARE/RESUME/WAKE를
   분리하고 무호출 복원이 없으면 PREPARE만 한다.
-  9개 실제 CLI 인수는 NOT_RUN이며 사용자 지시로 이 추가 기능의 구현·실행 검증은 보류한다.
+  Capacity의 내부 재시도와 백오프·jitter 예약을 분리하고 취소·철회/완료 시 예약을 중단한다.
+  최신 결정에 따라 자동 계정 전환은 공급자 약관·사용량 제한 정책의 허용 범위에서만 활성화한다.
+  기존 9개와 A~D 실제 CLI 인수는 NOT_RUN이다. 설치 지원 확인과 A→B 무메시지 실제 복구를 우선하며 문서만으로 완료하지 않는다.
 - [실행·인계·QA·복구 계약 보강 (2026-11-05)](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md):
   실제 Core 선행 공백을 분리하고 기존 Task Packet의 소스·산출물·증거 인계와 소비자 인수를 결속한다.
   정확한 Commit QA·영향 범위 재검증·지속 이벤트 자동 통합·제한된 재시도/관측 가능한 대기와
