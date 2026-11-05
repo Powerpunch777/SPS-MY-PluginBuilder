@@ -18,6 +18,12 @@
 
 ## 최신 확정 개정
 
+- [CLI Pool·시스템 완료·선택적 Wake (2026-11-05)](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md):
+  단일 활성 계정과 독립 Session ID, 시스템 완료 이벤트의 RUNNING/DONE/INTERRUPTED/IDLE,
+  전환으로 실제 중단된 Run만 continue, 완료 직후 전환/지연 이벤트/중복 복구의 최종 CAS 검증을 확정한다.
+  DONE은 업무 완료/QA가 아니며 별도 보고 Agent·중복 원장을 만들지 않는다. PREPARE/RESUME/WAKE를
+  분리하고 무호출 복원이 없으면 PREPARE만 한다. 공급자 허용 없는 제한 우회 순환은 비활성이다.
+  9개 실제 CLI 인수는 NOT_RUN이며 사용자 지시로 이 추가 기능의 구현·실행 검증은 보류한다.
 - [실행·인계·QA·복구 계약 보강 (2026-11-05)](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md):
   실제 Core 선행 공백을 분리하고 기존 Task Packet의 소스·산출물·증거 인계와 소비자 인수를 결속한다.
   정확한 Commit QA·영향 범위 재검증·지속 이벤트 자동 통합·제한된 재시도/관측 가능한 대기와

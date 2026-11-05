@@ -7,7 +7,7 @@
 
 ## 1. 읽는 순서와 제품 경계
 
-제품 목표는 사용자 최신 결정, 이 통합 계약, [실행·인계·복구 보강](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md), [범용 권한·Host 사전 위임 추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md), [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
+제품 목표는 사용자 최신 결정, 이 통합 계약, [시스템 완료·선택적 Wake](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md), [실행·인계·복구 보강](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md), [범용 권한·Host 사전 위임 추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md), [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
 CSAS v0.8의 유효 조항, v15의 비충돌 조항 순으로 해석한다.
 실제 구현 가능성과 보안 권한은 별도로 현재 Core/SDK 계약에서 검증한다.
 기술 미지원은 제품 요구를 삭제하는 근거가 아니며, 미지원/미검증으로 기록한다.
@@ -267,12 +267,19 @@ QA는 불변의 실제 검사 Commit에 연결하며 Graph/trace로 영향받은
 설계 반영, fixture 통과, 실제 앱·AI/보호 실행 검증은 분리한다. 새 Agent/중복 시스템은 추가하지 않는다.
 기존 216개 원문 AC를 보존하고 POLICY-EXEC-01~16은 별도 NOT_RUN overlay로 추적한다.
 
-공용 풀 전환은 실행 계약 보강 §9의 최신 정정에 따른다. 모든 역할이 하나의 활성 CLI 계정을
+공용 풀 전환은 실행 계약 보강 §9 및 [시스템 완료·선택적 Wake 확정 설계](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md)를 따른다. 모든 역할이 하나의 활성 CLI 계정을
 공유하고 세션 등록·로컬 Session ID 보존과 실행 점유를 분리한다. PREPARE/RESUME/WAKE는
-독립 동작이며 복원만으로 모델을 호출하지 않는다. 실제 작업 중이던 세션만 자동 Wake하고,
+독립 동작이며 복원만으로 모델을 호출하지 않는다. 무호출 복원이 미지원/미검증이면 PREPARE까지만 한다.
+시스템 실행 이벤트로 RUNNING/DONE/INTERRUPTED/IDLE을 관리하고 Agent의 DONE 보고를 강제하지 않는다.
+DONE은 마지막 AI 실행의 정상 종료이며 Task/CTO VERIFIED/QA/통합 완료가 아니다.
+전환 직전 RUNNING이고 전환/인증으로 실제 중단됐으며 정상 완료 없이 미완료 작업·안전한 종료가
+확인된 세션만 최종 상태 재조회와 세대/Run/Event/requestId/CAS 검증 뒤 continue로 자동 Wake한다.
 사용자·승인·의존성 대기는 해소 이벤트, 중단 세션은 명시 재개 요청으로 Wake한다. 완료·보관은
 깨우지 않는다. 계정 간 서버 소유권을 로컬 복원 조건으로 삼지 않되 현재 권한·Revision과
-프로세스 종료·중복 방지는 검증한다. 실제 A→B 인증 모델 요청은 로컬 복원과 별도 인수하며 미검증이다.
+프로세스 종료·중복 방지는 검증한다. 지연/누락 완료와 완료 직후 전환은 DONE 우선이며 불확실하면
+자동 Wake하지 않는다. 공급자 정책의 허용 근거 없는 한도 우회 계정 순환은 비활성이다.
+실제 A→B 인증 모델 요청은 로컬 복원과 별도 인수하며 미검증이다. 9개 실제 CLI 인수와 제품 연결은
+NOT_RUN/미검증이며, 사용자 후속 지시에 따라 이 추가 기능의 구현은 보류한다.
 
 ## 6. CSAS와 G0~G7
 
