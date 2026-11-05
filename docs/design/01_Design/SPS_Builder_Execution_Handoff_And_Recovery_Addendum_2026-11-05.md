@@ -198,7 +198,7 @@ BLOCKED/NOT_RUN을 기록한다. Core 선행 공백으로 못 실행하면 BLOCK
 후속 사용자 확정 [시스템 완료 이벤트·선택적 Wake 설계](SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md)가
 아래 자동 Wake 조건을 구체화한다. 시스템 DONE과 업무 완료를 분리하고 정상 완료 세션은
 전환 직후에도 깨우지 않는다. 원본 완료 이벤트/Run/전환 세대를 최종 재검증하며 불확실하면
-보류한다. 공급자 정책 허용 없는 한도 우회 순환은 금지하고 9개 실제 CLI 인수는 NOT_RUN이다.
+보류한다. 별도의 공급자 정책 확인·활성화 승인 조건은 추가하지 않으며 9개 실제 CLI 인수는 NOT_RUN이다.
 
 1. 모든 Lead 논리 세션·CTO·Worker·QA·Integration Manager 실행은 하나의 활성 CLI 계정을
    공유한다. 계정 선택은 공용 풀의 현재 상태이며 Agent별 고정 인증 계정 속성이 아니다.
