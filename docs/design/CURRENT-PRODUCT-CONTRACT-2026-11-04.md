@@ -3,11 +3,11 @@
 기준일: 2026-11-05. 사용자 확정 결정을 통합한 현행 제품 기준이다.
 새 정책을 승인하거나 구현·테스트 완료를 선언하는 문서는 아니다.
 원래 v15·UI v9·CSAS v0.8의 비충돌 요구는 그대로 유지한다.
-문서센터·최신성 보완 v1.1, 통합 담당 추가 설계(2026-11-04), 최종 검토·승인 및 범용 권한·Host 사전 위임 추가안(2026-11-05)과 이후 사용자 확정 결정을 함께 적용한다.
+문서센터·최신성 보완 v1.1, 통합 담당 추가 설계(2026-11-04), 최종 검토·승인, 범용 권한·Host 사전 위임 및 실행·인계·복구 보강(2026-11-05)과 이후 사용자 확정 결정을 함께 적용한다.
 
 ## 1. 읽는 순서와 제품 경계
 
-제품 목표는 사용자 최신 결정, 이 통합 계약, [범용 권한·Host 사전 위임 추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md), [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
+제품 목표는 사용자 최신 결정, 이 통합 계약, [실행·인계·복구 보강](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md), [범용 권한·Host 사전 위임 추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md), [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
 CSAS v0.8의 유효 조항, v15의 비충돌 조항 순으로 해석한다.
 실제 구현 가능성과 보안 권한은 별도로 현재 Core/SDK 계약에서 검증한다.
 기술 미지원은 제품 요구를 삭제하는 근거가 아니며, 미지원/미검증으로 기록한다.
@@ -247,6 +247,25 @@ Main 공식 발행 및 사용자 제품·계약·가격·최종 납품 결정 �
 설계 승인을 runtime Host 관리자 Grant나 구현 완료로 바꾸지 않는다. API/Workspace 검사만으로
 CLI의 OS 파일·프로세스·Secret 격리가 보장되지 않으며 실제 OS 통제/샌드박스 검증이 필요하다.
 기존 216개 원문 AC는 유지하고 추가 정책은 추적표의 파생 검증 overlay로 관리한다.
+
+### 5.6 실행·인계·QA·복구와 실제 속도
+
+2026-11-05 사용자 요청에 따라 [실행 계약 보강](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md)을 적용한다.
+실제 Core 위임·적격 풀·보호 TestPlan·실행 증거·Commit 인계가 없으면 선행 의존성으로 분리한다.
+Lead→CTO→Worker→QA→Manager의 기존 Task Packet에 Task/Workstream/승인 Revision/Commit/
+Artifact/TestPlan·QA·환경·멱등 인계 참조를 결속하고 생산자 완료와 소비자 인수를 구분한다.
+QA는 불변의 실제 검사 Commit에 연결하며 Graph/trace로 영향받은 범위만 재검증하고 무관한
+검증을 보존한다. 개발 snapshot 검사를 최종 Commit QA로 승격하지 않는다.
+
+권위 저장 완료 이벤트만 Manager를 자동 실행시키며 정상 의존 대기와 기술 오류를 분리한다.
+모든 실행에 총 재시도·시간 한계, 실패 분류, 다음 조건·관측·정체 한계·복구 담당과 중복 방지가
+필요하다. timeout만으로 재실행하거나 종료 불확실 슬롯을 재사용하지 않는다. 정상 승인 범위는
+반복 사용자 요청 없이 진행하고, 속도는 실제 완료/대기/재작업 시간과 수동 개입으로 측정한다.
+
+최종 인수는 실제 CTO 2개 이상의 병렬 Workstream→Worker 제출→정확한 Commit 독립 QA→
+저장 이벤트 기반 Manager 자동 통합과 실패·철회·소스 변경·재시작·지연 복구를 포함한다.
+설계 반영, fixture 통과, 실제 앱·AI/보호 실행 검증은 분리한다. 새 Agent/중복 시스템은 추가하지 않는다.
+기존 216개 원문 AC를 보존하고 POLICY-EXEC-01~16은 별도 NOT_RUN overlay로 추적한다.
 
 ## 6. CSAS와 G0~G7
 

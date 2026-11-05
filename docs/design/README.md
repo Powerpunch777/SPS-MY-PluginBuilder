@@ -18,6 +18,11 @@
 
 ## 최신 확정 개정
 
+- [실행·인계·QA·복구 계약 보강 (2026-11-05)](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md):
+  실제 Core 선행 공백을 분리하고 기존 Task Packet의 소스·산출물·증거 인계와 소비자 인수를 결속한다.
+  정확한 Commit QA·영향 범위 재검증·지속 이벤트 자동 통합·제한된 재시도/관측 가능한 대기와
+  실제 시간/수동 개입 계측을 적용한다. CTO 2개 병렬과 오류·철회·변경·재시작 복구를 실제 인수한다.
+  기존 원문 216 AC는 유지하고 POLICY-EXEC-01~16은 별도 NOT_RUN overlay다. 구현 완료 선언이 아니다.
 - [범용 권한·Host 사전 위임 (2026-11-05)](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md):
   Builder가 업무 역할/템플릿, Core가 범용 기술 권한/강제, Host 관리자가 실행 범위/위임,
   사용자가 최종 사업적 결정을 소유한다. 역할 기본·작업 임시·사전 위임·사용자 승인을 분리하고

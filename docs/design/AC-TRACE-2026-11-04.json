@@ -4497,6 +4497,145 @@
           "evidence": []
         }
       ]
+    },
+    {
+      "source_doc": "docs/design/01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md",
+      "source_revision": "EXEC-POLICY-2026-11-05",
+      "source_sha256": "84feca024db60d2b74a83ff8d7a7d2e6aee63a6736de7de1000e0dd6cc03c1d7",
+      "origin": "Explicit user execution-contract hardening request in this chat on 2026-11-05",
+      "inventory_meaning": "16 derived checks; preserve 216 original source IDs and all historical evidence/states",
+      "owner": "CTO-A: Task Packet/dispatch/producer and shared UI; CTO-B: authoritative Gate/event/Manager and acceptance; native Core/SDK CTO: generic permissions/pool/protected execution; independent QA; Lead: final acceptance",
+      "task_binding": "Existing runtime APP20261105-R2 plus explicit later user decision; no new runtime plan or implemented-API claim",
+      "checks": [
+        {
+          "check_id": "POLICY-EXEC-01",
+          "source_line": 173,
+          "requirement": "실제 Core 기능 조사와 미구현 권한/풀/보호 실행 선행 의존성 분리",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-02",
+          "source_line": 174,
+          "requirement": "모든 역할 실행의 Host 위임·기술 권한·적격 풀 결속, 승인 범위의 반복 요청 없음",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-03",
+          "source_line": 175,
+          "requirement": "Task/Workstream/승인 Revision/Commit/Artifact/QA 증거의 실제 인계 결속",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-04",
+          "source_line": 176,
+          "requirement": "생산자 완료·소비자 인수 구분, 권한 있는 closure 조회와 멱등 인수",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-05",
+          "source_line": 177,
+          "requirement": "독립 QA의 정확한 Commit/tree·TestPlan·환경·증거 및 drift 차단",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-06",
+          "source_line": 178,
+          "requirement": "Graph/trace 기반 영향 범위 재검증과 무관한 기존 검증 이력 보존",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-07",
+          "source_line": 179,
+          "requirement": "권위 저장 이벤트의 VERIFIED·지속 이벤트 결속과 Manager 자동 소비",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-08",
+          "source_line": 180,
+          "requirement": "정상 의존 대기·실행 오류·설계 충돌·사용자 결정 라우팅과 반복 호출 억제",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-09",
+          "source_line": 181,
+          "requirement": "실행별 총 재시도/시간 예산·실패 원인·복구 경로·멱등 시도",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-10",
+          "source_line": 182,
+          "requirement": "대기 사유/다음 조건/정체 한계·담당·한 번의 기술 에스컬레이션",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-11",
+          "source_line": 183,
+          "requirement": "철회·종료 불확실·재시작·응답 유실의 중복 실행/슬롯 재사용 차단",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-12",
+          "source_line": 184,
+          "requirement": "실제 완료 시간·권한/통합 대기·재작업·수동 개입 계측과 미측정 보존",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-13",
+          "source_line": 185,
+          "requirement": "기존 Task Packet/Graph/CSAS/Revision/CAS/Core 재사용, 중복 시스템/Agent 없음",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-14",
+          "source_line": 186,
+          "requirement": "실제 독립 CTO 2개 병렬→Worker→정확한 Commit QA→자동 Manager 통합",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-15",
+          "source_line": 187,
+          "requirement": "실패·철회·소스/설계 변경·재시작·지연의 실제 복구와 정상 흐름 수동 개입 0회",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-EXEC-16",
+          "source_line": 188,
+          "requirement": "설계/구현/자체 검사/독립 QA/실제 앱·AI·OS 검증 분리 및 원본 실패 보존",
+          "state": "NOT_RUN",
+          "state_scope": "full current execution-contract acceptance; not partial snapshots, fixtures or design recording",
+          "evidence": []
+        }
+      ]
     }
   ]
 }
