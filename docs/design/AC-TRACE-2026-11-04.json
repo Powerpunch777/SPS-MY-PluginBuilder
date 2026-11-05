@@ -4501,7 +4501,7 @@
     {
       "source_doc": "docs/design/01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md",
       "source_revision": "EXEC-POLICY-2026-11-05",
-      "source_sha256": "84feca024db60d2b74a83ff8d7a7d2e6aee63a6736de7de1000e0dd6cc03c1d7",
+      "source_sha256": "0f979b7c6d94d3abab9bcfa997e3808dc928b229c8cd5ccc68f35f002c0718d3",
       "origin": "Explicit user execution-contract hardening request in this chat on 2026-11-05",
       "inventory_meaning": "16 derived checks; preserve 216 original source IDs and all historical evidence/states",
       "owner": "CTO-A: Task Packet/dispatch/producer and shared UI; CTO-B: authoritative Gate/event/Manager and acceptance; native Core/SDK CTO: generic permissions/pool/protected execution; independent QA; Lead: final acceptance",
