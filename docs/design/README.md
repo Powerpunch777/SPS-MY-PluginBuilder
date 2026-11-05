@@ -18,6 +18,11 @@
 
 ## 최신 확정 개정
 
+- [CTO·Worker 장기목표·완료 후 대기 (2026-11-05)](01_Design/SPS_Builder_Delegated_Goals_And_Completion_Idle_Addendum_2026-11-05.md):
+  Lead→담당 CTO, CTO→직속 Worker/QA 목표 배정과 서버 권한 강제, 완료 후 IDLE/새 배정 대기를 확정한다.
+  Turn DONE·Goal COMPLETED·VERIFIED를 분리하며 완료 Goal은 계정/Capacity 복구로도 깨우지 않는다.
+  미완료 Goal은 공식 Goal 재개를 우선하고 Goal 없는 세션만 기존 toolOutput Wake를 유지한다.
+  실제 배정·연속 실행·완료 중지·권한/계정 전환·재시작 인수 POLICY-GOAL-01~12는 모두 NOT_RUN이다.
 - [CLI Pool·시스템 완료·무메시지 Wake (2026-11-05)](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md):
   단일 활성 계정과 독립 Session ID, RUNNING/DONE/INTERRUPTED/WAITING_CAPACITY/IDLE,
   실제 중단된 미완료 Run만 thread/resume 뒤 turn/start + input: [] + 실제 관측 toolOutput으로 복구한다.

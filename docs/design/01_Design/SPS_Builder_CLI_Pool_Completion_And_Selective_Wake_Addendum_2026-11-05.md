@@ -5,6 +5,9 @@
 `continue` 사용자 메시지를 Codex App Server의 `turn/start` + `toolOutput`으로 대체한다.
 기술 확인과 실제 A→B 무메시지 복구를 우선하며 문서 반영만으로 구현 완료로 판단하지 않는다.
 기존 v15·UI v9·CSAS v0.8 및 후속 비충돌 요구, Lead 6세션과 독립 Manager는 유지한다.
+후속 [장기목표 배정·완료 후 대기](SPS_Builder_Delegated_Goals_And_Completion_Idle_Addendum_2026-11-05.md)는
+Goal 세션에 우선한다. 아래 toolOutput 복구는 Goal 없는 일반 세션에 적용하며, 미완료 Goal은
+공식 목표 재개 기능을 우선한다. 완료/사용자 정지 Goal은 어떤 복구에서도 재활성화하지 않는다.
 
 ## 1. 계정·세션·실행의 분리
 
@@ -39,6 +42,8 @@ Agent에게 DONE 문구나 별도 완료 보고를 작성하도록 강제하지 
 
 마지막 Run의 terminal 상태와 현재 실행 여부·대기 사유를 기존 기록에서 함께 조회한다.
 DONE은 Task 제출·Task 완료·CTO VERIFIED·QA 합격·통합 완료·프로젝트 완료가 아니다.
+Turn DONE은 Goal COMPLETED와도 별개다. 활성 미완료 Goal의 공식 연속 실행은 다음 턴으로
+이어질 수 있으나 완료 Goal은 자동 실행을 종료하고 IDLE에서 새 배정을 기다린다.
 기존 업무 상태·Revision·검증 Gate·승인 경계를 그대로 유지한다. 정상 답변 완료 후 사용자
 입력을 기다리는 Lead도 자동 복구 대상이 아니다. 실패/불확실 결과를 DONE으로 바꾸지 않는다.
 

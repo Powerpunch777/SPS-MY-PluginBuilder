@@ -203,6 +203,9 @@ BLOCKED/NOT_RUN을 기록한다. Core 선행 공백으로 못 실행하면 BLOCK
 대체한다. 시스템 DONE과 업무 완료를 분리하고 정상 완료 세션은
 전환 직후에도 깨우지 않는다. 원본 완료 이벤트/Run/전환 세대를 최종 재검증하며 불확실하면
 보류한다. 기존 9개 및 A~D 실제 CLI 인수는 NOT_RUN이며 문서 반영은 구현 완료가 아니다.
+후속 [장기목표 확정안](SPS_Builder_Delegated_Goals_And_Completion_Idle_Addendum_2026-11-05.md)이
+Goal 세션의 복구/완료 후 대기를 구체화한다. Goal 없는 세션은 아래 무메시지 Wake를 유지하고,
+미완료 Goal은 공식 목표 재개 기능을 우선한다. 완료/사용자 정지 Goal의 자동 재활성화는 금지한다.
 
 1. 모든 Lead 논리 세션·CTO·Worker·QA·Integration Manager 실행은 하나의 활성 CLI 계정을
    공유한다. 계정 선택은 공용 풀의 현재 상태이며 Agent별 고정 인증 계정 속성이 아니다.

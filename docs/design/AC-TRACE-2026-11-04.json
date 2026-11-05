@@ -4636,6 +4636,113 @@
           "evidence": []
         }
       ]
+    },
+    {
+      "source_doc": "docs/design/01_Design/SPS_Builder_Delegated_Goals_And_Completion_Idle_Addendum_2026-11-05.md",
+      "source_revision": "GOALS-POLICY-2026-11-05",
+      "source_sha256": "35d6eece607c31685ea96c31d499fc5a0967bd3b7a8e635186649f26f2f735f8",
+      "origin": "Explicit user attachment a6fa1607-44b6-4365-a39c-5bc1f68ace07; original sha256 81876f49bdbd5543589b40f8b4905464c65dff15a242d03c675a048c85e86a5d",
+      "inventory_meaning": "12 derived goal checks; preserve 216 original criteria and prior evidence/states",
+      "owner": "CTO-A: assignment/session/shared UI; CTO-B: completion events/Gates/Manager; native Core/SDK CTO: generic Goal permissions and runtime; independent QA; Lead: final acceptance",
+      "task_binding": "Existing Task/Workstream/Revision assignments plus latest user decision; no new runtime plan or implemented-API claim",
+      "checks": [
+        {
+          "check_id": "POLICY-GOAL-01",
+          "source_line": 127,
+          "requirement": "Lead가 담당 CTO Thread에 Workstream 목표 등록 후 실제 자동 실행 시작",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-02",
+          "source_line": 128,
+          "requirement": "CTO가 직속 Worker Thread에 Task 목표 등록 후 여러 턴에 걸친 실제 수행",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-03",
+          "source_line": 129,
+          "requirement": "Worker Goal 완료 후 연속 실행 종료·IDLE 유지·추가 턴 0",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-04",
+          "source_line": 130,
+          "requirement": "완료 Worker가 계정 전환 후 복원돼도 Wake/재활성화/새 턴 0",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-05",
+          "source_line": 131,
+          "requirement": "CTO의 Worker 완료 이벤트 소비·중복 방지·필요한 새 배정에서만 Worker 실행",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-06",
+          "source_line": 132,
+          "requirement": "CTO Goal 완료 후 IDLE·Lead 새 지시 대기·Goal 완료만으로 Manager 실행 0",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-07",
+          "source_line": 133,
+          "requirement": "Worker가 CTO Goal 등록/수정/삭제·활성화를 직접 요청하면 서버 권한 거부",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-08",
+          "source_line": 134,
+          "requirement": "CTO가 Lead Goal을 직접 변경하면 거부; 형제/타 Workspace/범위 확대도 거부",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-09",
+          "source_line": 135,
+          "requirement": "A→B 실제 인증 전환에서 같은 Thread/저장 Goal 보존·미완료만 재개, 완료/사용자 정지 제외",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-10",
+          "source_line": 136,
+          "requirement": "실제 Capacity 후 목표 보존·안전한 공식 Goal 재개·중복/취소/권한/예산 한계 처리",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-11",
+          "source_line": 137,
+          "requirement": "Builder/프로세스 재시작 후 기존 목표·배정·상태·이벤트/예약 복원, 중복 실행 0",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        },
+        {
+          "check_id": "POLICY-GOAL-12",
+          "source_line": 138,
+          "requirement": "Turn DONE·Goal COMPLETED·Task/Workstream VERIFIED의 분리와 정확한 QA/Gate 권위",
+          "state": "NOT_RUN",
+          "state_scope": "full product Goal acceptance; not design, schema or temporary CAO recovery",
+          "evidence": []
+        }
+      ]
     }
   ]
 }

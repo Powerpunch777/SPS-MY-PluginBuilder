@@ -9,6 +9,8 @@
 
 제품 목표는 사용자 최신 결정, 이 통합 계약, [시스템 완료·선택적 Wake](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md), [실행·인계·복구 보강](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md), [범용 권한·Host 사전 위임 추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md), [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
 CSAS v0.8의 유효 조항, v15의 비충돌 조항 순으로 해석한다.
+장기목표의 배정·완료 후 대기·계정/Capacity 복구는 최신 [Goals 확정 추가안](01_Design/SPS_Builder_Delegated_Goals_And_Completion_Idle_Addendum_2026-11-05.md)을
+우선한다. Goal 없는 일반 세션의 무메시지 Wake 계약과 구분한다.
 실제 구현 가능성과 보안 권한은 별도로 현재 Core/SDK 계약에서 검증한다.
 기술 미지원은 제품 요구를 삭제하는 근거가 아니며, 미지원/미검증으로 기록한다.
 
@@ -294,6 +296,27 @@ Capacity는 인증·사용량 제한·권한 오류와 구분한다. 기존 턴 
 continue fallback을 실행하지 않고 원인·지원 가능한 대안을 보고한다.
 계정 전환·복구의 현행 요건은 v15 §2E 및 AC-62의 충돌하는 조건보다 우선한다.
 원문 설계와 AC-TRACE는 출처 기록으로 보존하며, 충돌하는 옛 조건을 현행 요구에 다시 적용하지 않는다.
+
+### 장기목표 배정과 완료 후 대기
+
+Lead→담당 CTO Workstream, CTO→직속 Worker Task/QA 검증 작업을 장기목표로 배정할 수 있다.
+상위/형제/타 Workspace 목표 조작과 위임 범위 밖 자기 목표 확대는 Builder 백엔드와 Core의
+실제 주체·대상·권한·Revision 검증으로 차단한다. 공식 Goal set/get/clear와 이벤트를 기존
+배정/Session/Task/Run/Job 저장에 연결하며 별도 Goal Agent나 실행 관리 DB를 만들지 않는다.
+현재 공식/설치 스키마 확인만으로 자동 연속 실행·AI 간 배정 권한 구현을 주장하지 않는다.
+
+Turn DONE, Goal COMPLETED, Task/Workstream VERIFIED는 별개다. 활성 미완료 Goal은 턴
+정상 종료 후 공식 연속 실행이 이어질 수 있으나 Goal이 완료되면 연속 실행을 끝내고 IDLE로
+대기한다. 결과/Commit/Artifact/QA 근거를 저장해 상위에 전달하고 새 정식 배정 전에는 새 턴을
+만들지 않는다. Goal 완료만으로 Manager를 실행하거나 공식 VERIFIED를 발행하지 않는다.
+상위도 이미 목표를 완료했으면 하위 완료 이벤트를 기록만 하고 Wake하지 않으며, 사용자/
+외부 의존성 대기라면 실제로 조건이 풀렸을 때만 기존 이벤트 경로로 실행한다.
+
+계정 전환/Capacity는 실제 중단된 미완료 Goal만 공식 목표 재개 기능으로 복구한다. 이 경로는
+복구용 toolOutput Wake를 원칙적으로 쓰지 않는다. 완료/사용자 정지 Goal을 재활성화하지 않는다.
+Goal 없는 일반 세션만 앞의 toolOutput 경로를 유지한다. 재활성화가 실제 모델 수행을 시작하는지,
+계정별 세션/Goal 저장소와 재시작·권한 철회·예산 제한·중복 방지는 실제 시험한다.
+POLICY-GOAL-01~12 실제 인수는 모두 NOT_RUN이며 CAO 운영 복구 성공으로 대신하지 않는다.
 
 ## 6. CSAS와 G0~G7
 
