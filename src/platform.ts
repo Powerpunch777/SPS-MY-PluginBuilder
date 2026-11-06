@@ -51,6 +51,7 @@ import { readFinalReview } from "./delivery-evidence/final-review.ts";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
 import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
+import { readUserG5ComparisonPairs } from "./g5-comparison-pairs.ts";
 import { OWNED_AGENT_CAPABILITIES, READ_CHANGE_IMPACT_TOOL } from "./tool-declarations.mjs";
 import { readReuseFirstRevision } from "./reuse-first/index.ts";
 import { readLeadReuseFirstCandidates, recordLeadReuseFirstCandidate } from "./reuse-first/lead-research-tools.ts";
@@ -1052,7 +1053,9 @@ export function createBuilderPlatform() {
       const { companyId, renderEnvironment: _renderEnvironment, ...input } = params;
       return await readLeadConversation(workspaceId(companyId), input, platform) as unknown as JsonValue;
     } }],
-    actions: [{ key: "builder.read-change-impact", handler: async (params, context) => {
+    actions: [{ key: "builder.read-g5-comparison-pairs", handler: async (params, context) => {
+      return await readUserG5ComparisonPairs(userActionInput(params, context), context) as unknown as JsonValue;
+    } }, { key: "builder.read-change-impact", handler: async (params, context) => {
       return readUserG5ChangeImpact(userActionInput(params, context), context);
     } }, { key: "builder.approve-first-design-review", handler: async (params, context) => {
       const input = exactToolRecord(userActionInput(params, context), ["proposalRevisionId", "expectedHead"]);
