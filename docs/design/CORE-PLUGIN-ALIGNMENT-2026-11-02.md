@@ -1,6 +1,41 @@
-# Core–Plugin 설계 정렬 (2026-11-02)
+# Core·SDK 권한 계약과 검증 경계
 
-## 최신 범위 메모
+## v16 현행 계약 (2026-11-06)
+
+제품 정책은 [v16 정본](CURRENT-PRODUCT-CONTRACT-2026-11-04.md) 및
+[범용 권한·Host 위임 확정 원문](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md)에
+따른다. 아래 날짜가 붙은 기존 정렬/검사 기록은 당시 증거다. 그 안의 3세션,
+문서 전용 범위, 개발 중지나 예전 설치 버전은 이번 작업 지시가 아니다.
+
+| 주체 | 실제 소유 범위 |
+| --- | --- |
+| Lead | Main 공식 Revision과 배정, 각 논리 세션의 허용된 자료/설계/조사/질문/Review. 사용자 전용 결정을 대신하지 않는다. |
+| CTO | 배정 Workstream 기술 판단·개발·독립 QA 배정. 다른 CTO 영역·공식 설계 무단 변경 금지. |
+| Worker / QA | Worker는 승인 Task의 파일·CLI·Runner와 허용 효과만. QA는 독립 대상의 테스트·증거만. |
+| Integration Manager | 승인된 통합 후보·Git·CI/E2E·Packet. 별도 독립 Agent이며 설계 개정·일반 Node 관리·납품 승인 불가. |
+| Core / Host 관리자 / 사용자 | Core 범용 권한 강제·철회, 관리자는 한정된 사전 위임, 사용자는 사업·설계 결정과 최종 패키지 승인. |
+
+역할 기본 권한, Task의 임시 권한, 철회 가능한 Host 사전 위임, 사용자 전용 승인은
+독립적이다. Workspace·Plugin·주체·Node·Runner·자원·Task·기간을 검증하고 종료·철회 시
+임시 권한과 실행 점유를 회수한다. Agent 실행 허가는 파일/Git 수정, Secret 노출,
+프로세스·네트워크 사용을 자동 허용하지 않는다. API/Workspace 검사와 OS 강제는
+별도로 실증한다. 실제 Core capability가 없는 곳에 Builder 역할 예외, caller boolean,
+가짜 ToolRunContext, 중복 권한 저장소를 만들지 않는다.
+
+### 확인한 소스와 남은 선행 기능
+
+| 실제 경계 | 2026-11-06 관측 | 미검증 또는 차단 |
+| --- | --- | --- |
+| 공개 SDK 세션 | 후보 `196bdfe`/e7 공개 `platform/index.d.ts`의 세션 list/ensure/sendMessage/getRequest/getRun. 요청 ID와 현재 binding 관측은 실행 권한이 아니다. | 설치 Host의 새 Run·적격 인증 풀·현재 역할·위임 결속. Builder 기초 package는 별도 `c69915a5`. |
+| 독립 Agent·사전 위임 | 공개 후보 타입에는 조건부 owned Agent 설정 경계가 있고, 비공개 Core 개발 체크아웃에는 범용 구성/실행 위임 후보와 검증 작업이 있다. | 현재 승인된 통합 Host에서 기본 프로필 생성·새 실행·철회/만료·동시 한도. 후보/WIP를 일반 공개 API로 보지 않는다. |
+| 실제 Workspace 시스템 이벤트 | 현재 실제 스코프 Worker의 등록·권위 있는 callback delivery 경계가 확인되지 않았다. 사용자/도구 invocation과 시스템 이벤트 invocation은 다르다. | 권위 있는 이벤트에서 선행 Manager Run 없이 새 소유 세션 Run의 검증된 admission. 전역 onEvent나 가짜 context로 대체 금지. |
+| 보호 Node·Task 실행 | Core 개발 기준 `1f13812`의 Source 입력 저장/봉인과 준비 Run 후보는 입력 처리다. 고정 CLI·Worker transport는 범용 TestPlan 실행기가 아니다. | 승인 스냅샷의 안전한 materialize, 명령/파일/Secret/네트워크/프로세스 강제와 종료, 불변 산출물·실제 테스트 결과 발행. Windows 실험용 순수 소스 확인은 제품 보호가 아니다. |
+| 공용 Pool, Goal/Wake | [실행 부속서](AGENT-GOALS-AND-RUNTIME.md)의 설치 스키마·공식 설명은 정적 증거. | 실제 A→B 모델 응답, 일반 무메시지 Wake, Goal 권한·복원·자동 연속, Capacity와 철회 복구. |
+
+개발 체크아웃/비공개 브랜치 경로·인증정보·실사용 데이터는 공개 기록에 넣지 않는다.
+실제 제품 권한·설치본·두 PC 인수는 확인한 작업본과 별개다.
+
+## 2026-11-02 범위 메모 (역사)
 
 최신 사용자 결정으로 이전의 "paused, 문서 전용" 상태에서 Builder 목표 진행을 재개했다. 목표는 별도 `SPS-MY-PluginBuilder` 저장소의 통합 설계 v15, UI v9, 최신 UI 적용 기준을 따르는 실제 Builder 완성이다. 안전을 위해 꼭 필요한 Core 선행 사항만 먼저 다루며, Core 문서와 기술상 핵심 경로는 별도 담당 범위다. Core 전체 완성이나 Stable 선행 범위를 새로 요구하지 않는다.
 
@@ -43,7 +78,7 @@ Builder의 구현 상태나 Core 통합 완료를 증명하지 않는다.
 - Core Native Settings, OS tray, 전역 단축키와 시스템 관리는 Plugin UI와 독립적이다.
   공개 SDK가 설정 진입 API를 제공하면 plugin 안의 선택적 바로가기로 쓸 수 있지만 필수는 아니다.
 - 검정·중립 회색 v9 디자인은 Builder plugin 영역에만 적용한다. Core 전역 테마에는 적용하지 않는다.
-- Lead 3개 세션과 공유 기억, 프로젝트별 CTO 단일 세션, 독립 Dev/QA, GHA 및 self-hosted
+- 당시 Lead 3개 세션(현행 v16은 6개)과 공유 기억, 프로젝트별 CTO 단일 세션, 독립 Dev/QA, GHA 및 self-hosted
   Runner는 v15가 정의한 **이 Builder의 솔루션 제작 워크플로**다. Core 사용자나 다른
   Plugin에 강제되는 제품 법칙으로 일반화하지 않는다.
 

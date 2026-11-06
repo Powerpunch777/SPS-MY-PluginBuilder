@@ -1,16 +1,20 @@
-# Builder 현재 통합 제품 계약
+# SPS Builder 통합 제품 기준선 v16
 
-기준일: 2026-11-05. 사용자 확정 결정을 통합한 현행 제품 기준이다.
-새 정책을 승인하거나 구현·테스트 완료를 선언하는 문서는 아니다.
-원래 v15·UI v9·CSAS v0.8의 비충돌 요구는 그대로 유지한다.
-문서센터·최신성 보완 v1.1, 통합 담당 추가 설계(2026-11-04), 최종 검토·승인, 범용 권한·Host 사전 위임 및 실행·인계·복구 보강(2026-11-05)과 이후 사용자 확정 결정을 함께 적용한다.
+기준일: 2026-11-06. 기존 통합 계약 경로를 유지한 v16 제품 정본이다.
+파일명의 2026-11-04는 최초 작성일이며 현행 버전이 아니다.
+원래 v15·UI v9·CSAS v0.8의 비충돌 요구, 상담 개정, 문서센터 v1.1, 통합·최종 승인,
+범용 권한·Host 위임, 인계·복구, 단일 CLI Pool 및 Goals 확정 결정을 통합한다.
+정본 지정은 새 제품 정책, 실제 기술 권한, 구현·테스트 합격 또는 릴리스 승인이 아니다.
 
 ## 1. 읽는 순서와 제품 경계
 
-제품 목표는 사용자 최신 결정, 이 통합 계약, [시스템 완료·선택적 Wake](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md), [실행·인계·복구 보강](01_Design/SPS_Builder_Execution_Handoff_And_Recovery_Addendum_2026-11-05.md), [범용 권한·Host 사전 위임 추가안](01_Design/SPS_Builder_Generic_Permissions_And_Host_Delegation_Addendum_2026-11-05.md), [최종 검토·승인 페이지 추가안](01_Design/SPS_Builder_Lead_Final_Review_Approval_Page_Addendum_2026-11-05.md), [통합 담당 추가 설계](01_Design/SPS_Builder_Integration_Design_20261104.md), 문서센터·최신성 v1.1, 상담·변경관리 개정,
-CSAS v0.8의 유효 조항, v15의 비충돌 조항 순으로 해석한다.
-장기목표의 배정·완료 후 대기·계정/Capacity 복구는 최신 [Goals 확정 추가안](01_Design/SPS_Builder_Delegated_Goals_And_Completion_Idle_Addendum_2026-11-05.md)을
-우선한다. Goal 없는 일반 세션의 무메시지 Wake 계약과 구분한다.
+최신 사용자 확정 결정 → 이 v16 정본과 현행 전문 부속서 → 확정 원문의 비충돌 상세 조항
+순으로 읽는다. [마스터 인덱스](README.md)가 각 원문 효력, 충돌·대체 관계, 미확인 입력을
+지정한다. CSAS v0.9 원문은 이번 감사에서 확보하지 못했다. 원문과 효력이 확인되기 전
+v0.8의 확인된 유효 조항을 유지하고, 누락된 v0.9 내용을 추정해 구현하지 않는다.
+실행 상세는 [Agent 장기목표와 실행 계약](AGENT-GOALS-AND-RUNTIME.md), 기술 권한의 현황은
+[Core·SDK 권한 계약](CORE-PLUGIN-ALIGNMENT-2026-11-02.md), 인수 증거는
+[AC 추적표](AC-TRACE-2026-11-04.md)를 따른다.
 실제 구현 가능성과 보안 권한은 별도로 현재 Core/SDK 계약에서 검증한다.
 기술 미지원은 제품 요구를 삭제하는 근거가 아니며, 미지원/미검증으로 기록한다.
 
@@ -27,6 +31,7 @@ Builder는 선택형 SPS 플러그인이다. Core는 인증·Workspace·실행·
 임시 CAO 개발 환경과 Builder 제품 내부의 실행 엔진은 별개다.
 이 대화의 Codex가 개발 Lead이며 별도의 CAO AI Lead를 중복으로 두지 않는다.
 이는 제품 내부 Lead의 여섯 논리 세션 및 별도 Integration Manager와 다른 개발 운영 결정이다.
+개발 작업자의 빠른 소스 접근·YOLO는 제품 권한 확대나 제품 OS 격리 증거가 아니다.
 첨부 통합 설계의 제목에 남은 `초안` 표시는 이후 사용자가 직접 확정한 책임·세션·
 상태·라우팅 결정을 미정으로 되돌리지 않는다. 실제 API/저장 구현은 여전히 검증 대상이다.
 
@@ -271,14 +276,16 @@ QA는 불변의 실제 검사 Commit에 연결하며 Graph/trace로 영향받은
 설계 반영, fixture 통과, 실제 앱·AI/보호 실행 검증은 분리한다. 새 Agent/중복 시스템은 추가하지 않는다.
 기존 216개 원문 AC를 보존하고 POLICY-EXEC-01~16은 별도 NOT_RUN overlay로 추적한다.
 
-공용 풀 전환은 실행 계약 보강 §9 및 [시스템 완료·선택적 Wake 확정 설계](01_Design/SPS_Builder_CLI_Pool_Completion_And_Selective_Wake_Addendum_2026-11-05.md)를 따른다. 모든 역할이 하나의 활성 CLI 계정을
-공유하고 세션 등록·로컬 Session ID 보존과 실행 점유를 분리한다. PREPARE/RESUME/WAKE는
+공용 풀 전환은 [실행 부속서](AGENT-GOALS-AND-RUNTIME.md)를 따른다. Core가 관리하는
+Host의 Builder 실행 인스턴스에서 역할과 Workspace는 하나의 활성 CLI 계정을
+공유하되 Workspace 권한·세션은 분리한다. 세션 등록·로컬 Session ID 보존과 실행 점유를 분리한다. PREPARE/RESUME/WAKE는
 독립 동작이며 복원만으로 모델을 호출하지 않는다. 무호출 복원이 미지원/미검증이면 PREPARE까지만 한다.
 시스템 실행 이벤트로 RUNNING/DONE/INTERRUPTED/WAITING_CAPACITY/IDLE을 관리하고 Agent의 DONE 보고를 강제하지 않는다.
 DONE은 마지막 AI 실행의 정상 종료이며 Task/CTO VERIFIED/QA/통합 완료가 아니다.
 전환 직전 RUNNING이고 전환/인증으로 실제 중단됐으며 정상 완료 없이 미완료 작업·안전한 종료가
 확인된 세션만 최종 상태·활성 Turn 부재와 세대/Run/Event/requestId/CAS/lease를 검증한 뒤
-`thread/resume`한 Thread에 `turn/start` + `input: []` + 실제 복구 관측 `toolOutput`으로 자동 Wake한다.
+대상 버전에서 실증된 경우에만 `thread/resume`한 Thread에 `turn/start` + `input: []` +
+실제 복구 관측 `toolOutput`으로 자동 Wake한다. 활성 미완료 Goal 세션에는 이 경로를 중복 적용하지 않는다.
 continue 사용자 메시지를 추가하지 않으며 정상 업무 메시지 경로는 유지한다. 도구 결과·실행 기록은
 보존하고 복구 관측을 새 사용자 지시·공식 설계 개정·승인 권한으로 해석하지 않는다.
 사용자·승인·의존성 대기는 해소 이벤트, 중단 세션은 명시 재개 요청으로 Wake한다. 완료·보관은
@@ -288,8 +295,8 @@ continue 사용자 메시지를 추가하지 않으며 정상 업무 메시지 �
 Capacity는 인증·사용량 제한·권한 오류와 구분한다. 기존 턴 생존 시 내부 재시도를 우선하며 새 턴을
 만들지 않는다. 턴 종료 후 WAITING_CAPACITY와 기존 지속 Job 예약을 사용해 정상 재개까지
 재시도하되 취소·철회 시 중단한다. Capacity만으로 계정을 바꾸지 않고 완료 후 예약도 해제한다.
-계정별 동시 실행·Secret 보호를 유지하며 자동 계정 전환은 이번 최신 결정에 따라 공급자 약관·
-사용량 제한 정책의 허용 범위에서만 활성화한다.
+계정별 동시 실행·Secret 보호와 승인된 비용·자원 한도를 유지한다.
+공급자 제한이나 보호 장치를 우회하는 계정 순환을 전제로 구현하지 않는다.
 실제 A→B 모델 요청, 추가 userMessage 없는 새 턴 및 Task 복구는 로컬 탐색/Thread 복원과 각각
 별도 인수한다. 기존 9개와 A~D 실제 CLI 인수는 NOT_RUN이고 제품 연결은 미검증이다.
 최신 사용자 지시로 설치 버전/실제 API 확인과 A→B 실증을 우선한다. 미지원 시 임의의 비공식 API나
@@ -561,11 +568,11 @@ Marketplace, 자체 Native 대체 연결, Core Preview는 보류한다. 제품 H
 Revision, 실제 시험과 NOT_RUN/PASS/FAIL/BLOCKED/UNKNOWN을 기록한다.
 부분 결과로 전체 AC를 PASS 처리하지 않으며 레거시 제외도 통과 개수에 넣지 않는다.
 
-현 Builder package의 SDK pin은 c69915a5다. 관측한 Source 매트릭스는 Desktop
-0.4.137/Profile2.0에 Core3abf1f50/SDK0111d291을 기록하지만, 개발 체크아웃은
-Core defd883f/SDK c69915a5다. 같은 대상의 호환성 증거로 간주하지 않는다.
-실제 앱 통합 전에 사용할 정확한 Source/Core/SDK/Builder tuple과 Host 계약을
-확인한다. 이 문서는 릴리스 매트릭스를 자동 변경하거나 설치본 검증을 대신하지 않는다.
+기초 Builder의 SDK pin `c69915a5`, 개발 후보의 공개 SDK `196bdfe` 및 e7 패키지,
+비공개 Core 개발 기준 `1f13812`, 공식 PR 검사 대상 `e072163`은 서로 다른 증거다.
+정확한 tuple과 범위는 [검증 추적표](AC-TRACE-2026-11-04.md) 및
+[Core·SDK 권한 계약](CORE-PLUGIN-ALIGNMENT-2026-11-02.md)에서 확인한다.
+이 문서는 릴리스 매트릭스를 자동 변경하거나 설치본 검증을 대신하지 않는다.
 
 최종 완료는 승인 명세에서 실제 산출물 준비까지 전체 사용자 흐름과 요구사항별
 현재 소스 증거로 판단한다. 기술 미지원·외부 자격·제품 미결정과 기존 데이터는
