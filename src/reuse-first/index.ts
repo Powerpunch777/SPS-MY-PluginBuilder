@@ -137,7 +137,8 @@ function parseCandidate(value: unknown, scope: ReuseFirstScope): ReuseFirstCandi
   if (!HASH.test(String(source.sha256)) || typeof source.fromLine !== "number" || typeof source.throughLine !== "number"
     || !Number.isSafeInteger(source.fromLine) || !Number.isSafeInteger(source.throughLine) || source.fromLine < 1
     || source.throughLine < source.fromLine || source.throughLine - source.fromLine > 199
-    || typeof source.quote !== "string" || !source.quote.trim() || Buffer.byteLength(source.quote, "utf8") > 32 * 1024) throw new Error("Reuse source evidence is invalid.");
+    || typeof source.quote !== "string" || !source.quote.trim() || Buffer.byteLength(source.quote, "utf8") > 32 * 1024
+    || hash(source.quote) !== source.sha256) throw new Error("Reuse source evidence is invalid.");
   const license = exact(row.license, ["status", "evidenceRefs"], "license evidence");
   const reuse = exact(row.reuse, ["status", "reusableAcrossProjects"], "reuse decision");
   if (license.status !== "unknown" || !Array.isArray(license.evidenceRefs) || license.evidenceRefs.length !== 0
@@ -164,6 +165,17 @@ function parseRevision(value: unknown, scope: ReuseFirstScope): ReuseFirstRevisi
   const candidates = denseList(row.candidates, 0, MAX_CANDIDATES, "reuse candidate list").map(candidate => parseCandidate(candidate, scope));
   if (new Set(candidates.map(candidate => candidate.candidateId)).size !== candidates.length) throw new TypeError("Duplicate reuse candidate ID.");
   return Object.freeze({ revisionId, candidates: Object.freeze(candidates) });
+}
+
+export function parseReuseFirstRevision(value: unknown, scopeValue: unknown): ReuseFirstRevision {
+  return parseRevision(value, scopeOf(scopeValue));
+}
+
+export function readReuseFirstRevision(scopeValue: unknown, state: Pick<ReuseFirstState, "get">) {
+  const scope = scopeOf(scopeValue);
+  return createRevisionJournal(scope.workspaceId, scope.projectId, state, {
+    prefix: "reuse-first", parse: value => parseRevision(value, scope), revisionId: revision => revision.revisionId,
+  }).current();
 }
 
 /** Project-bound evidence journal. Candidate claims are recorded as reports, never as verified rights. */
@@ -204,7 +216,8 @@ export function createReuseFirstStore(scopeValue: unknown, state: ReuseFirstStat
         || excerpt.projectId !== scope.projectId || excerpt.sourceId !== candidateInput.source.sourceId
         || excerpt.fromLine !== candidateInput.source.fromLine || excerpt.throughLine !== candidateInput.source.throughLine
         || typeof excerpt.sha256 !== "string" || !HASH.test(excerpt.sha256) || typeof excerpt.text !== "string" || !excerpt.text.trim()
-        || Buffer.byteLength(excerpt.text, "utf8") > 32 * 1024 || excerpt.sourceId.startsWith("consultation-")) {
+        || Buffer.byteLength(excerpt.text, "utf8") > 32 * 1024 || hash(excerpt.text) !== excerpt.sha256
+        || excerpt.sourceId.startsWith("consultation-")) {
         return Object.freeze({ status: "unverified" as const, reason: "current-project-source-evidence-required" as const });
       }
       const candidate = parseCandidate({ candidateId: candidateInput.candidateId, name: candidateInput.name, kind: candidateInput.kind,

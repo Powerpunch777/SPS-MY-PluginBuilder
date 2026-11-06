@@ -146,14 +146,14 @@ function parseDocument(value: unknown, index: number): BuilderDocument {
   }
   const docId = id(row.id, `${label}.id`);
   const sourceKind = row.sourceKind === undefined ? "builder-document" : oneOf(row.sourceKind,
-    ["builder-document", "baseline-body", "design-baseline", "design-draft", "technology-decision", "workstream", "lead-memory", "consultation-source"] as const,
+    ["builder-document", "baseline-body", "design-baseline", "design-draft", "technology-decision", "workstream", "lead-memory", "consultation-source", "reuse-candidate"] as const,
     `${label}.sourceKind`);
   const categoryForSource = { "builder-document": "unclassified", "baseline-body": "design", "design-baseline": "design",
     "design-draft": "design", "technology-decision": "technical-research", workstream: "development", "lead-memory": "unclassified",
-    "consultation-source": "consultation" } as const;
+    "consultation-source": "consultation", "reuse-candidate": "technical-research" } as const;
   const expectedPrefix = { "builder-document": null, "baseline-body": "baseline-body:", "design-baseline": "design-baseline:",
     "design-draft": "draft:", "technology-decision": "technology-decisions:", workstream: "workstream:", "lead-memory": "lead-memory:",
-    "consultation-source": "consultation-source:" } as const;
+    "consultation-source": "consultation-source:", "reuse-candidate": "reuse-first:" } as const;
   if (expectedPrefix[sourceKind] !== null && !docId.startsWith(expectedPrefix[sourceKind]!)) {
     throw new TypeError(`${label}.sourceKind does not match its source identity.`);
   }

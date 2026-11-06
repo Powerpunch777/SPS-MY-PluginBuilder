@@ -52,6 +52,9 @@ import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
 import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
 import { OWNED_AGENT_CAPABILITIES, READ_CHANGE_IMPACT_TOOL } from "./tool-declarations.mjs";
+import { readReuseFirstRevision } from "./reuse-first/index.ts";
+import { readLeadReuseFirstCandidates, recordLeadReuseFirstCandidate } from "./reuse-first/lead-research-tools.ts";
+import { READ_REUSE_CANDIDATES_TOOL, RECORD_REUSE_CANDIDATE_TOOL } from "./reuse-first/tool-declarations.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -802,6 +805,8 @@ export function createBuilderPlatform() {
     handler: (params, context, platform) => readLeadSolution(params, context, platform) },
     { name: READ_CHANGE_IMPACT_TOOL.name, declaration: READ_CHANGE_IMPACT_TOOL,
       handler: readG5ChangeImpactCandidates },
+    { name: READ_REUSE_CANDIDATES_TOOL.name, declaration: READ_REUSE_CANDIDATES_TOOL, handler: readLeadReuseFirstCandidates },
+    { name: RECORD_REUSE_CANDIDATE_TOOL.name, declaration: RECORD_REUSE_CANDIDATE_TOOL, handler: recordLeadReuseFirstCandidate },
     { name: READ_FIRST_DESIGN_REVIEW_TOOL.name, declaration: READ_FIRST_DESIGN_REVIEW_TOOL,
       handler: (params, context, platform) => serialize(context.companyId, async () => {
         exactToolRecord(params, []);
@@ -963,7 +968,12 @@ export function createBuilderPlatform() {
     { name: PUBLISH_CTO_TASK_PACKET_TOOL.name, declaration: { displayName: PUBLISH_CTO_TASK_PACKET_TOOL.displayName,
       description: PUBLISH_CTO_TASK_PACKET_TOOL.description, parametersSchema: PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema },
       handler: (params, context, platform) => publishAssignedCtoTaskPacket(params, context, platform) }],
-    data: [{ key: "builder.first-design-review", handler: async (params, platform) => {
+    data: [{ key: "builder.reuse-candidates", handler: async (params, platform) => {
+      exactToolRecord(params, ["companyId"], ["renderEnvironment"]);
+      const companyId = workspaceId(params.companyId);
+      const current = await readReuseFirstRevision({ workspaceId: companyId, projectId: companyId }, platform.state);
+      return current && { workspaceId: companyId, projectId: companyId, sequence: current.sequence, revision: current.revision } as unknown as JsonValue;
+    } }, { key: "builder.first-design-review", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       return serialize(companyId, async () => await firstDesignReviewView(companyId, platform) as unknown as JsonValue);
     } }, { key: "builder.final-review", handler: async (params, platform) => {

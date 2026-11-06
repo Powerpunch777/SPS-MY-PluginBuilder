@@ -37,7 +37,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   const manifestNames = manifestTools.map(tool => tool.name);
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   const specializedOnly = new Set<string>(["builder.read-cto-intake", "builder.answer-cto-question",
-    "builder.propose-ui-contract", "builder.request-final-review",
+    "builder.propose-ui-contract", "builder.request-final-review", "builder.record-reuse-candidate",
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());
@@ -86,6 +86,8 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
     assert.equal(Object.isFrozen(policies[channel]!.toolNames), true);
     assert.ok(policies[channel]!.toolNames.length <= 32, `${channel} must fit the pinned Host session policy limit`);
     assert.equal(allowed.has("builder.read-change-impact"), channel === "main" || channel === "integration-review");
+    assert.equal(allowed.has("builder.read-reuse-candidates"), channel === "main" || channel === "background");
+    assert.equal(allowed.has("builder.record-reuse-candidate"), channel === "background");
     if (channel === "main") for (const write of formalWrites) assert.ok(allowed.has(write), write);
     else for (const write of formalWrites) assert.ok(!allowed.has(write), `${channel} must not have ${write}`);
   }

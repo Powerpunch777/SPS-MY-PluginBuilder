@@ -259,6 +259,21 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions["integration-review"])}}
     })}).then(r=>r.status)`, true);
   assert.equal(forgedImpact, 403, "UI users have their own comparison action, not a way to impersonate Integration Review.");
+  for (const name of ["builder.read-reuse-candidates", "builder.record-reuse-candidate"]) {
+    assert.ok(registeredTools.some(tool => tool.pluginId === plugin.id && tool.name === `com.sonparkserver.my-plugin-builder:${name}`));
+  }
+  const readReuse = companyId => request(`/api/plugins/${plugin.id}/data/builder.reuse-candidates`, {
+    method: "POST", body: { companyId, params: {} },
+  }).then(reply => reply.data);
+  assert.equal(await readReuse(company.id), null);
+  assert.equal(await readReuse(secondCompany.id), null);
+  const forgedReuse = await workspace.evaluate(`fetch('/api/plugins/tools/execute', {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      tool:'com.sonparkserver.my-plugin-builder:builder.record-reuse-candidate',parameters:{projectId:${JSON.stringify(company.id)}},
+      runContext:{companyId:${JSON.stringify(company.id)},agentId:${JSON.stringify(leadAgent.id)},
+        runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions.background)}}
+    })}).then(r=>r.status)`, true);
+  assert.equal(forgedReuse, 403);
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, leadChannels.length);
   const proposedTool = await workspace.evaluate(`fetch('/api/plugins/tools/execute', {
     method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
@@ -662,6 +677,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     firstReviewEmptyScopedRead: true, firstReviewMissingDraftDenied: true, actualFirstDesignApproval: false,
     changeImpactPanel: true, changeImpactMissingSourceDenied: true, changeImpactCrossProjectDenied: true,
     changeImpactToolRegistered: true, changeImpactRunImpersonationDenied: true,
+    reuseCandidateToolsRegistered: true, reuseEmptyScopedRead: true, reuseRunImpersonationDenied: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,

@@ -16,10 +16,10 @@
 | D3 | 첫 설계의 Main 제안과 인증 사용자 검토를 분리함. 첫 Baseline은 정확한 초안·원문 핀·규칙 팩을 담은 승인 Revision과 해시를 같은 Baseline 발행에 고정하며, 일반 대화만으로 발행할 수 없음. 등록된 D3 조회는 해당 승인 Revision을 찾아 요구·AC ID, Spec·Graph 내용 및 원문 해시를 대조함. 승인 팩을 읽는 것과 검사 실행은 별개이며 검사 증거가 없으면 `UNKNOWN`. 실제 AI 흐름과 검사 연결은 아직 검증하지 않음. |
 | UI Contract | 정확한 HTML과 시안·사용자 승인·Main 공식 발행을 연결. 접수 미확인 시 같은 요청 ID를 조회하고 이미 시도한 실행을 재전송하지 않음. 데스크톱/모바일 미리보기 통과. 자동 알림 복구에는 동일 Workspace Worker 경로가 필요하며 실제 AI 승인 흐름은 미검증. |
 | G5 변경 영향 | 설계 시각화의 인증 사용자와 Main·Integration Review 도구에서 기존 Workspace 저널의 정확한 게시 Baseline 및 공식 UI 쌍을 읽기 전용으로 비교. 요구·UI·Graph 후보 및 확인 범위를 구분. 기술·Workstream·Task의 실제 원본 쌍도 부분 범위이며, 일정·상품 및 전체 영향은 미확인. ACK·영향 범위 재승인과 실행 Gate는 별도 연결 필요. |
-| CTO 프로필 | 지원 SDK/Host에서는 동일 CTO ID를 같은 plugin-owned Agent 및 Session ID로 준비함. 등록은 Run을 시작하지 않으며 비활성·소유권 변경 시 전송을 차단함. 현재 고정 SDK의 기존 논리 세션은 독립 Agent가 아님. 지원 Host의 실제 권한 부여·두 CTO 병렬 실행은 미검증. |
+| CTO 프로필 | 지원 SDK/Host에서는 동일 CTO ID를 같은 plugin-owned Agent 및 Session ID로 준비함. 등록은 Run을 시작하지 않으며 비활성·소유권 변경을 관측하면 전송을 차단함. 후보 공개 SDK의 범용 API를 사용한 별도 no-AI 플러그인으로 실제 소스 Host에서 전용 프로필 2개·세션·재시작·Workspace 분리와 Run 0개를 확인. 현재 고정 SDK의 논리 세션은 독립 Agent가 아니며, Builder Main 도구·동시 실행·전송 경쟁의 Core admission은 별도 미검증. |
 | Gate producer/consumer | G4/G6 평가기·CAS 소비 helper와 fixture 테스트가 있음. 현재 Source Inventory·완료 Run/QA 권위 reader 및 등록된 VERIFIED 생산·이벤트 경로는 없음. D3 미등록 Coverage authority와 부분 Baseline inventory는 `UNKNOWN`; VERIFIED/자동 통합 근거가 아님. |
 | Manager / Final Packet | Manager 기본 프로필과 이벤트 소비 지원은 실제 자동 실행에 아직 미연결. 최종 검토 페이지, Main G7 확인, Integration Review 요청, 인증 사용자 결정 경로는 역할별로 등록함. 격리 Host에서 패킷 없는 확정을 거부함. 현재 패킷·원문 근거 reader 및 원자 승인 writer가 연결되기 전에는 실제 납품 확정 불가. |
-| Reuse | 분류·권리 후보 구현은 별도 범위에 있음. 실제 자산별 권리 증거·외부 연결·비SPS 산출물은 미검증. |
+| Reuse | Background가 기존 사용자 조사 원문의 정확한 행·해시에서 후보를 기록하고 Main/Background와 문서센터가 같은 저널을 조회함. 원문의 CRLF를 보존하며 Lead 원문 16 KiB와 저장소 인용문 32 KiB 한도를 구분함. 로컬 등록 handler·문서 검사 및 실제 소스 Host에서 도구 등록·Workspace별 빈 조회·실행 사칭 거부를 확인. 실제 AI 조사·자산별 권리·호환성은 미검증이며 미확인 후보의 재사용은 차단 상태. |
 
 빌드·타입·테스트는 선언된 SDK commit `c69915a518f0eb600f0ace8238144059911f8d04`와
 일치하는 고정 사본에서 검증한다. 기존 설치 의존성과 작업 데이터를 덮어쓰지 않는다.
