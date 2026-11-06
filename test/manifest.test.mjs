@@ -6,7 +6,7 @@ import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "../src/cto-question-reply-tool-declarations.mjs";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL } from "../src/task-packet-tool-declarations.mjs";
-import { INSPECT_SPEC_ASSURANCE_TOOL } from "../src/tool-declarations.mjs";
+import { INSPECT_SPEC_ASSURANCE_TOOL, READ_CHANGE_IMPACT_TOOL } from "../src/tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
   assert.equal(manifest.companyActivation?.defaultEnabled, false);
@@ -34,6 +34,16 @@ test("D3 assurance inspection is a declared read-only Lead tool", () => {
   assert.match(INSPECT_SPEC_ASSURANCE_TOOL.description, /read-only/i);
   assert.match(INSPECT_SPEC_ASSURANCE_TOOL.description, /UNKNOWN/i);
   assert.match(INSPECT_SPEC_ASSURANCE_TOOL.description, /Does not publish, dispatch, cancel or execute AI/i);
+});
+
+test("G5 change-impact tool declares a strict optional revalidation projection", () => {
+  assert.equal(manifest.tools.find(tool => tool.name === READ_CHANGE_IMPACT_TOOL.name), READ_CHANGE_IMPACT_TOOL);
+  assert.equal(READ_CHANGE_IMPACT_TOOL.parametersSchema.additionalProperties, false);
+  assert.deepEqual(READ_CHANGE_IMPACT_TOOL.parametersSchema.properties.projection.enum, ["revalidation"]);
+  assert.deepEqual(READ_CHANGE_IMPACT_TOOL.parametersSchema.properties.tasks.required,
+    ["ctoId", "workstreamId", "oldRevisionId", "newRevisionId"]);
+  assert.match(READ_CHANGE_IMPACT_TOOL.description, /prior execution\/QA evidence.*UNKNOWN/u);
+  assert.match(READ_CHANGE_IMPACT_TOOL.description, /does not .*authorize execution/u);
 });
 
 test("CTO delivery tools expose exact bounded Lead contracts in the manifest", () => {

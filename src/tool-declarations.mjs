@@ -20,13 +20,14 @@ const impactRevisionPair = Object.freeze({ type: "object", additionalProperties:
 export const READ_CHANGE_IMPACT_TOOL = Object.freeze({
   name: "builder.read-change-impact",
   displayName: "Compare published Builder design revisions",
-  description: "Main and Integration Review only. Read exact published old/new Baseline and formal UI revisions for the authenticated Workspace. Supply exact optional published Technology, Workstream or scoped Task revision pairs if known. UNKNOWN or no observed candidates are not proof of no impact. This read does not acknowledge changes, approve, republish, or authorize execution.",
+  description: "Main and Integration Review only. Read exact published old/new Baseline and formal UI revisions for the authenticated Workspace. Supply exact optional published Technology, Workstream or scoped Task revision pairs if known. Optional projection='revalidation' reads the exact historical G5, Workstream, and Task pair and reports current instructions; prior execution/QA evidence, incomplete inventory, and G5 acknowledgment remain UNKNOWN. UNKNOWN or no observed candidates are not proof of no impact. This read does not acknowledge changes, approve, republish, or authorize execution.",
   parametersSchema: Object.freeze({
     type: "object", additionalProperties: false,
     required: ["projectId", "oldBaselineRevisionId", "newBaselineRevisionId", "oldUiRevisionId", "newUiRevisionId"],
     properties: {
       projectId: impactId, oldBaselineRevisionId: impactId, newBaselineRevisionId: impactId,
       oldUiRevisionId: impactId, newUiRevisionId: impactId, technology: impactRevisionPair, workstreams: impactRevisionPair,
+      projection: { type: "string", enum: ["revalidation"] },
       tasks: { type: "object", additionalProperties: false, required: ["ctoId", "workstreamId", "oldRevisionId", "newRevisionId"],
         properties: { ctoId: impactId, workstreamId: impactId, oldRevisionId: impactId, newRevisionId: impactId } },
     },

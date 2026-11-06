@@ -56,6 +56,7 @@ import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignRevi
 import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
 import { readUserG5ComparisonPairs } from "./g5-comparison-pairs.ts";
 import { OWNED_AGENT_CAPABILITIES, READ_CHANGE_IMPACT_TOOL } from "./tool-declarations.mjs";
+import { readG5Revalidation } from "./g5-revalidation.ts";
 import { readReuseFirstRevision } from "./reuse-first/index.ts";
 import { readLeadReuseFirstCandidates, recordLeadReuseFirstCandidate } from "./reuse-first/lead-research-tools.ts";
 import { READ_REUSE_CANDIDATES_TOOL, RECORD_REUSE_CANDIDATE_TOOL } from "./reuse-first/tool-declarations.mjs";
@@ -813,7 +814,15 @@ export function createBuilderPlatform() {
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
     handler: (params, context, platform) => readLeadSolution(params, context, platform) },
     { name: READ_CHANGE_IMPACT_TOOL.name, declaration: READ_CHANGE_IMPACT_TOOL,
-      handler: readG5ChangeImpactCandidates },
+      handler: async (params, context, platform) => {
+        const input = exactToolRecord(params,
+          ["projectId", "oldBaselineRevisionId", "newBaselineRevisionId", "oldUiRevisionId", "newUiRevisionId"],
+          ["technology", "workstreams", "tasks", "projection"]);
+        if (input.projection === undefined) return readG5ChangeImpactCandidates(params, context, platform);
+        if (input.projection !== "revalidation") throw new TypeError("Unsupported G5 change-impact projection.");
+        delete input.projection;
+        return readG5Revalidation(input, context, platform);
+      } },
     { name: READ_REUSE_CANDIDATES_TOOL.name, declaration: READ_REUSE_CANDIDATES_TOOL, handler: readLeadReuseFirstCandidates },
     { name: RECORD_REUSE_CANDIDATE_TOOL.name, declaration: RECORD_REUSE_CANDIDATE_TOOL, handler: recordLeadReuseFirstCandidate },
     { name: READ_FIRST_DESIGN_REVIEW_TOOL.name, declaration: READ_FIRST_DESIGN_REVIEW_TOOL,
