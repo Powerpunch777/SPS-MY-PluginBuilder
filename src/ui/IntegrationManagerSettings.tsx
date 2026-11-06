@@ -55,8 +55,8 @@ export function parseIntegrationManagerDTO(value: unknown, workspaceId: string):
   const agents = row.agents.map(value => {
     const agent = exactRecord(value, ["id", "name", "status"]);
     if (typeof agent.id !== "string" || !agent.id || agent.id.length > 160
-      || typeof agent.name !== "string" || !agent.name || agent.name.length > 200
-      || typeof agent.status !== "string" || !agent.status || agent.status.length > 64) {
+      || typeof agent.name !== "string" || !agent.name.trim() || agent.name.length > 500
+      || typeof agent.status !== "string" || !/^[a-z_]{1,80}$/u.test(agent.status)) {
       throw new TypeError("Invalid Integration Manager Agent.");
     }
     return Object.freeze({ id: agent.id, name: agent.name, status: agent.status });

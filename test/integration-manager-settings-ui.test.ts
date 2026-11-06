@@ -37,6 +37,9 @@ test("strictly parses the registered DTO and rejects cross-workspace, unknown an
   const { parseDTO, temporary } = await loadUI();
   try {
     assert.deepEqual(parseDTO(dto(), workspaceA), dto());
+    const longName = { ...dto(), agents: [{ ...dto().agents[0]!, name: "Manager ".repeat(50) }] };
+    assert.deepEqual(parseDTO(longName, workspaceA), longName);
+    assert.throws(() => parseDTO({ ...dto(), agents: [{ ...dto().agents[0]!, name: "x".repeat(501) }] }, workspaceA));
     assert.throws(() => parseDTO(dto(workspaceB), workspaceA));
     assert.throws(() => parseDTO({ ...dto(), secret: "must-not-display" }, workspaceA));
     const accessor = Object.defineProperty({ ...dto() }, "revision", { enumerable: true, get: () => 4 });
