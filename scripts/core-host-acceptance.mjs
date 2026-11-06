@@ -49,6 +49,23 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     "Inactive denial must explain the activation boundary, not an unrelated runtime failure.");
   await activate(company.id, true);
   await activate(secondCompany.id, true);
+  const comparisonOptions = companyId => request(`/api/plugins/${plugin.id}/actions/builder.read-g5-comparison-pairs`, {
+    method: "POST", body: { companyId, params: { projectId: companyId } },
+  }).then(value => value.data);
+  for (const companyId of [company.id, secondCompany.id]) {
+    const options = await comparisonOptions(companyId);
+    assert.equal(options.projectId, companyId);
+    assert.deepEqual(options.selectableBaselines, []);
+    assert.deepEqual(options.comparisonPairs, []);
+    assert.equal(options.coverage.currentPairInferred, false);
+    assert.equal(options.coverage.writesPerformed, false);
+  }
+  const foreignComparisonOptions = await workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.read-g5-comparison-pairs`)}, {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},
+    body:JSON.stringify({companyId:${JSON.stringify(company.id)},params:{projectId:${JSON.stringify(secondCompany.id)}}})
+  }).then(async r=>({status:r.status,body:await r.json()}))`, true);
+  assert.ok(foreignComparisonOptions.status >= 400);
+  assert.match(JSON.stringify(foreignComparisonOptions.body), /Workspace|project|scope/i);
   const leadAgent = await request(`/api/companies/${company.id}/agents`, {
     method: "POST", body: { name: "Builder Lead selection fixture", role: "engineer", adapterType: "process", adapterConfig: {} },
   });
@@ -676,6 +693,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     documentCenterEmptyHost: true, documentCenterActualConsultationSource: true,
     firstReviewEmptyScopedRead: true, firstReviewMissingDraftDenied: true, actualFirstDesignApproval: false,
     changeImpactPanel: true, changeImpactMissingSourceDenied: true, changeImpactCrossProjectDenied: true,
+    changeImpactOptionsAuthenticatedRead: true, changeImpactOptionsEmptyNotInvented: true, changeImpactOptionsCrossWorkspaceDenied: true,
     changeImpactToolRegistered: true, changeImpactRunImpersonationDenied: true,
     reuseCandidateToolsRegistered: true, reuseEmptyScopedRead: true, reuseRunImpersonationDenied: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
