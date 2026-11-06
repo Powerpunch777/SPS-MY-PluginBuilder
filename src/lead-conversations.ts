@@ -15,6 +15,7 @@ export type LeadTurn = Scope & {
   questionContext?: QuestionContext;
   executionPolicy?: SessionExecutionPolicy;
   inputKind?: "user" | "analysis-request" | "ui-approval-request";
+  failure?: Readonly<{ code: string | null; message: string | null }>;
 };
 type Head = Scope & { schemaVersion: 1; totalTurns: number; lastRequestId: string | null; activeRequestId: string | null };
 export type LeadConversationActivity = Pick<LeadTurn, "requestId" | "state" | "runId" | "cancellationRequested" | "termination">;
@@ -79,9 +80,17 @@ function parseHead(value: unknown, scope: Scope): Head {
   return { ...scope, schemaVersion: 1, totalTurns: row.totalTurns as number, lastRequestId, activeRequestId };
 }
 function parseTurn(value: unknown, scope: Scope): LeadTurn {
-  const row = record(value, TURN_KEYS, ["questionContext", "executionPolicy", "inputKind"]); matches(row, scope);
+  const row = record(value, TURN_KEYS, ["questionContext", "executionPolicy", "inputKind", "failure"]); matches(row, scope);
   const questionContext = Object.hasOwn(row, "questionContext") ? parseQuestionContext(row.questionContext) : undefined;
   const executionPolicy = Object.hasOwn(row, "executionPolicy") ? parseStoredPolicy(row.executionPolicy) : undefined;
+  let failure: LeadTurn["failure"];
+  if (Object.hasOwn(row, "failure")) {
+    const item = record(row.failure, ["code", "message"]);
+    if (!["failed", "cancelled", "interrupted", "timed_out"].includes(row.state as string)
+      || item.code === null && item.message === null) throw error();
+    failure = Object.freeze({ code: item.code === null ? null : text(item.code, 160),
+      message: item.message === null ? null : text(item.message, 2048) });
+  }
   if (questionContext && scope.channel !== "decisions") throw error();
   if (Object.hasOwn(row, "inputKind") && !["user", "analysis-request", "ui-approval-request"].includes(row.inputKind as string)) throw error();
   if (row.inputKind !== undefined && row.inputKind !== "user" && (scope.channel !== "main" || questionContext)) throw error();
@@ -101,7 +110,7 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
     answer: row.answer === null ? null : text(row.answer, 65_536), outputState: row.outputState as LeadTurn["outputState"],
     cancellationRequested: row.cancellationRequested, termination: row.termination as LeadTurn["termination"],
     ...(questionContext ? { questionContext } : {}), ...(executionPolicy ? { executionPolicy } : {}),
-    ...(row.inputKind ? { inputKind: row.inputKind as LeadTurn["inputKind"] } : {}) };
+    ...(row.inputKind ? { inputKind: row.inputKind as LeadTurn["inputKind"] } : {}), ...(failure ? { failure } : {}) };
 }
 function parseStoredPolicy(value: unknown): SessionExecutionPolicy {
   const row = record(value, ["mode", "toolNames"]);
@@ -142,7 +151,7 @@ async function loadTurn(platform: SpsPlatformInvocationContext, scope: Scope, re
 export async function readLeadUserTurn(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
   const raw = await platform.state.get({ scopeKind: "company", scopeId: sessions.workspaceId,
     namespace: "sonpark.my-builder", stateKey: `lead-chat.turn.v1.${id(requestId)}` });
-  const row = record(raw, TURN_KEYS, ["questionContext", "executionPolicy", "inputKind"]);
+  const row = record(raw, TURN_KEYS, ["questionContext", "executionPolicy", "inputKind", "failure"]);
   if (row.channel !== "main" && row.channel !== "decisions") throw error();
   const scope = scopeFor(sessions, row.channel);
   const turn = parseTurn(raw, scope);
@@ -163,9 +172,23 @@ function runProjection(turn: LeadTurn, result: SpsAgentSessionRunResult): LeadTu
   const state = TERMINAL.has(result.status) ? result.status as TurnState : "submitted";
   const output = result.output;
   const answer = state === "succeeded" && output?.state === "available" ? text(output.text, 65_536) : null;
-  return { ...turn, state, answer,
+  const { failure: _previousFailure, ...original } = turn;
+  const boundedDiagnostic = (value: unknown, limit: number) => {
+    if (typeof value !== "string" || !value.trim()) return null;
+    let bounded = "";
+    for (const character of value) {
+      if (byteLength(bounded) + byteLength(character) > limit) break;
+      bounded += character;
+    }
+    try { return text(bounded, limit); } catch { return null; }
+  };
+  const failure = state !== "succeeded" && TERMINAL.has(state) ? {
+    code: boundedDiagnostic(result.errorCode, 160), message: boundedDiagnostic(result.error, 2048),
+  } : null;
+  return { ...original, state, answer,
     outputState: answer !== null ? "available" : output === undefined ? "unsupported" : output.state === "withheld" ? "withheld" : "not_ready",
-    cancellationRequested: result.cancellationRequested, termination: result.termination };
+    cancellationRequested: result.cancellationRequested, termination: result.termination,
+    ...(failure && (failure.code || failure.message) ? { failure } : {}) };
 }
 
 export function parseLeadConversationPage(value: unknown, sessions: BuilderLeadSessions, channel: LeadChannel): LeadConversationPage {

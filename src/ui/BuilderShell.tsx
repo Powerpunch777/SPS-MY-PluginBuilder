@@ -205,7 +205,8 @@ function conversationMessages(props: BuilderShellProps, channel: LeadChannel): B
     ...(turn.state === "succeeded" && turn.answer === null ? [{ id: `${turn.requestId}:unavailable`, channel, actorId: null,
       role: "system" as const, text: "실행은 끝났지만 확인 가능한 답변을 제공하지 않았습니다.", createdAt: turn.createdAt, runId: turn.runId }] : []),
     ...(["failed", "cancelled", "interrupted", "timed_out"].includes(turn.state) ? [{ id: `${turn.requestId}:terminal`, channel, actorId: null,
-      role: "system" as const, text: ({ failed: "실행 실패", cancelled: "실행 중단", interrupted: "실행 끊김", timed_out: "실행 시간 초과" } as Record<string, string>)[turn.state]!,
+      role: "system" as const, text: [({ failed: "실행 실패", cancelled: "실행 중단", interrupted: "실행 끊김", timed_out: "실행 시간 초과" } as Record<string, string>)[turn.state]!,
+        turn.failure?.code ? `[${turn.failure.code}]` : null, turn.failure?.message].filter(Boolean).join("\n"),
       createdAt: turn.createdAt, runId: turn.runId }] : []),
   ]);
 }

@@ -17,7 +17,7 @@ async function eventually(read, check, label, timeout = 45_000) {
   throw new Error(`Live design baseline did not observe ${label}.`);
 }
 
-async function assertScopedTurn(request, turn, sessionId, answer, requiredTools, writeTool) {
+async function assertScopedTurn(request, turn, sessionId, answer, requiredTools, writeTool, inspectResult) {
   assert.equal(turn.state, "succeeded", "Do not replace failed or uncertain provider calls.");
   assert.equal(turn.answer?.trim(), answer);
   assert.equal(turn.sessionId, sessionId);
@@ -41,12 +41,17 @@ async function assertScopedTurn(request, turn, sessionId, answer, requiredTools,
   for (const name of requiredTools) assert.ok(calls.some(call => call.arguments?.toolName === prefix + name));
   const writes = calls.filter(call => call.arguments?.toolName === prefix + writeTool);
   assert.equal(writes.length, 1);
-  return writes[0].arguments.params;
+  if (inspectResult) inspectResult(writes[0].result);
+  const parameters = writes[0].arguments.parameters ?? writes[0].arguments.params;
+  assert.ok(parameters && typeof parameters === "object" && !Array.isArray(parameters));
+  return parameters;
 }
 
 // Explicitly authorized internal planning trial; not a customer signature or execution approval.
 export async function runBaselineAcceptance(context, workstreamDelivery = false) {
   assert.equal(process.env.SPS_BUILDER_LIVE_CODEX, "1");
+  const designModelReview = process.env.SPS_BUILDER_LIVE_D3 === "1";
+  assert.ok(!designModelReview || !workstreamDelivery, "D3 is a separate initial-review trial, not a Workstream execution trial.");
   const selectedOptIn = workstreamDelivery ? "SPS_BUILDER_LIVE_WORKSTREAMS" : "SPS_BUILDER_LIVE_BASELINE";
   assert.equal(process.env[selectedOptIn], "1");
   for (const name of ["SPS_BUILDER_LIVE_DESIGN", "SPS_BUILDER_LIVE_QUESTION", "SPS_BUILDER_LIVE_MEMORY",
@@ -84,7 +89,22 @@ export async function runBaselineAcceptance(context, workstreamDelivery = false)
     }, value => value.totalTurns === totalTurns && value.active === null, "terminal " + label, 240_000);
   }
 
-  const propose = await sendOnce(`For the isolated design trial, prepare a first-design review, not approval or publication. Discover tools, read current draft and review head. Then call builder.propose-first-design-review exactly once for projectId ${company.id}, expectedDraftRevisionId ${saved.draft.revisionId}, expectedReviewHeadRevisionId null. Use packId trial-first-design, version 1.0.0, empty applicability, and a rule trial-review-check with appliesWhen {}, requiresCheck true, and every requirement ID from the stored draft. Use empty transitions, exceptions and excludedCombinations. In sourcePins link every requirement to its exact captured consultation source ${sourceId}, with acId null, and do not provide a digest or identity. Read back builder.read-first-design-review. Leave the draft and open search question unchanged. Use only these tools. Do not publish a Baseline or approve. Do not repeat an uncertain write. Respond exactly SPS_FIRST_REVIEW_PROPOSED.`, 2, "Propose exact first-design review");
+  const requirements = saved.draft.specification.requirements;
+  const acSources = requirements.flatMap(requirement => requirement.acceptanceCriteriaIds.map(acId => ({
+    requirementId: requirement.id, acId, sourceId,
+  })));
+  const trialModel = {
+    facts: ["trial-read-only-local"], rulesVersion: "trial-static-model-1",
+    coverageRules: [{ id: "trial-review-check", requiresCheck: true, requiredEvidenceKinds: ["specification", "source"] }],
+    coverageTargets: [...requirements.map(requirement => ({ targetKind: "requirement", targetId: requirement.id, ruleIds: ["trial-review-check"] })),
+      ...[...new Set(acSources.map(item => item.acId))].map(acId => ({ targetKind: "ac", targetId: acId, ruleIds: ["trial-review-check"] }))],
+    scenarios: [], itemDecisions: requirements.map(requirement => ({ requirementId: requirement.id, status: "UNDECIDED",
+      reason: "This trial preserves unresolved design decisions and establishes no runtime or QA result.", sourceIds: [] })),
+    acceptanceCriteria: acSources.map(item => ({ ...item, quote: sourceText })),
+  };
+  const modelInstruction = designModelReview
+    ? ` Also add these exact AC sourcePins: ${JSON.stringify(acSources)}. Include this exact static designModel: ${JSON.stringify(trialModel)}. Do not resolve the UNDECIDED items or claim their checker/QA passed.` : "";
+  const propose = await sendOnce(`For the isolated design trial, prepare a first-design review, not approval or publication. Discover tools, read current draft and review head. Then call builder.propose-first-design-review exactly once for projectId ${company.id}, expectedDraftRevisionId ${saved.draft.revisionId}, expectedReviewHeadRevisionId null. Use packId trial-first-design, version 1.0.0, empty applicability, and a rule trial-review-check with appliesWhen {}, requiresCheck true, and every requirement ID from the stored draft. Use empty transitions, exceptions and excludedCombinations. In sourcePins link every requirement to its exact captured consultation source ${sourceId}, with acId null, and do not provide a digest or identity.${modelInstruction} Read back builder.read-first-design-review. Leave the draft and open search question unchanged. Use only these tools. Do not publish a Baseline or approve. Do not repeat an uncertain write. Respond exactly SPS_FIRST_REVIEW_PROPOSED.`, 2, "Propose exact first-design review");
   const proposalTurn = propose.turns[0];
   const proposalArgs = await assertScopedTurn(request, proposalTurn, prepared.sessions.main, "SPS_FIRST_REVIEW_PROPOSED",
     ["read-design-draft", "read-first-design-review", "propose-first-design-review"], "propose-first-design-review");
@@ -100,6 +120,18 @@ export async function runBaselineAcceptance(context, workstreamDelivery = false)
   for (const requirement of saved.draft.specification.requirements) {
     assert.ok(proposal.bundle.sourcePins.some(pin => pin.requirementId === requirement.id && pin.sourceId === sourceId && pin.sourceDigest === sourceDigest));
   }
+  if (designModelReview) {
+    assert.equal(proposal.bundle.designModel.kind, "design-model-v1");
+    assert.deepEqual(proposal.bundle.designModel.facts, trialModel.facts);
+    assert.deepEqual(proposal.bundle.designModel.itemDecisions, trialModel.itemDecisions);
+    assert.equal(proposal.bundle.designModel.acceptanceCriteria.length, acSources.length);
+    for (const ac of proposal.bundle.designModel.acceptanceCriteria) {
+      assert.equal(ac.sourceId, sourceId);
+      assert.equal(ac.sourceDigest, sourceDigest);
+      assert.equal(ac.text, sourceText);
+      assert.equal(ac.textSha256, sourceDigest);
+    }
+  }
   assert.equal(await baseline(), null);
   assert.equal((await runs()).length, 2);
   await click(workspace, ".builder-first-design-review > summary", "Show exact review to the authenticated trial user");
@@ -113,6 +145,7 @@ export async function runBaselineAcceptance(context, workstreamDelivery = false)
   assert.ok(approved.bundle.approval.userId);
   assert.notEqual(approved.bundle.revisionId, proposal.bundle.revisionId);
   for (const field of ["draft", "draftDigest", "pack", "sourcePins"]) assert.deepEqual(approved.bundle[field], proposal.bundle[field]);
+  if (designModelReview) assert.deepEqual(approved.bundle.designModel, proposal.bundle.designModel);
   assert.equal(await baseline(), null, "The user action is not formal publication.");
   assert.equal((await runs()).length, 2, "Approval does not start a new model turn.");
 
@@ -136,6 +169,28 @@ export async function runBaselineAcceptance(context, workstreamDelivery = false)
   assert.deepEqual(await data("builder.design-draft", { projectId: company.id }), saved);
   assert.equal(await data("builder.design-baseline", { projectId: company.id }, secondCompany.id), null);
   assert.deepEqual(await data("builder.snapshot", {}, secondCompany.id), beforeOther);
+  let finalConversation = completed;
+  let inspectionTurn = null;
+  if (designModelReview) {
+    finalConversation = await sendOnce(`Read-only D3 inspection for the current trial project ${company.id}. Discover tools and invoke builder.inspect-spec-assurance exactly once with projectId ${company.id}. Do not write, approve, resolve questions, execute tests or claim QA. The approved model deliberately retains UNDECIDED items, so UNKNOWN is expected. Respond exactly SPS_D3_APPROVED_MODEL_OBSERVED.`, 4, "Inspect the actually approved static model");
+    inspectionTurn = finalConversation.turns[0];
+    await assertScopedTurn(request, inspectionTurn, prepared.sessions.main, "SPS_D3_APPROVED_MODEL_OBSERVED",
+      ["inspect-spec-assurance"], "inspect-spec-assurance", result => {
+        const textBlocks = result?.content?.filter(block => block.type === "text");
+        assert.equal(textBlocks?.length, 1, "The actual MCP result must contain one serialized tool response.");
+        const response = JSON.parse(textBlocks[0].text);
+        const assurance = response.data?.result;
+        assert.equal(assurance?.coverageAuthority, "verified");
+        assert.equal(assurance.status, "UNKNOWN", "Unresolved trial decisions cannot be promoted to completion.");
+        assert.equal(assurance.identity.specRevisionId, stored.baseline.specification.revisionId);
+        assert.deepEqual(assurance.designModelEvidence, { kind: "design-model-v1", approvalRevisionId: approved.bundle.revisionId,
+          materialSha256: sha(approved.bundle.designModel) });
+        assert.ok(assurance.itemDecisions.length === requirements.length && assurance.itemDecisions.every(item => item.status === "UNDECIDED"));
+        assert.ok(assurance.sourceEvidence.some(item => item.sourceId === sourceId && item.sourceDigest === sourceDigest));
+      });
+    assert.deepEqual(await baseline(), stored, "Inspection must not change the published Baseline.");
+    assert.deepEqual(await review(), approved, "Inspection must not change the user's approved bundle.");
+  }
   await click(workspace, '[aria-label="Workspace 새로고침"]', "Refresh the actual stored internal baseline document");
   await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Inspect actual baseline record without execution controls");
   const publishedDocument = await data("builder.baseline-document");
@@ -150,18 +205,19 @@ export async function runBaselineAcceptance(context, workstreamDelivery = false)
   workspace = await restart({ companyPrefix: company.issuePrefix, pluginId: plugin.id, readySelector: ".builder-shell" });
   assert.deepEqual(await baseline(), stored);
   assert.deepEqual(await review(), approved);
-  assert.deepEqual(await conversation(), completed);
-  assert.equal((await runs()).length, 3);
+  assert.deepEqual(await conversation(), finalConversation);
+  assert.equal((await runs()).length, designModelReview ? 4 : 3);
   assert.equal((await request(`/api/agents/${agent.id}/task-sessions`)).length, 6);
   assert.deepEqual((await request(`/api/agents/${agent.id}`)).adapterConfig, agent.adapterConfig);
   assert.deepEqual(await readdir(workingDirectory), []);
-  console.log(JSON.stringify({ liveDesignBaseline: true, actualUiDecision: true, actualLeadRuns: 3,
+  console.log(JSON.stringify({ liveDesignBaseline: true, actualUiDecision: true, actualLeadRuns: designModelReview ? 4 : 3,
+    approvedStaticModelObserved: designModelReview, unresolvedDesignRetained: designModelReview,
     baselineWriteCalls: 1, exactApprovedBundleBound: true, approvalStartedNoRun: true, pinnedSpecificationAndGraph: true, sourceDraftUnchanged: true,
     restartRetained: true, otherWorkspaceUnchanged: true, legalApprovalVerified: false, executionAuthorized: false,
     commandsOrCodeExecuted: false, actualGoogleOauth: false, installedProfileChanged: false,
     baselineDtoSha256: sha(stored), cleanupQualificationPending: true }));
   return { workspace, plugin, agent, prepared, draft: saved, baseline: stored, beforeOther, workingDirectory,
-    mainConversation: completed, leadRuns: [before.mainConversation.turns[0], proposalTurn, turn] };
+    mainConversation: finalConversation, leadRuns: [before.mainConversation.turns[0], proposalTurn, turn, ...(inspectionTurn ? [inspectionTurn] : [])] };
 }
 
 export async function runAcceptance(context) { await runBaselineAcceptance(context); }

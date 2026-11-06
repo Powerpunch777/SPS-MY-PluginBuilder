@@ -141,10 +141,14 @@ test("renders scoped user and assistant text as escaped content", async () => {
 });
 
 test("renders failed turns as system messages without fabricating an assistant answer", async () => {
-  const page = conversationPage([turn({ state: "failed", answer: null, outputState: "not_ready" })]);
+  const page = conversationPage([turn({ state: "failed", answer: null, outputState: "not_ready",
+    failure: { code: "adapter_failed", message: "<script>failure details</script>" } })]);
   const html = await renderShell(baseProps({ conversation: page }));
 
   assert.match(html, /실행 실패/);
+  assert.match(html, /adapter_failed/);
+  assert.match(html, /&lt;script&gt;failure details&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>failure details<\/script>/);
   assert.doesNotMatch(html, /Use a small domain module/);
 });
 

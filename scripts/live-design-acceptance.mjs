@@ -44,11 +44,12 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
     method: "POST", body: { companyId: secondCompany.id, params: {} },
   })).data;
   stage("create_isolated_tool_only_lead");
+  const d3Tools = recordBaseline && process.env.SPS_BUILDER_LIVE_D3 === "1" ? ", inspect-spec-assurance (read-only approved static model inspection)" : "";
   const agent = await request(`/api/companies/${company.id}/agents`, { method: "POST", body: {
     name: "Isolated authorized design Lead", role: "engineer", adapterType: "codex_local",
     adapterConfig: { engine: "cli", cwd: workingDirectory, timeoutSec: 180, graceSec: 3,
       dangerouslyBypassApprovalsAndSandbox: false },
-    instructionsBundle: { files: { "AGENTS.md": `Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft, propose-design${questionAnswers ? " and resolve-design-question" : ctoRegistrations ? ", create-cto and list-ctos (logical identity/session registration only, never execution)" : recordBaseline || workstreamDelivery ? ", read-first-design-review, propose-first-design-review, read-design-baseline, publish-design-baseline and read-solution" : ""}${workstreamDelivery ? ", read-technology-decisions, publish-technology-decisions, create-cto, list-ctos, read-workstreams, publish-workstream and dispatch-workstream (Lead planning only); in the separately registered CTO session, only read-cto-memory, update-cto-memory, read-cto-workstream and acknowledge-workstream for the exact Core-bound assignment" : ""} operations. Follow the role and stage of the current run. Core's per-session tool policy is authoritative. Never run commands, edit/read files, generate code, search the web, create Core Agents or contact other services. Chat is not first-design approval. Publish the first Baseline only after reading its exact stored user approval and an explicit publication request. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim external legal approval, implementation or delivery.` } },
+    instructionsBundle: { files: { "AGENTS.md": `Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft, propose-design${questionAnswers ? " and resolve-design-question" : ctoRegistrations ? ", create-cto and list-ctos (logical identity/session registration only, never execution)" : recordBaseline || workstreamDelivery ? ", read-first-design-review, propose-first-design-review, read-design-baseline, publish-design-baseline and read-solution" : ""}${d3Tools}${workstreamDelivery ? ", read-technology-decisions, publish-technology-decisions, create-cto, list-ctos, read-workstreams, publish-workstream and dispatch-workstream (Lead planning only); in the separately registered CTO session, only read-cto-memory, update-cto-memory, read-cto-workstream and acknowledge-workstream for the exact Core-bound assignment" : ""} operations. Follow the role and stage of the current run. Core's per-session tool policy is authoritative. Never run commands, edit/read files, generate code, search the web, create Core Agents or contact other services. Chat is not first-design approval. Publish the first Baseline only after reading its exact stored user approval and an explicit publication request. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim external legal approval, implementation or delivery.` } },
   } });
   const data = (key, params = {}, companyId = company.id) => request(`/api/plugins/${plugin.id}/data/${key}`, {
     method: "POST", body: { companyId, params },
@@ -81,6 +82,32 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
   stage("send_one_design_request");
   await click(workspace, '[aria-label="메시지 보내기"]', "Send one explicitly authorized design-tool request");
   let status = null;
+  const diagnoseRun = async (run, runId, phase) => {
+    const log = await request(`/api/heartbeat-runs/${runId}/log?offset=0&limitBytes=65536`);
+    const diagnosticText = `${run.error ?? ""}\n${log.content ?? ""}`;
+    const category = /usage limit|quota|rate.limit|credits/i.test(diagnosticText) ? "usage-limit"
+      : /capacity|overloaded|temporarily unavailable/i.test(diagnosticText) ? "capacity"
+      : /unauthorized|authentication|not logged in|401|invalid.*token/i.test(diagnosticText) ? "authentication"
+      : /not.*trusted.*(?:git|directory)|git repository|skip-git-repo-check/i.test(diagnosticText) ? "git-scope"
+      : /model.*not.*(?:found|supported|available)/i.test(diagnosticText) ? "unsupported-model"
+      : /ENOENT|executable.*not found/i.test(diagnosticText) ? "missing-executable" : "unclassified";
+    const context = run.contextSnapshot ?? {};
+    const rows = await request(`/api/agents/${agent.id}/task-sessions`);
+    const registered = rows.find(row => (row.id ?? row.sessionId) === prepared.sessions.main);
+    const hashKey = value => typeof value === "string" ? createHash("sha256").update(value).digest("hex") : null;
+    const errorSummary = String(run.error ?? "").replace(/(?:sk-[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]{48,})/gu, "[redacted]")
+      .replace(/((?:authorization|token|secret|password|api[_ -]?key)\s*[:=]\s*)\S+/giu, "$1[redacted]").slice(0, 600);
+    console.log(JSON.stringify({ liveDesignFailure: { runId, status: run.status, phase,
+      errorCode: run.errorCode ?? null, category, errorSummary,
+      diagnosticSha256: createHash("sha256").update(diagnosticText).digest("hex"),
+      sessionBinding: { registeredSessionFound: !!registered, taskKeyPresent: typeof context.taskKey === "string",
+        registeredTaskKeySha256: hashKey(registered?.taskKey), runTaskKeySha256: hashKey(context.taskKey),
+        conversationPresent: !!context.spsPluginConversation,
+        sessionMatches: context.spsPluginConversation?.sessionId === prepared.sessions.main,
+        pluginMatches: context.spsPluginConversation?.pluginKey === "com.sonparkserver.my-plugin-builder" },
+      automaticallyRetried: false } }));
+    return category;
+  };
   const finished = await eventually(async () => {
     const page = await conversation();
     if (page.active?.runId) {
@@ -89,9 +116,19 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
         status = run.status;
         console.log(JSON.stringify({ liveDesignRunStatus: status, errorCode: run.errorCode ?? null }));
       }
-      await request(`/api/plugins/${plugin.id}/actions/builder.refresh-lead-conversation`, { method: "POST", body: {
-        companyId: company.id, params: { channel: "main" },
-      } });
+      if (["failed", "cancelled", "interrupted", "timed_out"].includes(run.status)) {
+        const category = await diagnoseRun(run, page.active.runId, "terminal-run");
+        throw new Error(`Actual design Lead terminated with ${run.status} (${category}); no replacement Run was requested.`);
+      }
+      try {
+        await request(`/api/plugins/${plugin.id}/actions/builder.refresh-lead-conversation`, { method: "POST", body: {
+          companyId: company.id, params: { channel: "main" },
+        } });
+      } catch (error) {
+        const latest = await request(`/api/heartbeat-runs/${page.active.runId}`);
+        await diagnoseRun(latest, page.active.runId, "session-read-rejected");
+        throw error;
+      }
     }
     return conversation();
   }, value => value.totalTurns === 1 && value.active === null, "terminal provider response", 240_000);

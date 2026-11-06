@@ -12,6 +12,9 @@ const liveQuestion = process.env.SPS_BUILDER_LIVE_QUESTION;
 const liveCtos = process.env.SPS_BUILDER_LIVE_CTOS;
 const liveBaseline = process.env.SPS_BUILDER_LIVE_BASELINE;
 const liveWorkstreams = process.env.SPS_BUILDER_LIVE_WORKSTREAMS;
+const liveD3 = process.env.SPS_BUILDER_LIVE_D3;
+assert.ok(liveD3 === undefined || liveD3 === "1" && liveBaseline === "1" && liveCodex === "1",
+  "D3 requires the explicit isolated live-account Baseline trial.");
 assert.deepEqual(process.argv.slice(2), liveWorkstreams === "1" ? ["--live-workstreams"] : [],
   "Live Workstreams requires its exact operator flag; no extra test-core-host arguments are accepted.");
 assert.ok(liveCodex === undefined || liveCodex === "1", "Live account use must be explicitly enabled with SPS_BUILDER_LIVE_CODEX=1.");

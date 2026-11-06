@@ -90,6 +90,37 @@ test("keyed request inspection distinguishes a saved turn from Core acceptance w
   assert.equal((await f.store.inspectRequest("main", uuid(601))).turn?.state, "uncertain");
 });
 
+test("persists exact Core failure diagnostics without resending or treating them as the user's source", async () => {
+  const f = fixture();
+  await f.store.send("main", uuid(610), "Original user request");
+  const runId = uuid(1001);
+  f.runs.set(runId, { ...f.runs.get(runId)!, status: "failed", errorCode: "adapter_failed",
+    error: "The CLI stopped before a Thread was created." });
+  await f.store.refresh("main");
+  const page = await createLeadConversationStore(f.platform, sessions(), f.check).page("main");
+  assert.equal(page.active, null);
+  assert.equal(page.turns[0]!.state, "failed");
+  assert.equal(page.turns[0]!.answer, null);
+  assert.equal(page.turns[0]!.text, "Original user request");
+  assert.deepEqual(page.turns[0]!.failure, { code: "adapter_failed", message: "The CLI stopped before a Thread was created." });
+  assert.equal(f.sends.length, 1);
+});
+
+test("bounds UTF-8 Core diagnostics and rejects diagnostics attached to a nonterminal stored turn", async () => {
+  const f = fixture();
+  await f.store.send("main", uuid(611), "Original request");
+  const runId = uuid(1001);
+  f.runs.set(runId, { ...f.runs.get(runId)!, status: "failed", errorCode: "x".repeat(300), error: "\uD55C".repeat(2000) });
+  await f.store.refresh("main");
+  const page = await f.store.page("main");
+  assert.equal(page.turns[0]!.failure!.code!.length, 160);
+  assert.equal(Buffer.byteLength(page.turns[0]!.failure!.message!, "utf8"), 2046);
+  const [key, value] = [...f.state].find(([, item]) => (item as Record<string, JsonValue>).requestId === uuid(611)
+    && (item as Record<string, JsonValue>).state === "failed")!;
+  f.state.set(key, { ...(value as Record<string, JsonValue>), state: "submitted" });
+  await assert.rejects(f.store.page("main"), /unavailable or changed/);
+});
+
 test("keyed request inspection rejects receipt mismatches and retired scope", async () => {
   const f = fixture();
   await f.store.send("main", uuid(602), "Review the stored approval", undefined, "ui-approval-request");
