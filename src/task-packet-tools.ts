@@ -21,7 +21,7 @@ export function createTaskPacketStore(workspaceId: string, projectId: string, ct
     parse: value => parseTaskPacketBoard(value, projectId, ctoId, workstreamId), revisionId: value => value.revisionId });
 }
 
-async function taskAuthority(projectId: string, ctoId: string, workstreamId: string, runContext: unknown,
+export async function resolveCtoTaskAuthority(projectId: string, ctoId: string, workstreamId: string, runContext: unknown,
   platform: SpsPlatformInvocationContext, toolName: string) {
   const authority = await resolveCtoPlanningAuthority(projectId, ctoId, workstreamId, runContext, platform, toolName);
   const check = async () => {
@@ -49,7 +49,7 @@ export async function publishCtoTaskPacket(params: unknown, runContext: unknown,
   const projectId = id(input.projectId), ctoId = id(input.ctoId), workstreamId = id(input.workstreamId);
   const expected = input.expectedBaseRevisionId === null ? null : id(input.expectedBaseRevisionId), revisionId = id(input.revisionId);
   const packet = parseTaskPacket(input.packet, projectId, ctoId, workstreamId);
-  const authority = await taskAuthority(projectId, ctoId, workstreamId, runContext, platform, "builder.publish-task-packet");
+  const authority = await resolveCtoTaskAuthority(projectId, ctoId, workstreamId, runContext, platform, "builder.publish-task-packet");
   if (packet.scopeNodeIds.some(node => !authority.delivery.instruction.spec.scopeNodeIds.includes(node))) {
     throw new Error("A Task Packet may only include nodes assigned by this exact Workstream.");
   }
@@ -94,7 +94,7 @@ export async function publishCtoTaskPacket(params: unknown, runContext: unknown,
 export async function readCtoTaskPackets(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["projectId", "ctoId", "workstreamId"]);
   const projectId = id(input.projectId), ctoId = id(input.ctoId), workstreamId = id(input.workstreamId);
-  const authority = await taskAuthority(projectId, ctoId, workstreamId, runContext, platform, "builder.read-task-packets");
+  const authority = await resolveCtoTaskAuthority(projectId, ctoId, workstreamId, runContext, platform, "builder.read-task-packets");
   const current = await authority.store.current();
   await authority.check();
   const records = current?.revision.packets ?? [];

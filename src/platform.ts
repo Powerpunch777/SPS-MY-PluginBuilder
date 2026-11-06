@@ -27,8 +27,9 @@ import { submitCtoQuestion, readCtoQuestions, readOwnCtoQuestion, readUserCtoQue
 import { dispatchQuestionToLead, readBoundCtoIntake } from "./cto-intake-delivery.ts";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "./cto-question-reply-tool-declarations.mjs";
 import { answerCtoQuestion, readCtoQuestionAnswer, acknowledgeCtoQuestionAnswer } from "./cto-question-reply-tools.ts";
-import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "./task-packet-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL } from "./task-packet-tool-declarations.mjs";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
+import { prepareTaskWorker, readTaskWorkers } from "./task-worker-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -975,7 +976,19 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => readAssignedCtoTaskPackets(params, context, platform) },
     { name: PUBLISH_CTO_TASK_PACKET_TOOL.name, declaration: { displayName: PUBLISH_CTO_TASK_PACKET_TOOL.displayName,
       description: PUBLISH_CTO_TASK_PACKET_TOOL.description, parametersSchema: PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema },
-      handler: (params, context, platform) => publishAssignedCtoTaskPacket(params, context, platform) }],
+      handler: (params, context, platform) => publishAssignedCtoTaskPacket(params, context, platform) },
+    { name: PREPARE_TASK_WORKER_TOOL.name, declaration: { displayName: PREPARE_TASK_WORKER_TOOL.displayName,
+      description: PREPARE_TASK_WORKER_TOOL.description, parametersSchema: PREPARE_TASK_WORKER_TOOL.parametersSchema },
+      handler: (params, runContext, platform) => {
+        const context = parseLeadToolContext(runContext);
+        return serialize(context.companyId, () => prepareTaskWorker(params, context, platform));
+      } },
+    { name: READ_TASK_WORKERS_TOOL.name, declaration: { displayName: READ_TASK_WORKERS_TOOL.displayName,
+      description: READ_TASK_WORKERS_TOOL.description, parametersSchema: READ_TASK_WORKERS_TOOL.parametersSchema },
+      handler: (params, runContext, platform) => {
+        const context = parseLeadToolContext(runContext);
+        return serialize(context.companyId, () => readTaskWorkers(params, context, platform));
+      } }],
     data: [{ key: "builder.reuse-candidates", handler: async (params, platform) => {
       exactToolRecord(params, ["companyId"], ["renderEnvironment"]);
       const companyId = workspaceId(params.companyId);

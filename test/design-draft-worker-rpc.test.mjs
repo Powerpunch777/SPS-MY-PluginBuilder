@@ -519,6 +519,20 @@ test("built Worker routes design sources to an unapproved draft and back without
     assert.ok(deniedPacketRead.error, "Lead main cannot read private CTO Task Packets.");
     assert.equal(calls.filter(method => method === "state.compareAndSet").length, casBeforeDeniedPacket,
       "Lead main authorization failures must not publish or mutate Task Packet state.");
+    const prepareWorker = { ...taskPacketInput, taskId: taskPacket.taskId, packetRevision: 1, role: "worker" };
+    invoke(36, "builder.prepare-task-worker", prepareWorker, ctoContext);
+    const unsupportedWorker = await serviceUntil(36);
+    assert.equal(unsupportedWorker.error, undefined, JSON.stringify(unsupportedWorker.error));
+    assert.equal(unsupportedWorker.result.data.status, "unsupported");
+    assert.equal(unsupportedWorker.result.data.executionStarted, false);
+    invoke(37, "builder.read-task-workers", taskPacketInput, ctoContext);
+    const readWorkers = await serviceUntil(37);
+    assert.equal(readWorkers.error, undefined, JSON.stringify(readWorkers.error));
+    invoke(38, "builder.prepare-task-worker", prepareWorker, runContext);
+    assert.ok((await serviceUntil(38)).error, "Lead main cannot prepare a Worker as the assigned CTO.");
+    invoke(39, "builder.read-task-workers", taskPacketInput, runContext);
+    assert.ok((await serviceUntil(39)).error, "Lead main cannot read private Task Worker registrations.");
+    assert.equal(calls.filter(method => method === "state.compareAndSet").length, casBeforeDeniedPacket);
     assert.equal(calls.some(method => method === "agents.sessions.sendMessage" || method === "agents.sessions.ensure"
       || method === "agents.sessions.create"), false, "The compiled Worker test must not send to or create a provider session.");
 

@@ -45,3 +45,17 @@ export const PUBLISH_CTO_TASK_PACKET_TOOL = Object.freeze({
       expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 }, revisionId: id, packet: packetSchema },
   },
 });
+
+export const PREPARE_TASK_WORKER_TOOL = Object.freeze({
+  name: "builder.prepare-task-worker", displayName: "Prepare a Task Worker or QA session",
+  description: "Only the exact active Core-bound CTO may register an owned identity and keyed session for the specified current Task Packet revision on a supporting Host. This does not start an AI run, execute code, run QA or grant execution permission. Reconcile unknown results by reading; never retry automatically.",
+  parametersSchema: { ...ctoTaskPacketScope, required: [...ctoTaskPacketScope.required, "taskId", "packetRevision", "role"],
+    properties: { ...ctoTaskPacketScope.properties, taskId: id, packetRevision: { type: "integer", minimum: 1 },
+      role: { enum: ["worker", "qa"] } } },
+});
+
+export const READ_TASK_WORKERS_TOOL = Object.freeze({
+  name: "builder.read-task-workers", displayName: "Read this CTO's Task Worker registrations",
+  description: "Only the exact active Core-bound CTO may read Task Worker and QA registration history for its Workstream. Registration is not execution, readiness, or QA evidence.",
+  parametersSchema: ctoTaskPacketScope,
+});

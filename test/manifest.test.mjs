@@ -5,7 +5,7 @@ import { CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL, DISPATCH_CTO_WORKSTREAM_TOOL, READ
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-tool-declarations.mjs";
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "../src/cto-question-reply-tool-declarations.mjs";
-import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "../src/task-packet-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL } from "../src/task-packet-tool-declarations.mjs";
 import { INSPECT_SPEC_ASSURANCE_TOOL } from "../src/tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
@@ -183,6 +183,19 @@ test("CTO task packet schema matches the service's serialized and reuse field bo
   assert.equal(reuse.sourceUrl.maxLength, 4096);
   assert.match(reuse.sourceUrl.description, /HTTPS URL without credentials/);
   assert.equal(reuse.licenseExpression.maxLength, 512);
+});
+
+test("CTO Task Worker tools expose registration without granting execution", () => {
+  for (const declaration of [PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL]) {
+    assert.deepEqual(manifest.tools.find(tool => tool.name === declaration.name), declaration);
+    assert.equal(declaration.parametersSchema.additionalProperties, false);
+  }
+  const schema = PREPARE_TASK_WORKER_TOOL.parametersSchema;
+  assert.deepEqual(schema.required, ["projectId", "ctoId", "workstreamId", "taskId", "packetRevision", "role"]);
+  assert.equal(schema.properties.packetRevision.minimum, 1);
+  assert.deepEqual(schema.properties.role.enum, ["worker", "qa"]);
+  assert.match(PREPARE_TASK_WORKER_TOOL.description, /does not start an AI run/);
+  assert.deepEqual(READ_TASK_WORKERS_TOOL.parametersSchema.required, ["projectId", "ctoId", "workstreamId"]);
 });
 
 test("CTO QA pass criteria are a bounded nonempty text list", () => {
