@@ -6,7 +6,13 @@ export type RevisionState = {
   get(key: SpsStateKey): Promise<JsonValue | null>;
   compareAndSet?(key: SpsStateKey, expected: { exists: false } | { exists: true; value: JsonValue },
     value: JsonValue): Promise<{ swapped: boolean }>;
+  guardedCompareAndSet?(key: SpsStateKey & { scopeKind: "company"; scopeId: string;
+    guards: readonly { stateKey: string; namespace?: string; expectedValue: JsonValue }[] },
+  expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue): Promise<
+    { status: "committed" | "conflict" } | { status: "unsupported"; reason: "missing-guard" }
+  >;
 };
+export type RevisionPublicationGuard = Readonly<{ stateKey: string; namespace?: string; expectedValue: JsonValue }>;
 type Pointer = Readonly<{ revisionId: string; sequence: number; digest: string }>;
 type Entry<T> = Readonly<{
   schemaVersion: 1;
@@ -157,6 +163,32 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
     return entry.sequence === ref.sequence && entry.digest === ref.digest && codec.revisionId(entry.revision) === ref.revisionId;
   }
 
+  function validatePublicationGuards(guards: readonly RevisionPublicationGuard[]): RevisionPublicationGuard[] {
+    if (!Array.isArray(guards) || Object.getPrototypeOf(guards) !== Array.prototype
+      || guards.length < 1 || guards.length > 64 || Reflect.ownKeys(guards).length !== guards.length + 1) {
+      throw new TypeError("Guarded publication requires between 1 and 64 dense guard keys.");
+    }
+    const seen = new Set<string>();
+    return guards.map((value, index) => {
+      const hasNamespace = Boolean(value && typeof value === "object" && Object.hasOwn(value, "namespace"));
+      const guard = fields(value, hasNamespace ? ["stateKey", "namespace", "expectedValue"]
+        : ["stateKey", "expectedValue"], `publication guard ${index}`);
+      if (typeof guard.stateKey !== "string" || !guard.stateKey || guard.stateKey.length > 200
+        || guard.namespace !== undefined && (typeof guard.namespace !== "string" || !guard.namespace || guard.namespace.length > 200)
+        || !Object.hasOwn(guard, "expectedValue")) throw new TypeError(`Invalid publication guard ${index}.`);
+      const namespace = (guard.namespace as string | undefined) ?? "default";
+      const identity = `${namespace}\0${guard.stateKey}`;
+      if (seen.has(identity)) throw new TypeError("Guarded publication keys must be unique.");
+      seen.add(identity);
+      if (namespace === (headKey.namespace ?? "default") && guard.stateKey === headKey.stateKey) {
+        throw new TypeError("Revision head cannot also be a publication guard.");
+      }
+      return Object.freeze({ stateKey: guard.stateKey,
+        ...(guard.namespace === undefined ? {} : { namespace: guard.namespace as string }),
+        expectedValue: guard.expectedValue as JsonValue });
+    });
+  }
+
   async function cas(input: SpsStateKey, expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue) {
     if (typeof state.compareAndSet !== "function") throw new Error("Unsupported Host: atomic state.compareAndSet is required.");
     const receipt = fields(await state.compareAndSet(input, expected, value), ["swapped"], "conditional state receipt");
@@ -291,6 +323,63 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       if (!await cas(headKey, current.raw === null ? { exists: false } : { exists: true, value: current.raw }, asJson(next))) {
         const latest = await head();
         return Object.freeze({ status: "conflict" as const, actualBaseRevisionId: latest.ref?.revisionId ?? null });
+      }
+      return Object.freeze({ status: "published" as const, sequence, revision: proposed });
+    },
+
+    /**
+     * Server-caller-only publication guarded by authoritative source pointers.
+     * The SDK validates invocation scope, guard values and bounded JSON atomically
+     * with the head write. A rejected call can leave the immutable entry staged;
+     * callers must inspect current state and must not delete or rewrite it.
+     */
+    async publishGuarded(patchValue: unknown, rawGuards: readonly RevisionPublicationGuard[]) {
+      if (typeof state.guardedCompareAndSet !== "function") {
+        return Object.freeze({ status: "unsupported" as const, reason: "guarded-cas-unavailable" as const });
+      }
+      const guards = validatePublicationGuards(rawGuards);
+      const patch = fields(patchValue, ["expectedBaseRevisionId", "revision"], "solution patch");
+      const expectedId = patch.expectedBaseRevisionId === null ? null : identifier(patch.expectedBaseRevisionId);
+      const proposed = codec.parse(patch.revision);
+      const proposedId = identifier(codec.revisionId(proposed));
+      const current = await head();
+      const actualId = current.ref?.revisionId ?? null;
+      if (expectedId !== actualId) return Object.freeze({ status: "conflict" as const, actualBaseRevisionId: actualId });
+      if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
+      const sequence = (current.ref?.sequence ?? 0) + 1;
+      if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
+      const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence, parent: current.ref, revision: proposed };
+      const entry: Entry<T> = Object.freeze({ ...body, digest: hash(json(body)) });
+      if (Buffer.byteLength(json(entry), "utf8") > MAX_ENTRY_BYTES) throw new TypeError("Solution revision exceeds 192 KiB; no state was changed.");
+      const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
+      if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
+        const existing = await entryAt(next);
+        if (json(existing) !== json(entry)) throw new Error("Solution revision ID already contains different immutable content.");
+      }
+      // Do not retry or fall back if this call rejects: the Host may have committed
+      // before its response was lost. The staged entry remains available for reconciliation.
+      const receiptValue = await state.guardedCompareAndSet({ ...headKey,
+        scopeKind: "company", scopeId: workspaceId, guards },
+      current.raw === null ? { exists: false } : { exists: true, value: current.raw }, asJson(next));
+      const statusField = receiptValue && typeof receiptValue === "object"
+        ? Object.getOwnPropertyDescriptor(receiptValue, "status") : undefined;
+      if (!statusField?.enumerable || !Object.hasOwn(statusField, "value")) {
+        throw new TypeError("Invalid guarded publication receipt.");
+      }
+      const receipt = fields(receiptValue, statusField.value === "unsupported" ? ["status", "reason"] : ["status"],
+        "guarded publication receipt");
+      if (receipt.status === "unsupported") {
+        if (receipt.reason !== "missing-guard") throw new TypeError("Invalid guarded publication receipt.");
+        return Object.freeze({ status: "unsupported" as const, reason: "missing-guard" as const,
+          stagedRevisionId: proposedId, expectedBaseRevisionId: actualId });
+      }
+      if (receipt.status === "conflict") {
+        const latest = await head();
+        return Object.freeze({ status: "conflict" as const,
+          actualBaseRevisionId: latest.ref?.revisionId ?? null, stagedRevisionId: proposedId });
+      }
+      if (receipt.status !== "committed") {
+        throw new TypeError("Invalid guarded publication receipt.");
       }
       return Object.freeze({ status: "published" as const, sequence, revision: proposed });
     },
