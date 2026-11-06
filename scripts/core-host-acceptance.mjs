@@ -72,11 +72,20 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   const foreignAgent = await request(`/api/companies/${secondCompany.id}/agents`, {
     method: "POST", body: { name: "Other Workspace selection fixture", role: "engineer", adapterType: "process", adapterConfig: {} },
   });
+  const managerAgent = await request(`/api/companies/${company.id}/agents`, {
+    method: "POST", body: { name: "Builder Manager selection fixture", role: "engineer", adapterType: "process", adapterConfig: {} },
+  });
   const leadOptions = companyId => request(`/api/plugins/${plugin.id}/data/builder.lead-agents`, {
     method: "POST", body: { companyId, params: {} },
   }).then(value => value.data);
   const leadSessions = companyId => request(`/api/plugins/${plugin.id}/data/builder.lead-sessions`, {
     method: "POST", body: { companyId, params: {} },
+  }).then(value => value.data);
+  const managerOptions = companyId => request(`/api/plugins/${plugin.id}/data/builder.integration-manager`, {
+    method: "POST", body: { companyId, params: {} },
+  }).then(value => value.data);
+  const prepareManager = (companyId, expectedManagerRevision) => request(`/api/plugins/${plugin.id}/actions/builder.prepare-integration-manager`, {
+    method: "POST", body: { companyId, params: { projectId: companyId, expectedManagerRevision } },
   }).then(value => value.data);
   const initialLeadOptions = await leadOptions(company.id);
   assert.ok(initialLeadOptions.agents.some(agent => agent.id === leadAgent.id), "Existing Workspace Agent is absent from Builder options.");
@@ -255,6 +264,50 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     Boolean, "session recheck complete");
   assert.deepEqual(await leadSessions(company.id), preparedSessions);
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, leadChannels.length);
+  const managerSection = 'section[aria-labelledby="integration-manager-settings-title"]';
+  const managerSelect = `${managerSection} select`;
+  const unconfiguredManager = await managerOptions(company.id);
+  assert.equal(unconfiguredManager.selectedAgentId, null);
+  assert.equal(unconfiguredManager.sessionId, null);
+  assert.equal(unconfiguredManager.aiRunStarted, false);
+  assert.equal(unconfiguredManager.executionReadiness, "unknown");
+  const managerIds = await eventually(() => workspace.evaluate(`Array.from(document.querySelector(${JSON.stringify(managerSelect)})?.options || [], option => option.value)`),
+    ids => ids.includes(managerAgent.id), "actual Manager Agent selector");
+  assert.ok(!managerIds.includes(foreignAgent.id), "Manager options must not disclose a foreign Workspace Agent.");
+  await workspace.evaluate(`(() => { const select=document.querySelector(${JSON.stringify(managerSelect)});
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(managerAgent.id)});
+    select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  const managerSave = `${managerSection} button.builder-quiet-button`;
+  await eventually(() => workspace.evaluate(`document.querySelector(${JSON.stringify(managerSave)})?.disabled === false`), Boolean, "Manager selection save");
+  await click(workspace, managerSave, "Save an independent Manager selection through the UI bridge");
+  const savedManager = await eventually(() => managerOptions(company.id), value => value.selectedAgentId === managerAgent.id, "persisted Manager selection");
+  assert.equal(savedManager.sessionId, null, "Selecting a Manager must not prepare a session or run it.");
+  assert.deepEqual(await request(`/api/agents/${managerAgent.id}/task-sessions`), []);
+  for (const rejectedAgentId of [leadAgent.id, foreignAgent.id]) {
+    const status = await workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.select-integration-manager`)}, {
+      method:'POST',credentials:'include',headers:{'content-type':'application/json'},
+      body:JSON.stringify({companyId:${JSON.stringify(company.id)},params:{agentId:${JSON.stringify(rejectedAgentId)},expectedRevision:${savedManager.revision}}})
+    }).then(r=>r.status)`, true);
+    assert.ok(status >= 400, "Current Lead and foreign Agents cannot become this Workspace's Manager.");
+  }
+  const managerPrepare = `${managerSection} button.builder-primary-button`;
+  await eventually(() => workspace.evaluate(`document.querySelector(${JSON.stringify(managerPrepare)})?.disabled === false`), Boolean, "Manager session preparation");
+  await click(workspace, managerPrepare, "Prepare the selected Manager session without executing AI");
+  const preparedManager = await eventually(() => managerOptions(company.id), value => typeof value.sessionId === "string", "persisted Manager session");
+  assert.equal(preparedManager.selectedAgentId, managerAgent.id);
+  assert.ok(!Object.values(preparedSessions.sessions).includes(preparedManager.sessionId));
+  assert.equal(preparedManager.executionReadiness, "unknown");
+  assert.equal(preparedManager.aiRunStarted, false);
+  const repeatedManager = await prepareManager(company.id, preparedManager.revision);
+  assert.equal(repeatedManager.managerSessionId, preparedManager.sessionId);
+  assert.equal(repeatedManager.aiRunStarted, false);
+  const managerSessions = await request(`/api/agents/${managerAgent.id}/task-sessions`);
+  assert.equal(managerSessions.length, 1);
+  assert.equal(managerSessions[0].id, preparedManager.sessionId);
+  assert.equal(managerSessions[0].lastRunId, null);
+  assert.equal((await managerOptions(secondCompany.id)).selectedAgentId, null);
+  assert.equal((await managerOptions(secondCompany.id)).sessionId, null);
+  assert.equal((await leadOptions(company.id)).selectedAgentId, leadAgent.id);
   const registeredTools = await request(`/api/plugins/tools?pluginId=${encodeURIComponent(plugin.pluginKey)}`);
   assert.ok(Array.isArray(registeredTools) && registeredTools.some(tool => tool.pluginId === plugin.id
     && tool.name === "com.sonparkserver.my-plugin-builder:builder.read-solution"),
@@ -631,6 +684,14 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual((await data(secondCompany.id)).messages, []);
   assert.deepEqual(await leadOptions(company.id), leadAfterDispatch, "Host restart lost the Lead binding or actual post-dispatch Agent status.");
   assert.deepEqual(await leadSessions(company.id), preparedSessions, "Host restart lost Lead sessions.");
+  const restartedManager = await managerOptions(company.id);
+  assert.equal(restartedManager.selectedAgentId, preparedManager.selectedAgentId);
+  assert.equal(restartedManager.sessionId, preparedManager.sessionId);
+  assert.equal(restartedManager.revision, preparedManager.revision);
+  const restartedManagerSessions = await request(`/api/agents/${managerAgent.id}/task-sessions`);
+  assert.equal(restartedManagerSessions.length, 1);
+  assert.equal(restartedManagerSessions[0].id, preparedManager.sessionId);
+  assert.equal(restartedManagerSessions[0].lastRunId, null);
   assert.deepEqual(await conversation(), beforeRejectedSend, "Host restart changed rejected-send history.");
   assert.equal((await runsForLead()).length, 0);
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, leadChannels.length);
@@ -688,6 +749,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     repeatedRejectedRequestScheduledNoRun: true, conversationRestart: true,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     leadSixSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
+    managerSelectionUi: true, managerForeignAndLeadSelectionDenied: true, selectedManagerSessionPrepared: true,
+    managerSessionRestart: true, managerPreparationCreatedRun: false, defaultManagerProfileCreated: false,
     uiContractEmptyScopedRead: true, uiApprovalMissingProposalDenied: true, liveUiApprovalTested: false,
     finalReviewHostPage: true, finalApprovalMissingPacketDenied: true, actualFinalPacketApproval: false,
     documentCenterEmptyHost: true, documentCenterActualConsultationSource: true,

@@ -215,6 +215,12 @@
 .builder-org-children.is-top-level { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 13px; margin: 16px 0 0; border-top: 1px solid var(--builder-border); border-left: 0; padding: 16px 0 0; }
 .builder-org-children.is-top-level > div { flex: 1 1 190px; min-width: 0; max-width: 280px; }
 .builder-system-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+.builder-manager-settings { display: grid; min-width: 0; gap: 8px; margin: 12px 0; padding-bottom: 12px; border-bottom: 1px solid var(--builder-border); }
+.builder-manager-settings > :where(h2, p) { margin: 0; }
+.builder-manager-field { display: grid; min-width: 0; gap: 5px; }
+.builder-manager-field select { width: 100%; }
+.builder-manager-meta, .builder-manager-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.builder-manager-meta { color: var(--builder-muted); font-size: 11px; }
 .builder-integration { display: flex; align-items: flex-start; gap: 10px; border-bottom: 1px solid var(--builder-border); padding: 11px 0; }
 .builder-integration:last-child { border-bottom: 0; }
 .builder-integration-icon { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; border: 1px solid var(--builder-border); border-radius: 6px; color: var(--builder-muted); }

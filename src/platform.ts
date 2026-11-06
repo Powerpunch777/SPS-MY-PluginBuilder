@@ -4,6 +4,8 @@ import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plu
 import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
 import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agent.ts";
+import { integrationManagerStateKey, parseIntegrationManagerBinding } from "./domain/integration-manager.ts";
+import { prepareIntegrationManager, readIntegrationManagerOptions, selectIntegrationManager } from "./integration-manager-settings.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
 import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
@@ -155,6 +157,11 @@ export async function selectLeadAgent(companyId: string, params: Record<string, 
       : stored, companyId);
     if (current.revision !== params.expectedRevision) throw new Error("Lead Agent selection changed. Refresh before saving.");
     if (params.agentId !== null) {
+      const managerRaw = await platform.state.get(integrationManagerStateKey(companyId));
+      const manager = managerRaw === null
+        ? parseIntegrationManagerBinding({ schemaVersion: 1, workspaceId: companyId, revision: 0, selectedAgentId: null }, companyId)
+        : parseIntegrationManagerBinding(managerRaw, companyId);
+      if (manager.selectedAgentId === params.agentId) throw new Error("The current Integration Manager Agent cannot also be selected as Lead.");
       const options = await readLeadAgentOptions(companyId, platform);
       const agent = options.agents.find(agent => agent.id === params.agentId);
       if (!agent || !["idle", "running"].includes(agent.status)) throw new Error("Select an available Agent from this Workspace.");
@@ -1029,6 +1036,13 @@ export function createBuilderPlatform() {
       await readBuilderSnapshot(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-agents", handler: async (params, platform) =>
       await readLeadAgentOptions(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.integration-manager", handler: async (params, platform) => {
+      exactToolRecord(params, ["companyId"], ["projectId", "renderEnvironment"]);
+      const companyId = workspaceId(params.companyId);
+      const projectId = params.projectId === undefined ? companyId : params.projectId;
+      if (typeof projectId !== "string") throw new TypeError("A Builder project ID is required.");
+      return await readIntegrationManagerOptions(companyId, platform, projectId) as unknown as JsonValue;
+    } },
     { key: "builder.lead-sessions", handler: async (params, platform) =>
       await readLeadSessions(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.lead-memory", handler: async (params, platform) => {
@@ -1115,6 +1129,12 @@ export function createBuilderPlatform() {
       return notifyUiApproval(context.companyId, view.approval, context);
     } }, { key: "builder.select-lead-agent", handler: async (params, context) =>
       selectLeadAgent(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.select-integration-manager", handler: async (params, context) =>
+      await serialize(context.companyId, () => selectIntegrationManager(context.companyId,
+        userActionInput(params, context), context)) as unknown as JsonValue },
+    { key: "builder.prepare-integration-manager", handler: async (params, context) =>
+      await serialize(context.companyId, () => prepareIntegrationManager(context.companyId,
+        userActionInput(params, context), context)) as unknown as JsonValue },
     { key: "builder.prepare-lead-sessions", handler: async (params, context) =>
       prepareLeadSessions(context.companyId, userActionInput(params, context), context) },
     { key: "builder.send-lead-message", handler: async (params, context) =>

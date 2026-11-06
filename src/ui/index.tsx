@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHostContext, usePluginAction, usePluginData } from "@sonparkserver/plugin-sdk/ui/bridge";
 import { BuilderShell } from "./BuilderShell.tsx";
+import { parseIntegrationManagerDTO } from "./IntegrationManagerSettings.tsx";
 import { ProductSelectionPanel, type ProductSelectionSave } from "./ProductSelectionPanel.tsx";
 import { ConsultationAnalysisControl } from "./ConsultationAnalysisControl.tsx";
 import { UiContractPanel } from "./UiContractPanel.tsx";
@@ -32,6 +33,9 @@ export function BuilderPage() {
   const saveProductSelection = usePluginAction<ProductSelectionSave, unknown>("builder.save-product-selection");
   const lead = usePluginData<unknown>("builder.lead-agents");
   const sessions = usePluginData<unknown>("builder.lead-sessions");
+  const integrationManager = usePluginData<unknown>("builder.integration-manager");
+  const selectIntegrationManager = usePluginAction<{ agentId: string | null; expectedRevision: number }, unknown>("builder.select-integration-manager");
+  const prepareIntegrationManager = usePluginAction<{ projectId: string; expectedManagerRevision: number }, unknown>("builder.prepare-integration-manager");
   const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
   const designBaseline = usePluginData<unknown>("builder.design-baseline", { projectId: context.companyId ?? "" });
   const baselineDocument = usePluginData<unknown>("builder.baseline-document");
@@ -80,6 +84,10 @@ export function BuilderPage() {
     if (!context.companyId || lead.loading || lead.error) return null;
     try { return parseLeadAgentOptions(lead.data, context.companyId); } catch { return null; }
   }, [context.companyId, lead.data, lead.loading, lead.error]);
+  const integrationManagerOptions = useMemo(() => {
+    if (!context.companyId || integrationManager.loading || integrationManager.error || integrationManager.data == null) return null;
+    try { return parseIntegrationManagerDTO(integrationManager.data, context.companyId); } catch { return null; }
+  }, [context.companyId, integrationManager.data, integrationManager.loading, integrationManager.error]);
   const leadSessions = useMemo(() => {
     if (!context.companyId || !leadOptions || sessions.loading || sessions.error) return null;
     try {
@@ -310,6 +318,23 @@ export function BuilderPage() {
     } : undefined}
     leadAgents={leadOptions} leadAgentsLoading={lead.loading}
     leadAgentsError={!lead.loading && !leadOptions ? "Agent 목록을 불러오지 못했습니다. 새로고침해 주세요." : null}
+    integrationManager={integrationManagerOptions} integrationManagerLoading={integrationManager.loading}
+    integrationManagerError={!integrationManager.loading && (integrationManager.error || integrationManager.data != null && !integrationManagerOptions)
+      ? "Manager 설정을 불러오지 못했습니다. 새로고침해 주세요." : null}
+    onSelectIntegrationManager={async (agentId, expectedRevision) => {
+      if (!integrationManagerOptions || integrationManager.loading || integrationManager.error
+        || integrationManagerOptions.workspaceId !== workspaceId || integrationManagerOptions.revision !== expectedRevision) {
+        throw new Error("Manager settings changed.");
+      }
+      await selectIntegrationManager({ agentId, expectedRevision });
+    }}
+    onPrepareIntegrationManager={async (projectId, expectedManagerRevision) => {
+      if (!integrationManagerOptions || integrationManager.loading || integrationManager.error
+        || projectId !== workspaceId || integrationManagerOptions.workspaceId !== workspaceId
+        || integrationManagerOptions.revision !== expectedManagerRevision) throw new Error("Manager settings changed.");
+      return prepareIntegrationManager({ projectId, expectedManagerRevision });
+    }}
+    onRefreshIntegrationManager={integrationManager.refresh}
     leadSessions={leadSessions} leadSessionsLoading={lead.loading || sessions.loading}
     leadSessionsError={!lead.loading && leadOptions && !sessions.loading && !leadSessions ? "Lead 세션 상태를 불러오지 못했습니다. 새로고침해 주세요." : null}
     onSelectLeadAgent={async (agentId, expectedRevision) => {
@@ -336,7 +361,7 @@ export function BuilderPage() {
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
     loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? documentsView.error ?? ctoQuestionsView.error ?? (baselineDocument.error ? "기준선 문서를 불러오지 못했습니다." : null) ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); finalReview.refresh(); firstReview.refresh(); technology.refresh(); reuseCandidates.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
+    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); integrationManager.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); finalReview.refresh(); firstReview.refresh(); technology.refresh(); reuseCandidates.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };

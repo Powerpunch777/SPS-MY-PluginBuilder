@@ -8,6 +8,7 @@ import { Background, Controls, MarkerType, ReactFlow, type Edge, type Node } fro
 import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
+import { IntegrationManagerSettings, type IntegrationManagerDTO } from "./IntegrationManagerSettings.tsx";
 import { DesignDraftSummary } from "./DesignDraftSummary.tsx";
 import { DocumentCenter } from "./DocumentCenter.tsx";
 import { projectConsultationDocuments } from "../domain/document-center.ts";
@@ -478,11 +479,25 @@ function IntegrationCard({ title, state, detail, icon }: { title: string; state:
   return <div className="builder-integration"><span className="builder-integration-icon"><Icon size={15} /></span><div><strong>{title}</strong><small>{detail}</small><span className="builder-system-state">{state}</span></div></div>;
 }
 
-function SystemView({ props }: { props: BuilderShellProps }) {
+type IntegrationManagerViewProps = BuilderShellProps & {
+  integrationManager?: IntegrationManagerDTO | null;
+  integrationManagerLoading?: boolean;
+  integrationManagerError?: string | null;
+  onSelectIntegrationManager?(agentId: string | null, expectedRevision: number): Promise<void>;
+  onPrepareIntegrationManager?(projectId: string, expectedManagerRevision: number): Promise<unknown>;
+  onRefreshIntegrationManager?(): void;
+};
+
+function SystemView({ props }: { props: IntegrationManagerViewProps }) {
   const aiLabel = props.snapshot.integrations.ai === "ready" ? "사용 가능" : props.snapshot.integrations.ai === "unavailable" ? "사용 불가" : "설정되지 않음";
   const githubLabel = props.snapshot.integrations.github === "ready" ? "사용 가능" : props.snapshot.integrations.github === "unavailable" ? "사용 불가" : "설정되지 않음";
   return <div className="builder-page builder-system-page"><div className="builder-page-intro"><h2>Workspace 상태</h2><p>이 Workspace의 AI와 GitHub 연결 상태입니다.</p></div>
     <div className="builder-system-grid"><section className="builder-card"><h2>연결 상태</h2>
+      <IntegrationManagerSettings workspaceId={props.integrationManager?.workspaceId ?? props.snapshot.workspaceId}
+        projectId={props.snapshot.workspaceId} options={props.integrationManager ?? null}
+        loading={props.integrationManagerLoading ?? false} error={props.integrationManagerError ?? null}
+        onSelect={props.onSelectIntegrationManager} onPrepare={props.onPrepareIntegrationManager}
+        onRefresh={props.onRefreshIntegrationManager} />
       <LeadAgentSettings options={props.leadAgents ?? null} loading={props.leadAgentsLoading ?? false}
         error={props.leadAgentsError ?? null} onSave={props.onSelectLeadAgent}
         sessions={props.leadSessions} sessionsLoading={props.leadSessionsLoading} sessionsError={props.leadSessionsError}
@@ -572,7 +587,7 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
     </form>{status && <p className="builder-composer-note" role="status">{status}</p>}</section>;
 }
 
-export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode; finalReview?: ReactNode;
+export function BuilderShell(props: IntegrationManagerViewProps & { productSelection?: ReactNode; finalReview?: ReactNode;
   documentsLoading?: boolean; documentsError?: string | null; firstDesignReview?: ReactNode; changeImpact?: ReactNode }) {
   const [view, setView] = useState<BuilderView>("lead");
   const [collapsed, setCollapsed] = useState(false);
