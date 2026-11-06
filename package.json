@@ -8,7 +8,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",
-    "test": "node --experimental-strip-types --test test/*.test.ts test/*.test.mjs",
+    "test": "node scripts/test.mjs",
     "check": "npm run typecheck && npm test && sps-plugin validate . --json && sps-plugin test . --json",
     "test:browser": "node scripts/smoke-ui.mjs",
     "test:browser:ci": "node scripts/browser-smoke-server.mjs",
