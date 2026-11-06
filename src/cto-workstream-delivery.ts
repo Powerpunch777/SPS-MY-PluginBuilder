@@ -3,7 +3,7 @@ import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult 
 import { parseCtoDelivery, ctoDeliveryRequestId, type CtoDelivery } from "./domain/cto-deliveries.ts";
 import { parseWorkstreamBoard } from "./domain/workstreams.ts";
 import { createCtoDeliveryStore, workstreamInstructionDigest } from "./cto-delivery-store.ts";
-import { readProjectCtos } from "./project-cto-tools.ts";
+import { assertCtoProfileCanBeDispatched, readProjectCtos } from "./project-cto-tools.ts";
 import { readWorkstreams, readPinnedWorkstreamSources } from "./workstream-tools.ts";
 import { readDesignBaseline } from "./design-baseline-tools.ts";
 import { readTechnologyDecisions } from "./technology-decision-tools.ts";
@@ -123,6 +123,7 @@ export async function dispatchCtoWorkstream(params: unknown, runContext: unknown
     const technology = await readTechnologyDecisions(context.companyId, projectId, platform);
     if (JSON.stringify(baseline?.revision) !== JSON.stringify(pinned.baseline)
       || JSON.stringify(technology?.revision) !== JSON.stringify(pinned.technology)) throw new Error("The Workstream's design or technology is no longer current.");
+    await assertCtoProfileCanBeDispatched(context.companyId, projectId, target, platform);
     await check();
   };
   const store = currentStore(context.companyId, projectId, ctoId, platform, check);

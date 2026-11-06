@@ -1,3 +1,7 @@
+import { SPS_PLATFORM_CAPABILITIES } from "@sonparkserver/plugin-sdk/platform";
+
+export const OWNED_AGENT_CAPABILITIES = Object.freeze(SPS_PLATFORM_CAPABILITIES.filter(name => name === "agents.owned.manage"));
+
 export const READ_SOLUTION_TOOL = Object.freeze({
   name: "builder.read-solution",
   displayName: "Read Builder solution revision",
@@ -140,7 +144,7 @@ export const RESOLVE_DESIGN_QUESTION_TOOL = Object.freeze({
 
 export const CREATE_CTO_TOOL = Object.freeze({
   name: "builder.create-cto", displayName: "Register a project CTO and independent session",
-  description: "The current prepared Lead may create a project-local logical CTO using its existing execution Agent/account, with one independent keyed session. No new account/configuration, execution or workstream approval is created. Choose a stable ctoId and keep it on explicit recovery; unknown results require reading identities, not a new ID. Existing/retired IDs cannot be renamed or silently replaced. CLI/backend readiness is not established by registration.",
+  description: "Only Main registers the exact stable project-local CTO ID. A supporting Host provisions a distinct plugin-owned Agent profile and keyed session without new credentials. An inactive profile can retain a session without execution. Older SDKs can only prepare a logical planning session on the existing Agent, not an independent execution identity. Unknown results require reading the same identity, not creating a new ID. No work is dispatched by registration.",
   parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
     required: ["projectId", "ctoId", "displayName"], properties: {
       projectId: { type: "string", minLength: 1, maxLength: 160 }, ctoId: { type: "string", minLength: 1, maxLength: 160 },

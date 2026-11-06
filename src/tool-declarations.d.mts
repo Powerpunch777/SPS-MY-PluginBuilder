@@ -1,4 +1,6 @@
-import type { JsonObject } from "@sonparkserver/plugin-sdk/platform";
+import type { JsonObject, SpsPlatformCapability } from "@sonparkserver/plugin-sdk/platform";
+
+export const OWNED_AGENT_CAPABILITIES: readonly SpsPlatformCapability[];
 
 export const READ_SOLUTION_TOOL: Readonly<{
   name: "builder.read-solution";

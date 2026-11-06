@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
-import { createProjectCto, listProjectCtos, readProjectCtos } from "../src/project-cto-tools.ts";
+import { assertCtoProfileCanBeDispatched, createProjectCto, listProjectCtos, readProjectCtos } from "../src/project-cto-tools.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const OTHER_WORKSPACE = "22222222-2222-4222-8222-222222222222";
@@ -110,6 +110,84 @@ test("registers one project-local session per CTO and repeats by the exact keyed
   assert.equal((listed.data as { ctos: unknown[] }).ctos.length, 2);
   assert.equal(f.setCalls, 0);
   assert.ok(f.casCalls.length >= 4);
+});
+
+test("owned profile provisioning separates two CTOs and preserves paused sessions without authorizing dispatch", async () => {
+  const f = fixture();
+  const agentIds = ["aa111111-1111-4111-8111-111111111111", "bb222222-2222-4222-8222-222222222222"];
+  const profiles = new Map<string, { agentId: string; status: string }>();
+  const ensureKeys: string[] = [];
+  const lookup = (pluginAgentKey: string) => {
+    const agent = profiles.get(pluginAgentKey);
+    return agent ? { status: "resolved", revision: 1, agent: { ...agent } } : { status: "missing" };
+  };
+  Object.assign(f.platform.agents, {
+    owned: {
+      async get(input: { companyId: string; pluginAgentKey: string }) {
+        assert.equal(input.companyId, WORKSPACE);
+        return lookup(input.pluginAgentKey);
+      },
+      async ensure(input: { companyId: string; pluginAgentKey: string; config: Record<string, unknown> }) {
+        assert.equal(input.companyId, WORKSPACE);
+        assert.deepEqual(Object.keys(input.config).sort(), ["instructions", "name", "role", "title"]);
+        assert.equal(input.config.role, "engineer");
+        assert.match(input.pluginAgentKey, /^builder-cto:[a-f0-9]{64}$/u);
+        ensureKeys.push(input.pluginAgentKey);
+        const profile = { agentId: agentIds[profiles.size]!, status: "paused" };
+        profiles.set(input.pluginAgentKey, profile);
+        return { status: "created", revision: 1, agent: { ...profile } };
+      },
+    },
+    async list({ companyId }: { companyId: string }) {
+      return [...profiles.values()].map(profile => ({ id: profile.agentId, companyId, status: profile.status }));
+    },
+  });
+  const firstParams = ctoParams("owned-first", "First CTO", WORKSPACE);
+  const secondParams = ctoParams("owned-second", "Second CTO", WORKSPACE);
+  const firstPrepared = await createProjectCto(firstParams, f.context(), f.platform);
+  const secondPrepared = await createProjectCto(secondParams, f.context(), f.platform);
+  assert.equal((firstPrepared.data as { observedProfileStatus: string }).observedProfileStatus, "paused");
+  assert.equal((secondPrepared.data as { executionStarted: boolean }).executionStarted, false);
+  const prepared = (await readProjectCtos(WORKSPACE, WORKSPACE, f.platform)).ctos;
+  assert.deepEqual(prepared.map(record => record.agentId), agentIds);
+  assert.equal(f.ensureCalls.length, 2);
+  await assert.rejects(assertCtoProfileCanBeDispatched(WORKSPACE, WORKSPACE, prepared[0]!, f.platform), /inactive/);
+  for (const profile of profiles.values()) profile.status = "idle";
+  await assertCtoProfileCanBeDispatched(WORKSPACE, WORKSPACE, prepared[0]!, f.platform);
+  const first = await createProjectCto(firstParams, f.context(), f.platform);
+  const second = await createProjectCto(secondParams, f.context(), f.platform);
+  const firstRegistered = first.data as { status: string; identityKind: string; cto: { agentId: string; sessionId: string } };
+  const secondRegistered = second.data as typeof firstRegistered;
+  assert.equal(firstRegistered.status, "registered");
+  assert.equal(firstRegistered.identityKind, "plugin-owned");
+  assert.equal(firstRegistered.cto.agentId, agentIds[0]);
+  assert.equal(secondRegistered.cto.agentId, agentIds[1]);
+  assert.notEqual(firstRegistered.cto.sessionId, secondRegistered.cto.sessionId);
+  assert.deepEqual(firstRegistered.cto, prepared[0]);
+  assert.deepEqual(secondRegistered.cto, prepared[1]);
+  assert.deepEqual(await createProjectCto(firstParams, f.context(), f.platform), first);
+  assert.equal(new Set(ensureKeys).size, 2);
+  assert.equal(ensureKeys.length, 2);
+  assert.deepEqual(f.ensureCalls.map(call => call.agentId), [agentIds[0], agentIds[1], agentIds[0], agentIds[1], agentIds[0]]);
+  assert.equal(f.ensureCalls[2]?.expectedSessionId, firstRegistered.cto.sessionId);
+  profiles.values().next().value!.status = "paused";
+  await assert.rejects(assertCtoProfileCanBeDispatched(WORKSPACE, WORKSPACE, prepared[0]!, f.platform), /inactive/);
+});
+
+test("owned profile errors never fall back to the Lead identity or a foreign project", async () => {
+  const f = fixture();
+  let ownerReads = 0;
+  Object.assign(f.platform.agents, { owned: {
+    async get() { ownerReads += 1; return { status: "denied" }; },
+    async ensure() { throw new Error("A denied read must never be retried by ensure"); },
+  } });
+  await assert.rejects(createProjectCto(ctoParams("foreign"), f.context(), f.platform), /authenticated single-project Workspace/);
+  assert.equal(ownerReads, 0);
+  const denied = await createProjectCto(ctoParams("denied", "Denied", WORKSPACE), f.context(), f.platform);
+  assert.deepEqual(denied.data, { status: "profile-pending", reason: "host-owned-profile-unavailable", agentId: null, executionStarted: false });
+  assert.equal(ownerReads, 1);
+  assert.equal(f.casCalls.length, 0);
+  assert.equal(f.ensureCalls.length, 0);
 });
 
 test("same project and CTO names remain isolated by Workspace and project", async () => {
