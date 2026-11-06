@@ -19,13 +19,15 @@ const request: G5ChangeImpactRequest = {
 };
 
 // TEST_FIXTURE_ONLY: synthetic published-revision-shaped inputs for local UI tests; never supplied to production UI.
-function resultFixture(partial = false): G5ChangeImpactReadDTO {
+function resultFixture(): G5ChangeImpactReadDTO {
   const dimensions: Partial<Record<G5Dimension, Readonly<{ old: G5Snapshot; new: G5Snapshot }>>> = {};
-  for (const dimension of (partial ? ["requirements"] : G5_DIMENSIONS) as readonly G5Dimension[]) {
-    const oldRevisionId = dimension === "requirements" ? request.oldBaselineRevisionId
-      : dimension === "ui" ? request.oldUiRevisionId : `${dimension}-old-r1`;
-    const newRevisionId = dimension === "requirements" ? request.newBaselineRevisionId
-      : dimension === "ui" ? request.newUiRevisionId : `${dimension}-new-r2`;
+  for (const dimension of G5_DIMENSIONS) {
+    const oldRevisionId = dimension === "requirements" ? "spec-old-r3"
+      : dimension === "graph" ? "graph-old-r3" : dimension === "ui" ? request.oldUiRevisionId
+      : dimension === "ctoWorkstreams" ? "workstreams-old-r1" : `${dimension}-old-r1`;
+    const newRevisionId = dimension === "requirements" ? "spec-new-r4"
+      : dimension === "graph" ? "graph-new-r4" : dimension === "ui" ? request.newUiRevisionId
+      : dimension === "ctoWorkstreams" ? "workstreams-new-r2" : `${dimension}-new-r2`;
     const oldRecords = dimension === "requirements" ? [{ id: "REQ-1", text: "old" }]
       : dimension === "ui" ? [{ id: "interaction-1", requirementRefs: ["REQ-1"] }] : [];
     const newRecords = dimension === "requirements" ? [{ id: "REQ-1", text: "new" }]
@@ -37,11 +39,26 @@ function resultFixture(partial = false): G5ChangeImpactReadDTO {
   }
   const derived = produceG5ChangeImpactCandidates({ projectId, dimensions });
   return {
-    ...derived, approvalCreated: false, executionAuthorized: false, productExecutionAuthorized: false,
-    sourcePins: { ...request, technology: null, workstreams: null, tasks: null },
-    inventoryLimits: { technology: partial ? "UNKNOWN" : "exact-pair-only",
-      ctoWorkstreams: partial ? "UNKNOWN" : "workstream-board-only; CTO registry not loaded",
-      tasks: partial ? "UNKNOWN" : "one-CTO-workstream-board-only",
+    ...derived,
+    dimensions: { ...derived.dimensions, scheduleProductScope: { status: "UNKNOWN", oldRevisionId: null, newRevisionId: null, candidates: [] } },
+    approvalCreated: false, executionAuthorized: false, productExecutionAuthorized: false,
+    sourcePins: { ...request,
+      baselines: [
+        { revisionId: request.oldBaselineRevisionId, sequence: 1, specRevisionId: "spec-old-r3", graphRevisionId: "graph-old-r3" },
+        { revisionId: request.newBaselineRevisionId, sequence: 2, specRevisionId: "spec-new-r4", graphRevisionId: "graph-new-r4" },
+      ],
+      formalUi: [
+        { revisionId: request.oldUiRevisionId, proposalRevisionId: "proposal-old", approvalRevisionId: "approval-old",
+          contractRevisionId: "contract-old", htmlSha256: "a".repeat(64) },
+        { revisionId: request.newUiRevisionId, proposalRevisionId: "proposal-new", approvalRevisionId: "approval-new",
+          contractRevisionId: "contract-new", htmlSha256: "b".repeat(64) },
+      ],
+      technology: { oldRevisionId: "technology-old-r1", newRevisionId: "technology-new-r2" },
+      workstreams: { oldRevisionId: "workstreams-old-r1", newRevisionId: "workstreams-new-r2" },
+      tasks: { ctoId: "cto-1", workstreamId: "workstream-1", oldRevisionId: "tasks-old-r1", newRevisionId: "tasks-new-r2" } },
+    inventoryLimits: { technology: "exact-pair-only",
+      ctoWorkstreams: "workstream-board-only; CTO registry not loaded",
+      tasks: "one-CTO-workstream-board-only",
       scheduleProductScope: "UNKNOWN; no authoritative source reader registered" },
   };
 }
@@ -120,13 +137,69 @@ test("browser queries exact revisions and distinguishes candidate, no observed c
     assert.equal(await page.locator(".sps-g5-impact").evaluate(element => element.clientWidth), 700);
     assert.equal(await page.locator(".sps-g5-impact").evaluate(element => element.scrollWidth <= element.clientWidth), true);
 
+    const mutable = (dto: G5ChangeImpactReadDTO) => dto as unknown as {
+      dimensions: Record<string, { status: string; oldRevisionId: string | null; newRevisionId: string | null; candidates: readonly unknown[] }>;
+      sourcePins: { formalUi: Array<{ revisionId: string }> };
+    };
+    const unknownWithCandidate = resultFixture();
+    mutable(unknownWithCandidate).dimensions.requirements = { ...unknownWithCandidate.dimensions.requirements,
+      status: "UNKNOWN" };
     await page.evaluate(response => {
       const target = window as unknown as { impactResponse: unknown; delayImpact: boolean };
       target.impactResponse = response; target.delayImpact = false;
-    }, resultFixture(true));
+    }, unknownWithCandidate);
     await page.getByRole("button", { name: "영향 후보 조회" }).click();
     await page.getByText("UNKNOWN · 자료 불완전", { exact: true }).first().waitFor();
     assert.match(await results.innerText(), /UNKNOWN · 자료 불완전/u);
+    assert.match(await results.innerText(), /REQ-1/u);
+
+    const malformedResponses: unknown[] = [];
+    const wrongProject = resultFixture();
+    (wrongProject as unknown as { projectId: string }).projectId = "another-project";
+    malformedResponses.push(wrongProject);
+    const mismatchedBaselineSource = resultFixture();
+    (mutable(mismatchedBaselineSource).sourcePins as unknown as { baselines: Array<{ revisionId: string }> })
+      .baselines[0]!.revisionId = "other-baseline";
+    malformedResponses.push(mismatchedBaselineSource);
+    const mismatchedSpec = resultFixture();
+    mutable(mismatchedSpec).dimensions.requirements = { ...mutable(mismatchedSpec).dimensions.requirements, oldRevisionId: "other-spec" };
+    malformedResponses.push(mismatchedSpec);
+    const mismatchedGraph = resultFixture();
+    mutable(mismatchedGraph).dimensions.graph = { ...mutable(mismatchedGraph).dimensions.graph, newRevisionId: "other-graph" };
+    malformedResponses.push(mismatchedGraph);
+    const mismatchedUi = resultFixture();
+    mutable(mismatchedUi).sourcePins.formalUi[1].revisionId = "other-ui";
+    malformedResponses.push(mismatchedUi);
+    const unapprovedUi = resultFixture();
+    (mutable(unapprovedUi).sourcePins.formalUi[0] as unknown as { approvalRevisionId: string | null }).approvalRevisionId = null;
+    malformedResponses.push(unapprovedUi);
+    const mismatchedTechnologyPin = resultFixture();
+    (mutable(mismatchedTechnologyPin).sourcePins as unknown as { technology: { oldRevisionId: string; newRevisionId: string } })
+      .technology.newRevisionId = "other-technology";
+    malformedResponses.push(mismatchedTechnologyPin);
+    const mismatchedOptionalPair = resultFixture();
+    mutable(mismatchedOptionalPair).dimensions.technology = { ...mutable(mismatchedOptionalPair).dimensions.technology, oldRevisionId: "other-technology" };
+    malformedResponses.push(mismatchedOptionalPair);
+    const inventedSchedulePair = resultFixture();
+    mutable(inventedSchedulePair).dimensions.scheduleProductScope = { status: "UNKNOWN", oldRevisionId: "unregistered-old",
+      newRevisionId: "unregistered-new", candidates: [] };
+    malformedResponses.push(inventedSchedulePair);
+    const emptyCandidates = resultFixture();
+    mutable(emptyCandidates).dimensions.requirements = { ...mutable(emptyCandidates).dimensions.requirements, status: "CANDIDATES", candidates: [] };
+    malformedResponses.push(emptyCandidates);
+    const contradictoryNoCandidate = resultFixture();
+    mutable(contradictoryNoCandidate).dimensions.requirements = { ...mutable(contradictoryNoCandidate).dimensions.requirements,
+      status: "NO_CANDIDATE_OBSERVED", candidates: [{ dimension: "requirements", recordId: "REQ-1", basis: "direct-revision-diff", via: ["REQ-1"] }] };
+    malformedResponses.push(contradictoryNoCandidate);
+    for (const response of malformedResponses) {
+      await page.evaluate(value => {
+        const target = window as unknown as { impactResponse: unknown; delayImpact: boolean };
+        target.impactResponse = value; target.delayImpact = false;
+      }, response);
+      await page.getByRole("button", { name: "영향 후보 조회" }).click();
+      await page.getByRole("alert").waitFor();
+      assert.equal(await page.locator(".sps-g5-results").count(), 0);
+    }
     await page.evaluate(() => { (window as unknown as { rejectImpact: boolean }).rejectImpact = true; });
     await page.getByRole("button", { name: "영향 후보 조회" }).click();
     await page.getByRole("alert").waitFor();

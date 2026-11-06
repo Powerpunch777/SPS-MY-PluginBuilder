@@ -20,6 +20,14 @@ export type G5ChangeImpactReadDTO = Readonly<{
     newBaselineRevisionId: string;
     oldUiRevisionId: string;
     newUiRevisionId: string;
+    baselines: readonly [
+      Readonly<{ revisionId: string; sequence: number; specRevisionId: string; graphRevisionId: string }>,
+      Readonly<{ revisionId: string; sequence: number; specRevisionId: string; graphRevisionId: string }>,
+    ];
+    formalUi: readonly [
+      Readonly<{ revisionId: string; proposalRevisionId: string; approvalRevisionId: string; contractRevisionId: string; htmlSha256: string }>,
+      Readonly<{ revisionId: string; proposalRevisionId: string; approvalRevisionId: string; contractRevisionId: string; htmlSha256: string }>,
+    ];
     technology: Readonly<{ oldRevisionId: string; newRevisionId: string }> | null;
     workstreams: Readonly<{ oldRevisionId: string; newRevisionId: string }> | null;
     tasks: Readonly<{ ctoId: string; workstreamId: string; oldRevisionId: string; newRevisionId: string }> | null;
@@ -71,30 +79,73 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 2048 && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
-function isImpactReadDTO(value: unknown): value is G5ChangeImpactReadDTO {
+function isImpactReadDTO(value: unknown, request: G5ChangeImpactRequest): value is G5ChangeImpactReadDTO {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
-  if (!isText(row.projectId) || row.approvalCreated !== false || row.executionAuthorized !== false
+  if (row.projectId !== request.projectId || row.approvalCreated !== false || row.executionAuthorized !== false
     || row.productExecutionAuthorized !== false || row.dimensions === null || typeof row.dimensions !== "object"
     || row.sourcePins === null || typeof row.sourcePins !== "object" || row.inventoryLimits === null || typeof row.inventoryLimits !== "object") return false;
+  const pins = row.sourcePins as Record<string, unknown>;
+  if (pins.oldBaselineRevisionId !== request.oldBaselineRevisionId || pins.newBaselineRevisionId !== request.newBaselineRevisionId
+    || pins.oldUiRevisionId !== request.oldUiRevisionId || pins.newUiRevisionId !== request.newUiRevisionId
+    || !Array.isArray(pins.baselines) || pins.baselines.length !== 2
+    || !Array.isArray(pins.formalUi) || pins.formalUi.length !== 2) return false;
+  const [oldBaseline, newBaseline] = pins.baselines as unknown[];
+  const [oldFormalUi, newFormalUi] = pins.formalUi as unknown[];
+  const baselinePins = [oldBaseline, newBaseline] as Record<string, unknown>[];
+  const formalUiPins = [oldFormalUi, newFormalUi] as Record<string, unknown>[];
+  const baselines = [request.oldBaselineRevisionId, request.newBaselineRevisionId];
+  const uiRevisions = [request.oldUiRevisionId, request.newUiRevisionId];
+  if (baselinePins.some((pin, index) => pin === null || typeof pin !== "object"
+    || pin.revisionId !== baselines[index] || !Number.isSafeInteger(pin.sequence) || (pin.sequence as number) < 1
+    || !isText(pin.specRevisionId) || !isText(pin.graphRevisionId))
+    || formalUiPins.some((pin, index) => pin === null || typeof pin !== "object"
+      || pin.revisionId !== uiRevisions[index] || !isText(pin.proposalRevisionId) || !isText(pin.approvalRevisionId)
+      || !isText(pin.contractRevisionId) || typeof pin.htmlSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(pin.htmlSha256))) return false;
+
+  const optionalPair = (value: unknown): value is Readonly<{ oldRevisionId: string; newRevisionId: string }> | null =>
+    value === null || (value !== null && typeof value === "object" && !Array.isArray(value)
+      && isText((value as Record<string, unknown>).oldRevisionId) && isText((value as Record<string, unknown>).newRevisionId));
+  if (!optionalPair(pins.technology) || !optionalPair(pins.workstreams)) return false;
+  const taskPins = pins.tasks;
+  if (!(taskPins === null || (taskPins !== null && typeof taskPins === "object" && !Array.isArray(taskPins)
+    && isText((taskPins as Record<string, unknown>).ctoId) && isText((taskPins as Record<string, unknown>).workstreamId)
+    && isText((taskPins as Record<string, unknown>).oldRevisionId) && isText((taskPins as Record<string, unknown>).newRevisionId)))) return false;
+
   const dimensions = row.dimensions as Record<string, unknown>;
   if (!G5_DIMENSIONS.every(dimension => {
     const result = dimensions[dimension];
     if (result === null || typeof result !== "object") return false;
     const item = result as Record<string, unknown>;
-    return ["CANDIDATES", "NO_CANDIDATE_OBSERVED", "UNKNOWN"].includes(String(item.status))
-      && (item.oldRevisionId === null || isText(item.oldRevisionId))
-      && (item.newRevisionId === null || isText(item.newRevisionId))
-      && Array.isArray(item.candidates) && item.candidates.every(candidate => {
+    if (!(item.oldRevisionId === null || isText(item.oldRevisionId))
+      || !(item.newRevisionId === null || isText(item.newRevisionId)) || !Array.isArray(item.candidates)) return false;
+    if (item.status === "CANDIDATES" && item.candidates.length === 0) return false;
+    if (item.status === "NO_CANDIDATE_OBSERVED" && (item.candidates.length !== 0 || !item.oldRevisionId || !item.newRevisionId)) return false;
+    if (!["CANDIDATES", "NO_CANDIDATE_OBSERVED", "UNKNOWN"].includes(String(item.status))) return false;
+    if (!item.candidates.every(candidate => {
         if (candidate === null || typeof candidate !== "object") return false;
         const entry = candidate as Record<string, unknown>;
         return entry.dimension === dimension && isText(entry.recordId)
           && ["direct-revision-diff", "derived-reference"].includes(String(entry.basis))
           && Array.isArray(entry.via) && entry.via.every(isText);
-      });
+      })) return false;
+    let expected: readonly [string, string] | null = null;
+    if (dimension === "requirements") expected = [baselinePins[0]!.specRevisionId as string, baselinePins[1]!.specRevisionId as string];
+    else if (dimension === "graph") expected = [baselinePins[0]!.graphRevisionId as string, baselinePins[1]!.graphRevisionId as string];
+    else if (dimension === "ui") expected = [formalUiPins[0]!.revisionId as string, formalUiPins[1]!.revisionId as string];
+    else if (dimension === "technology" && pins.technology !== null) {
+      const pair = pins.technology as Record<string, string>;
+      expected = [pair.oldRevisionId, pair.newRevisionId];
+    } else if (dimension === "ctoWorkstreams" && pins.workstreams !== null) {
+      const pair = pins.workstreams as Record<string, string>;
+      expected = [pair.oldRevisionId, pair.newRevisionId];
+    } else if (dimension === "tasks" && taskPins !== null) {
+      const pair = taskPins as Record<string, string>;
+      expected = [pair.oldRevisionId, pair.newRevisionId];
+    }
+    return expected ? item.oldRevisionId === expected[0] && item.newRevisionId === expected[1]
+      : item.oldRevisionId === null && item.newRevisionId === null && item.status === "UNKNOWN" && item.candidates.length === 0;
   })) return false;
-  const pins = row.sourcePins as Record<string, unknown>;
-  if (!["oldBaselineRevisionId", "newBaselineRevisionId", "oldUiRevisionId", "newUiRevisionId"].every(key => isText(pins[key]))) return false;
   const limits = row.inventoryLimits as Record<string, unknown>;
   return ["technology", "ctoWorkstreams", "tasks", "scheduleProductScope"].every(key => isText(limits[key]));
 }
@@ -130,11 +181,9 @@ export function ChangeImpactPanel({ projectId, onQueryImpact }: ChangeImpactPane
     setLoading(true); setError(false); setResult(null); setQueried(true);
     try {
       const response: unknown = await onQueryImpact({ projectId, oldBaselineRevisionId, newBaselineRevisionId, oldUiRevisionId, newUiRevisionId });
-      if (!isImpactReadDTO(response) || response.projectId !== projectId
-        || response.sourcePins.oldBaselineRevisionId !== oldBaselineRevisionId
-        || response.sourcePins.newBaselineRevisionId !== newBaselineRevisionId
-        || response.sourcePins.oldUiRevisionId !== oldUiRevisionId
-        || response.sourcePins.newUiRevisionId !== newUiRevisionId) throw new TypeError("Unverified G5 comparison response.");
+      if (!isImpactReadDTO(response, { projectId, oldBaselineRevisionId, newBaselineRevisionId, oldUiRevisionId, newUiRevisionId })) {
+        throw new TypeError("Unverified G5 comparison response.");
+      }
       setResult(response);
     } catch { setError(true); }
     finally { setLoading(false); }
