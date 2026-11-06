@@ -180,7 +180,7 @@ test("built Worker JSONL round-trips workspace state and rejects cross-workspace
       let value;
       if (key === "lead-agent.v1") value = { workspaceId: workspaceA, revision: 1, selectedAgentId: agentId };
       else if (key === "lead-sessions.v1.1") value = { workspaceId: workspaceA, selectionRevision: 1, agentId,
-        sessions: { main: sessionId, "cto-inbox": null, decisions: null } };
+        sessions: { main: sessionId, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null } };
       else {
         assert.match(key, /^(?:design-baseline|solution)-head\.v1\.[a-f0-9]{64}$/);
         observedReadHeads.push(key.split("-head.v1.")[0]);

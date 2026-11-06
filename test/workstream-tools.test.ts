@@ -16,8 +16,11 @@ const RUN = "88888888-8888-4888-8888-888888888888";
 const RUN2 = "99999999-9999-4999-8999-999999999999";
 const SESSIONS = {
   main: "55555555-5555-4555-8555-555555555555",
+  "ui-design": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  background: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
   "cto-inbox": "66666666-6666-4666-8666-666666666666",
   decisions: "77777777-7777-4777-8777-777777777777",
+  "integration-review": "ffffffff-ffff-4fff-8fff-ffffffffffff",
   cto1: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   cto2: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   otherMain: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -61,7 +64,8 @@ function fixture(options: { cas?: boolean } = {}) {
     values.set(fullKey(key("lead-agent.v1", workspaceId)), { workspaceId, revision, selectedAgentId: agentId });
     values.set(fullKey(key(`lead-sessions.v1.${revision}`, workspaceId)), {
       workspaceId, selectionRevision: revision, agentId,
-      sessions: { main: SESSIONS.main, "cto-inbox": SESSIONS["cto-inbox"], decisions: SESSIONS.decisions },
+      sessions: { main: SESSIONS.main, "ui-design": SESSIONS["ui-design"], background: SESSIONS.background,
+        "cto-inbox": SESSIONS["cto-inbox"], decisions: SESSIONS.decisions, "integration-review": SESSIONS["integration-review"] },
     });
   };
   seedLead();
@@ -87,7 +91,8 @@ function fixture(options: { cas?: boolean } = {}) {
   const selectWorker = () => {
     values.set(scopedKey("lead-agent.v1"), { workspaceId: WORKSPACE, revision: 2, selectedAgentId: WORKER });
     values.set(scopedKey("lead-sessions.v1.2"), { workspaceId: WORKSPACE, revision: 2, agentId: WORKER,
-      sessions: { main: SESSIONS.otherMain, "cto-inbox": null, decisions: null } });
+      sessions: { main: SESSIONS.otherMain, "ui-design": null, background: null,
+        "cto-inbox": null, decisions: null, "integration-review": null } });
   };
   return {
     values, state, platform, context, key, scopedKey, seedLead, seedCtos, selectWorker, casCalls,

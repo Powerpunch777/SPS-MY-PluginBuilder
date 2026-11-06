@@ -14,8 +14,11 @@ const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const AGENT_ID = "22222222-2222-4222-8222-222222222222";
 const SESSION_IDS: Record<LeadChannel, string> = {
   main: "33333333-3333-4333-8333-333333333333",
+  "ui-design": "66666666-6666-4666-8666-666666666666",
+  background: "77777777-7777-4777-8777-777777777777",
   "cto-inbox": "44444444-4444-4444-8444-444444444444",
   decisions: "55555555-5555-4555-8555-555555555555",
+  "integration-review": "88888888-8888-4888-8888-888888888888",
 };
 
 function snapshot(ai: BuilderSnapshot["integrations"]["ai"] = "ready"): BuilderSnapshot {
@@ -23,7 +26,7 @@ function snapshot(ai: BuilderSnapshot["integrations"]["ai"] = "ready"): BuilderS
     schemaVersion: 1,
     workspaceId: WORKSPACE_ID,
     revision: 2,
-    leadSessions: { main: SESSION_IDS.main, "cto-inbox": SESSION_IDS["cto-inbox"], decisions: SESSION_IDS.decisions },
+    leadSessions: { ...SESSION_IDS },
     actors: [{ id: "lead-actor", role: "lead", label: "Lead", parentActorId: null, agentId: AGENT_ID,
       sessionId: SESSION_IDS.main, status: "running" }],
     messages: [],
@@ -75,7 +78,7 @@ function conversationPage(turns: LeadTurn[], active: LeadConversationPage["activ
     workspaceId: WORKSPACE_ID,
     selectionRevision: 4,
     agentId: AGENT_ID,
-    sessions: { main: SESSION_IDS.main, "cto-inbox": SESSION_IDS["cto-inbox"], decisions: SESSION_IDS.decisions },
+    sessions: { ...SESSION_IDS },
   }, "main");
 }
 

@@ -14,13 +14,19 @@ const RUN = "66666666-6666-4666-8666-666666666666";
 const NEXT_RUN = "77777777-7777-4777-8777-777777777777";
 const SESSIONS = {
   main: "88888888-8888-4888-8888-888888888888",
+  "ui-design": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  background: "ffffffff-ffff-4fff-8fff-ffffffffffff",
   "cto-inbox": "99999999-9999-4999-8999-999999999999",
   decisions: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "integration-review": "12121212-1212-4121-8121-121212121212",
 };
 const NEXT_SESSIONS = {
   main: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "ui-design": "13131313-1313-4131-8131-131313131313",
+  background: "14141414-1414-4141-8141-141414141414",
   "cto-inbox": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   decisions: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  "integration-review": "15151515-1515-4151-8151-151515151515",
 };
 const PROJECT = "project-alpha";
 const OTHER_PROJECT = "project-beta";
@@ -124,10 +130,10 @@ function persistPrivateTurn(f: ReturnType<typeof fixture>, requestId: string, ov
   return turn;
 }
 
-test("three prepared Lead channels share one project journal, while project and Workspace remain isolated", async () => {
+test("six prepared Lead contexts share one project journal, while project and Workspace remain isolated", async () => {
   const f = fixture();
   let previous: string | null = null;
-  for (const channel of ["main", "cto-inbox", "decisions"] as const) {
+  for (const channel of ["main", "ui-design", "background", "cto-inbox", "decisions", "integration-review"] as const) {
     const revisionId = `from-${channel}`;
     const result = await updateSharedLeadMemory(params(revisionId, previous), f.context(channel), f.platform);
     assert.equal((result.data as { status: string }).status, "published");
@@ -136,7 +142,7 @@ test("three prepared Lead channels share one project journal, while project and 
     assert.equal(current.revision.memory.revisionId, revisionId);
     previous = revisionId;
   }
-  assert.equal(f.successfulWrites, 6);
+  assert.equal(f.successfulWrites, 12);
   assert.equal(f.setCalls, 0);
   assert.equal((await readSharedLeadMemory({ projectId: OTHER_PROJECT }, f.context(), f.platform).then(r => (r.data as { current: unknown }).current)), null);
 

@@ -1,5 +1,6 @@
-export type BuilderView = "lead" | "architecture" | "organization" | "documents" | "decisions" | "system";
-export type LeadChannel = "main" | "cto-inbox" | "decisions";
+export type BuilderView = "lead" | "ui-design" | "background" | "question-intake" | "integration-review"
+  | "product-selection" | "architecture" | "organization" | "documents" | "decisions" | "system";
+export type LeadChannel = "main" | "ui-design" | "background" | "cto-inbox" | "decisions" | "integration-review";
 export type BuilderRole = "lead" | "cto" | "development" | "qa";
 export type ActorStatus = "idle" | "running" | "waiting" | "failed" | "archived";
 
@@ -128,6 +129,7 @@ export interface BuilderShellProps {
   onLatestConversation?(): void;
   conversationHasNewer?: boolean;
   onImportConsultation?(text: string): Promise<void>;
+  consultationAnalysis?: import("react").ReactNode;
   onOpenCoreSettings?(): void;
   onOpenHtmlPreview?(): void;
   leadAgents?: BuilderLeadAgentOptions | null;

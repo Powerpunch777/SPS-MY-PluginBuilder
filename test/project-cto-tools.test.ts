@@ -34,7 +34,8 @@ function fixture() {
     });
     values.set(fullKey(key(workspaceId, "lead-sessions.v1.1")), {
       workspaceId, selectionRevision: 1, agentId,
-      sessions: { main: MAIN, "cto-inbox": INBOX, decisions: DECISIONS },
+      sessions: { main: MAIN, "ui-design": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", background: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "cto-inbox": INBOX, decisions: DECISIONS, "integration-review": "ffffffff-ffff-4fff-8fff-ffffffffffff" },
     });
   }
   seedLead(WORKSPACE);

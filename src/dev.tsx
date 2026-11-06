@@ -1,9 +1,13 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BuilderShell } from "./ui/BuilderShell.tsx";
+import { ProductSelectionPanel } from "./ui/ProductSelectionPanel.tsx";
+import { ConsultationAnalysisControl } from "./ui/ConsultationAnalysisControl.tsx";
+import { parseProductSelectionDraft } from "./product-selection/index.ts";
 import { createEmptyBuilderSnapshot } from "./domain/snapshot.ts";
 
 function DevelopmentPreview() {
+  const [catalogDraft, setCatalogDraft] = useState<unknown>(null);
   const [snapshot, setSnapshot] = useState(() => {
     const initial = createEmptyBuilderSnapshot("11111111-1111-4111-8111-111111111111");
     const fixture = new URLSearchParams(window.location.search).get("fixture");
@@ -63,6 +67,18 @@ function DevelopmentPreview() {
       UI Preview · Core/AI 미연결 · 입력은 이 창의 메모리에만 보관됩니다.
     </div>
     <div style={{ minHeight: 0, flex: 1 }}><BuilderShell snapshot={snapshot} workspaceLabel="Builder Development"
+      consultationAnalysis={<ConsultationAnalysisControl enabled={snapshot.messages.some(message => message.id.startsWith("consultation-"))}
+        start={async () => { setSnapshot(previous => ({ ...previous, activity: [...previous.activity,
+          { id: crypto.randomUUID(), actorId: null, label: "미리보기 분석 요청 (AI 미연결)", createdAt: new Date().toISOString(), evidenceRef: null }] })); }} />}
+      productSelection={new URLSearchParams(window.location.search).get("fixture") === "catalog"
+        ? <ProductSelectionPanel workspaceId={snapshot.workspaceId} value={catalogDraft} loading={false} unavailable={false}
+          save={async ({ requestId, selection }) => {
+            const scope = { workspaceId: snapshot.workspaceId, projectId: snapshot.workspaceId };
+            const { status, draft } = parseProductSelectionDraft({ ...selection, ...scope }, scope);
+            if (!draft) throw new Error("Invalid preview draft.");
+            setCatalogDraft({ ...scope, sequence: 1, revisionId: requestId, status, draft });
+            return { status: "saved" };
+          }} /> : undefined}
       onRefresh={() => {
         if (new URLSearchParams(window.location.search).get("fixture") === "documents") {
           setSnapshot(previous => ({ ...previous, revision: previous.revision + 1,
@@ -71,7 +87,7 @@ function DevelopmentPreview() {
       }} onImportConsultation={async text => {
         const now = new Date().toISOString();
         setSnapshot(previous => ({ ...previous, revision: previous.revision + 1,
-          messages: [...previous.messages, { id: crypto.randomUUID(), channel: "main", actorId: null,
+          messages: [...previous.messages, { id: `consultation-${crypto.randomUUID()}`, channel: "main", actorId: null,
             role: "user", text, createdAt: now, runId: null }],
           activity: [...previous.activity, { id: crypto.randomUUID(), actorId: null,
             label: "상담 입력을 미리보기 메모리에 보관함", createdAt: now, evidenceRef: null }],

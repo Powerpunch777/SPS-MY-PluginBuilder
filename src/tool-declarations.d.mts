@@ -27,6 +27,12 @@ export const READ_DESIGN_SOURCES_TOOL: Readonly<{
   description: string;
   parametersSchema: JsonObject;
 }>;
+export const READ_CONSULTATION_ANALYSIS_TOOL: Readonly<{
+  name: "builder.read-consultation-analysis";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
 
 export const READ_LEAD_MEMORY_TOOL: Readonly<{
   name: "builder.read-lead-memory";
@@ -68,6 +74,12 @@ export const PUBLISH_DESIGN_BASELINE_TOOL: Readonly<{
 }>;
 export const READ_DESIGN_BASELINE_TOOL: Readonly<{
   name: "builder.read-design-baseline";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
+export const INSPECT_SPEC_ASSURANCE_TOOL: Readonly<{
+  name: "builder.inspect-spec-assurance";
   displayName: string;
   description: string;
   parametersSchema: JsonObject;

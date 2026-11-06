@@ -6,7 +6,9 @@ import {
   CTO_WORKSTREAM_TOOL_NAMES,
   LEAD_PLANNING_TOOL_NAMES,
   LEAD_SESSION_EXECUTION_POLICY,
+  policyForLeadChannel,
 } from "../src/session-execution-policy.ts";
+import { LEAD_CHANNELS } from "../src/domain/lead-sessions.ts";
 import { CTO_INTAKE_EXECUTION_POLICY } from "../src/domain/cto-intake-deliveries.ts";
 import { CTO_QUESTION_REPLY_EXECUTION_POLICY } from "../src/domain/cto-question-replies.ts";
 
@@ -55,6 +57,8 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
     assert.ok(LEAD_PLANNING_TOOL_NAMES.includes(name), `${name} must be Lead-only`);
     assert.ok(!ctoToolNames.has(name), `${name} must not be exposed to CTO sessions`);
   }
+  assert.ok(LEAD_PLANNING_TOOL_NAMES.includes("builder.inspect-spec-assurance"));
+  assert.ok(!ctoToolNames.has("builder.inspect-spec-assurance"), "D3 inspection is not a CTO tool");
   for (const name of ["builder.read-cto-memory", "builder.update-cto-memory"]) assert.ok(!new Set<string>(LEAD_PLANNING_TOOL_NAMES).has(name));
   assert.deepEqual(LEAD_PLANNING_TOOL_NAMES, [...LEAD_PLANNING_TOOL_NAMES].sort());
   assert.deepEqual(CTO_WORKSTREAM_TOOL_NAMES, [...CTO_WORKSTREAM_TOOL_NAMES].sort());
@@ -65,6 +69,31 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   assert.equal(Object.isFrozen(LEAD_SESSION_EXECUTION_POLICY), true);
   assert.equal(Object.isFrozen(CTO_SESSION_EXECUTION_POLICY), true);
   assert.throws(() => (LEAD_PLANNING_TOOL_NAMES as string[]).push("builder.unlisted"), TypeError);
+});
+
+test("Lead channel policies preserve shared reads and keep formal writes Main-only", () => {
+  const policies = Object.fromEntries(LEAD_CHANNELS.map(channel => [channel, policyForLeadChannel(channel)]));
+  const formalWrites = ["builder.publish-design-baseline", "builder.publish-technology-decisions",
+    "builder.create-cto", "builder.publish-workstream", "builder.dispatch-workstream"];
+  for (const channel of LEAD_CHANNELS) {
+    const allowed = new Set(policies[channel]!.toolNames);
+    for (const read of ["builder.read-solution", "builder.read-design-draft", "builder.read-design-sources",
+      "builder.read-lead-memory", "builder.read-design-baseline", "builder.inspect-spec-assurance",
+      "builder.read-technology-decisions", "builder.read-workstreams"]) assert.ok(allowed.has(read), `${channel}: ${read}`);
+    assert.deepEqual(policies[channel]!.toolNames, [...policies[channel]!.toolNames].sort());
+    assert.equal(Object.isFrozen(policies[channel]!.toolNames), true);
+    if (channel === "main") for (const write of formalWrites) assert.ok(allowed.has(write), write);
+    else for (const write of formalWrites) assert.ok(!allowed.has(write), `${channel} must not have ${write}`);
+  }
+  assert.ok(policyForLeadChannel("ui-design").toolNames.includes("builder.propose-design"));
+  assert.ok(policyForLeadChannel("background").toolNames.includes("builder.propose-design"));
+  assert.ok(policyForLeadChannel("main").toolNames.includes("builder.read-consultation-analysis"));
+  for (const channel of LEAD_CHANNELS.filter(channel => channel !== "main")) {
+    assert.ok(!policyForLeadChannel(channel).toolNames.includes("builder.read-consultation-analysis"));
+  }
+  assert.ok(policyForLeadChannel("cto-inbox").toolNames.includes("builder.review-cto-question"));
+  assert.ok(policyForLeadChannel("integration-review").toolNames.includes("builder.review-cto-question"));
+  assert.deepEqual(LEAD_SESSION_EXECUTION_POLICY, policyForLeadChannel("main"));
 });
 
 test("requires the exact advertised mode and its enforcement/readiness/isolation semantics", async () => {

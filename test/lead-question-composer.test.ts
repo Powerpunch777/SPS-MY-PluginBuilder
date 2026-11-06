@@ -43,7 +43,7 @@ test("a CTO intake decision question is visibly read-only until answer binding e
       schemaVersion: 1,
       workspaceId: "workspace-1",
       revision: 1,
-      leadSessions: { main: null, "cto-inbox": null, decisions: "decisions-session" },
+      leadSessions: { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: "decisions-session", "integration-review": null },
       actors: [],
       messages: [],
       documents: [],

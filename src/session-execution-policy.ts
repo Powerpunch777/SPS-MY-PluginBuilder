@@ -1,5 +1,6 @@
 import {
   CREATE_CTO_TOOL,
+  INSPECT_SPEC_ASSURANCE_TOOL,
   LIST_CTOS_TOOL,
   PROPOSE_DESIGN_TOOL,
   PUBLISH_DESIGN_BASELINE_TOOL,
@@ -7,6 +8,7 @@ import {
   READ_DESIGN_BASELINE_TOOL,
   READ_DESIGN_DRAFT_TOOL,
   READ_DESIGN_SOURCES_TOOL,
+  READ_CONSULTATION_ANALYSIS_TOOL,
   READ_LEAD_MEMORY_TOOL,
   READ_SOLUTION_TOOL,
   READ_TECHNOLOGY_DECISIONS_TOOL,
@@ -18,12 +20,17 @@ import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
 import { SUBMIT_CTO_QUESTION_TOOL, READ_OWN_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "./task-packet-tool-declarations.mjs";
+import type { LeadChannel } from "./domain/model.ts";
+import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL } from "./spec-assurance/tool-declarations.mjs";
 
 export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
   READ_SOLUTION_TOOL.name,
   PROPOSE_DESIGN_TOOL.name,
   READ_DESIGN_DRAFT_TOOL.name,
   READ_DESIGN_SOURCES_TOOL.name,
+  READ_CONSULTATION_ANALYSIS_TOOL.name,
+  SPEC_ASSURANCE_PACK_PROPOSAL_TOOL.name,
+  READ_SPEC_ASSURANCE_PACK_TOOL.name,
   READ_LEAD_MEMORY_TOOL.name,
   UPDATE_LEAD_MEMORY_TOOL.name,
   RESOLVE_DESIGN_QUESTION_TOOL.name,
@@ -31,6 +38,7 @@ export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
   LIST_CTOS_TOOL.name,
   PUBLISH_DESIGN_BASELINE_TOOL.name,
   READ_DESIGN_BASELINE_TOOL.name,
+  INSPECT_SPEC_ASSURANCE_TOOL.name,
   PUBLISH_TECHNOLOGY_DECISIONS_TOOL.name,
   READ_TECHNOLOGY_DECISIONS_TOOL.name,
   PUBLISH_WORKSTREAM_TOOL.name,
@@ -58,10 +66,36 @@ export type SessionExecutionPolicy = Readonly<{
   toolNames: readonly string[];
 }>;
 
-export const LEAD_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
-  mode: "plugin-tools-only-v1",
-  toolNames: LEAD_PLANNING_TOOL_NAMES,
+const names = (...toolNames: string[]) => Object.freeze([...new Set(toolNames)].sort());
+const LEAD_READ_TOOL_NAMES = names(
+  READ_SOLUTION_TOOL.name, READ_DESIGN_DRAFT_TOOL.name, READ_DESIGN_SOURCES_TOOL.name,
+  READ_LEAD_MEMORY_TOOL.name, LIST_CTOS_TOOL.name, READ_DESIGN_BASELINE_TOOL.name,
+  INSPECT_SPEC_ASSURANCE_TOOL.name, READ_TECHNOLOGY_DECISIONS_TOOL.name, READ_WORKSTREAMS_TOOL.name,
+  READ_CTO_WORKSTREAM_DELIVERY_TOOL.name, READ_CTO_QUESTIONS_TOOL.name,
+);
+const LEAD_SHARED_TOOL_NAMES = names(...LEAD_READ_TOOL_NAMES, UPDATE_LEAD_MEMORY_TOOL.name);
+const MAIN_TOOL_NAMES = names(...LEAD_PLANNING_TOOL_NAMES);
+const UI_DESIGN_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, PROPOSE_DESIGN_TOOL.name);
+const BACKGROUND_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, PROPOSE_DESIGN_TOOL.name);
+const QUESTION_INTAKE_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, RESOLVE_DESIGN_QUESTION_TOOL.name, REVIEW_CTO_QUESTION_TOOL.name);
+const QUESTION_DISCUSSION_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, RESOLVE_DESIGN_QUESTION_TOOL.name);
+const INTEGRATION_REVIEW_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, REVIEW_CTO_QUESTION_TOOL.name);
+
+const leadPolicies: Readonly<Record<LeadChannel, SessionExecutionPolicy>> = Object.freeze({
+  main: Object.freeze({ mode: "plugin-tools-only-v1", toolNames: MAIN_TOOL_NAMES }),
+  "ui-design": Object.freeze({ mode: "plugin-tools-only-v1", toolNames: UI_DESIGN_TOOL_NAMES }),
+  background: Object.freeze({ mode: "plugin-tools-only-v1", toolNames: BACKGROUND_TOOL_NAMES }),
+  "cto-inbox": Object.freeze({ mode: "plugin-tools-only-v1", toolNames: QUESTION_INTAKE_TOOL_NAMES }),
+  decisions: Object.freeze({ mode: "plugin-tools-only-v1", toolNames: QUESTION_DISCUSSION_TOOL_NAMES }),
+  "integration-review": Object.freeze({ mode: "plugin-tools-only-v1", toolNames: INTEGRATION_REVIEW_TOOL_NAMES }),
 });
+
+export function policyForLeadChannel(channel: LeadChannel): SessionExecutionPolicy {
+  return leadPolicies[channel];
+}
+
+/** Compatibility export for callers that explicitly require Main authority. */
+export const LEAD_SESSION_EXECUTION_POLICY = leadPolicies.main;
 
 export const CTO_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
   mode: "plugin-tools-only-v1",

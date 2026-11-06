@@ -4,7 +4,7 @@ import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult 
 import { createLeadConversationStore, parseLeadConversationPage } from "../src/lead-conversations.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import type { BuilderLeadSessions } from "../src/domain/model.ts";
-import { LEAD_SESSION_EXECUTION_POLICY } from "../src/session-execution-policy.ts";
+import { LEAD_SESSION_EXECUTION_POLICY, policyForLeadChannel } from "../src/session-execution-policy.ts";
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
@@ -12,7 +12,9 @@ const AGENT = "33333333-3333-4333-8333-333333333333";
 const MAIN = "44444444-4444-4444-8444-444444444444";
 const uuid = (n: number) => `${n.toString(16).padStart(8, "0")}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
 const sessions = (workspaceId = A): BuilderLeadSessions => ({ workspaceId, selectionRevision: 1, agentId: AGENT,
-  sessions: { main: MAIN, "cto-inbox": "55555555-5555-4555-8555-555555555555", decisions: "66666666-6666-4666-8666-666666666666" } });
+  sessions: { main: MAIN, "ui-design": "77777777-7777-4777-8777-777777777777", background: "88888888-8888-4888-8888-888888888888",
+    "cto-inbox": "55555555-5555-4555-8555-555555555555", decisions: "66666666-6666-4666-8666-666666666666",
+    "integration-review": "99999999-9999-4999-8999-999999999999" } });
 function fixture() {
   const state = new Map<string, JsonValue>();
   const receipts = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
@@ -114,6 +116,19 @@ test("question association is persisted with raw answer text and sent explicitly
   await assert.rejects(f.store.send("decisions", uuid(71), "Use a desktop app.", context));
   await assert.rejects(f.store.send("main", uuid(72), "Wrong channel", context));
   assert.equal(f.sends.length, 1);
+});
+
+test("each user-facing context dispatches with its own policy; internal contexts never dispatch from chat", async () => {
+  const f = fixture();
+  for (const channel of ["main", "ui-design", "background", "decisions"] as const) {
+    await f.store.send(channel, uuid(20 + f.sends.length), `Message to ${channel}`);
+    assert.deepEqual((f.sends.at(-1) as unknown as { executionPolicy: unknown }).executionPolicy, policyForLeadChannel(channel));
+  }
+  for (const channel of ["cto-inbox", "integration-review"] as const) {
+    await assert.rejects(f.store.send(channel, uuid(80 + f.sends.length), "Not a user chat"), /internal/);
+  }
+  assert.equal(f.sends.length, 4);
+  assert.deepEqual((f.sends[0] as unknown as { executionPolicy: unknown }).executionPolicy, LEAD_SESSION_EXECUTION_POLICY);
 });
 
 test("prepared question resume rechecks exact association, while submitted request recovery skips new-dispatch validation", async () => {

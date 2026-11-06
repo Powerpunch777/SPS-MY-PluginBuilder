@@ -66,7 +66,7 @@ export async function fixture() {
   const platform = { state, agents: { sessions } } as unknown as SpsPlatformInvocationContext;
   values.set(mapKey(key("lead-agent.v1")), { workspaceId: W, revision: 1, selectedAgentId: A });
   values.set(mapKey(key("lead-sessions.v1.1")), { workspaceId: W, selectionRevision: 1, agentId: A,
-    sessions: { main: S, decisions: null, "cto-inbox": null } });
+    sessions: { main: S, "ui-design": null, background: null, decisions: null, "cto-inbox": null, "integration-review": null } });
   const registryKey = key(`project-ctos.v1.${createHash("sha256").update(P).digest("hex")}`);
   const cto = { ctoId: CTO, displayName: "CTO", agentId: A, sessionId: C, status: "ACTIVE", createdAt: now,
     createdBy: { agentId: A, sessionId: S, runId: R, selectionRevision: 1 } };

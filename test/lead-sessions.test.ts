@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { createBuilderPlatform, prepareLeadSessions, readLeadSessions, selectLeadAgent } from "../src/platform.ts";
-import { parseLeadSessions } from "../src/domain/lead-sessions.ts";
+import { LEAD_CHANNELS, parseLeadSessions } from "../src/domain/lead-sessions.ts";
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
@@ -53,17 +53,18 @@ function fixture() {
   return { platform, states, sessions, calls };
 }
 
-test("explicit preparation binds three distinct Lead sessions and rechecks exact known IDs", async () => {
+test("explicit preparation binds six distinct Lead sessions and rechecks exact known IDs", async () => {
   const f = fixture();
-  assert.deepEqual((await readLeadSessions(A, f.platform)).sessions, { main: null, "cto-inbox": null, decisions: null });
+  assert.deepEqual((await readLeadSessions(A, f.platform)).sessions, { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null });
   await selectLeadAgent(A, { ...input, expectedRevision: 0 }, f.platform);
   assert.equal(f.calls.length, 0);
   assert.deepEqual(await prepareLeadSessions(A, input, f.platform), { saved: true, executionStarted: false, sessionsReady: true });
   const saved = await readLeadSessions(A, f.platform);
-  assert.equal(new Set(Object.values(saved.sessions)).size, 3);
+  assert.equal(new Set(Object.values(saved.sessions)).size, 6);
   await prepareLeadSessions(A, input, f.platform);
-  assert.equal(f.sessions.size, 3);
-  assert.deepEqual(f.calls.slice(3).map(call => call.expectedSessionId), Object.values(saved.sessions));
+  assert.equal(f.sessions.size, 6);
+  assert.deepEqual(f.calls.slice(0, 6).map(call => call.taskKey.split(":").at(-1)), [...LEAD_CHANNELS]);
+  assert.deepEqual(f.calls.slice(6).map(call => call.expectedSessionId), Object.values(saved.sessions));
   assert.ok(f.calls.every(call => call.companyId === A && call.agentId === AGENT));
   assert.equal(f.states.has(`${A}:snapshot.v1`), false);
 });
@@ -82,9 +83,9 @@ test("partial creation and lost response recover by the same owned key, not a re
   const partial = await readLeadSessions(A, f.platform);
   assert.ok(partial.sessions.main);
   assert.equal(partial.sessions["cto-inbox"], null);
-  assert.equal(f.sessions.size, 2);
+  assert.equal(f.sessions.size, 4);
   await prepareLeadSessions(A, input, f.platform);
-  assert.equal(f.sessions.size, 3);
+  assert.equal(f.sessions.size, 6);
   assert.equal((await readLeadSessions(A, f.platform)).sessions.main, partial.sessions.main);
 });
 
@@ -97,7 +98,7 @@ test("failed state save retains uncertainty and retry finds the same committed s
   await assert.rejects(prepareLeadSessions(A, input, f.platform), /Save failed/);
   assert.equal(f.sessions.size, 1);
   await prepareLeadSessions(A, input, f.platform);
-  assert.equal(f.sessions.size, 3);
+  assert.equal(f.sessions.size, 6);
 });
 
 test("known deleted session fails without recreating or advancing other channels", async () => {
@@ -107,7 +108,7 @@ test("known deleted session fails without recreating or advancing other channels
   const saved = structuredClone(await readLeadSessions(A, f.platform));
   f.sessions.delete(JSON.stringify([A, AGENT, f.calls[0].taskKey]));
   await assert.rejects(prepareLeadSessions(A, input, f.platform), /Expected session unavailable/);
-  assert.equal(f.sessions.size, 2);
+  assert.equal(f.sessions.size, 5);
   assert.deepEqual(await readLeadSessions(A, f.platform), saved);
 });
 
@@ -117,21 +118,21 @@ test("selection history and Workspace bindings stay separate without closing pri
   await prepareLeadSessions(A, input, f.platform);
   const original = await readLeadSessions(A, f.platform);
   await selectLeadAgent(A, { agentId: OTHER, expectedRevision: 1 }, f.platform);
-  assert.deepEqual((await readLeadSessions(A, f.platform)).sessions, { main: null, "cto-inbox": null, decisions: null });
+  assert.deepEqual((await readLeadSessions(A, f.platform)).sessions, { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null });
   await assert.rejects(prepareLeadSessions(A, input, f.platform), /selection changed/);
   await prepareLeadSessions(A, { agentId: OTHER, expectedRevision: 2 }, f.platform);
   await selectLeadAgent(B, { agentId: AGENT, expectedRevision: 0 }, f.platform);
   await prepareLeadSessions(B, input, f.platform);
-  assert.equal(f.sessions.size, 9);
+  assert.equal(f.sessions.size, 18);
   assert.deepEqual((f.states.get(`${A}:lead-sessions.v1.1`) as unknown as typeof original).sessions, original.sessions);
 });
 
-test("parallel preparations serialize and cannot create six sessions", async () => {
+test("parallel preparations serialize and cannot create duplicate context sessions", async () => {
   const f = fixture();
   await selectLeadAgent(A, { ...input, expectedRevision: 0 }, f.platform);
   await Promise.all([prepareLeadSessions(A, input, f.platform), prepareLeadSessions(A, input, f.platform)]);
-  assert.equal(f.sessions.size, 3);
-  assert.equal(f.calls.length, 6);
+  assert.equal(f.sessions.size, 6);
+  assert.equal(f.calls.length, 12);
 });
 
 test("invalid Host results, corrupt records, stale selection and unsupported Hosts fail closed", async () => {
@@ -155,13 +156,22 @@ test("invalid Host results, corrupt records, stale selection and unsupported Hos
 
 test("session records reject duplicate IDs, unknown fields and cross-Workspace data", () => {
   const value = { workspaceId: A, agentId: AGENT, selectionRevision: 1,
-    sessions: { main: AGENT, "cto-inbox": OTHER, decisions: null } };
+    sessions: { main: AGENT, "ui-design": null, background: null, "cto-inbox": OTHER, decisions: null, "integration-review": null } };
   assert.deepEqual(parseLeadSessions(value, A), value);
   for (const invalid of [{ ...value, workspaceId: B }, { ...value, secret: "x" },
     { ...value, sessions: { ...value.sessions, decisions: AGENT.toUpperCase() } },
     { ...value, sessions: { ...value.sessions, extra: null } }, { ...value, agentId: null }]) {
     assert.throws(() => parseLeadSessions(invalid, A));
   }
+});
+
+test("the current contract requires all six exact channel keys and does not infer old three-key records", () => {
+  const sessions = { main: AGENT, "ui-design": null, background: null, "cto-inbox": OTHER, decisions: null, "integration-review": null };
+  const current = { workspaceId: A, agentId: AGENT, selectionRevision: 1, sessions };
+  assert.deepEqual(parseLeadSessions(current, A).sessions, sessions);
+  const former = { workspaceId: A, agentId: AGENT, selectionRevision: 1,
+    sessions: { main: AGENT, "cto-inbox": OTHER, decisions: null } };
+  assert.throws(() => parseLeadSessions(former, A), /Lead session fields/);
 });
 
 test("unexpected selection change during an awaited ensure cannot publish a replacement binding", async () => {

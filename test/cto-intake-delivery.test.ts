@@ -44,7 +44,7 @@ async function setup(options: { cas?: boolean; seedQuestion?: boolean } = {}) {
 
   const inboxSession = randomUUID();
   f.values.set(mapKey(key("lead-sessions.v1.1")), { workspaceId: W, selectionRevision: 1, agentId: A,
-    sessions: { main: S, decisions: null, "cto-inbox": inboxSession } });
+    sessions: { main: S, "ui-design": null, background: null, decisions: null, "cto-inbox": inboxSession, "integration-review": null } });
 
   const sessions = f.platform.agents.sessions as Record<string, (...args: any[]) => Promise<any>>;
   const original = {
@@ -290,7 +290,7 @@ test("a storage conflict returns without admitting an intake message", async () 
 test("a stored question with an unprepared Lead inbox remains explicitly unconfirmed", async () => {
   const x = await setup({ seedQuestion: false });
   x.values.set(mapKey(key("lead-sessions.v1.1")), { workspaceId: W, selectionRevision: 1, agentId: A,
-    sessions: { main: S, decisions: null, "cto-inbox": null } });
+    sessions: { main: S, "ui-design": null, background: null, decisions: null, "cto-inbox": null, "integration-review": null } });
   const result = await submitAssignedCtoQuestion(x.questionInput, x.ctoRunContext, x.platform);
   const data = result.data as { status: string; questionId: string; intake: { status: string; automaticallyResent: boolean };
     userQuestionCreated: boolean; aiDispatched?: boolean; completion?: unknown; providerCompletion?: unknown };

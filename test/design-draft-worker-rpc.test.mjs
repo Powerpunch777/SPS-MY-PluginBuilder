@@ -39,11 +39,11 @@ function createFakeHostState() {
   });
   values.set(JSON.stringify(stateKey("lead-sessions.v1.1")), {
     workspaceId: workspaceA, selectionRevision: 1, agentId: leadId,
-    sessions: { main: sessionId, "cto-inbox": null, decisions: decisionsSessionId },
+    sessions: { main: sessionId, "ui-design": null, background: null, "cto-inbox": null, decisions: decisionsSessionId, "integration-review": null },
   });
   values.set(JSON.stringify(stateKey("snapshot.v1")), {
     schemaVersion: 1, workspaceId: workspaceA, revision: 1,
-    leadSessions: { main: sessionId, "cto-inbox": null, decisions: decisionsSessionId },
+    leadSessions: { main: sessionId, "ui-design": null, background: null, "cto-inbox": null, decisions: decisionsSessionId, "integration-review": null },
     actors: [],
     messages: [{ id: consultationId, channel: "main", actorId: null, role: "user",
       text: "Build a private project tracker with clear ownership and an audit history.",
@@ -279,20 +279,31 @@ test("built Worker routes design sources to an unapproved draft and back without
     // Explicit fake user/run association, not a real provider or legal approval.
     const turnKey = JSON.stringify(stateKey(`lead-chat.turn.v1.${answerTurnId}`));
     hostState.set(turnKey, { ...hostState.get(turnKey), state: "submitted", runId });
+    const mainBaselineTurnId = "31313131-3131-4131-8131-313131313131";
+    const mainBaselineText = "Keep the desktop target as designed.";
+    hostState.set(JSON.stringify(stateKey(`lead-chat.turn.v1.${mainBaselineTurnId}`)), {
+      workspaceId: workspaceA, selectionRevision: 1, agentId: leadId, sessionId, channel: "main",
+      schemaVersion: 1, requestId: mainBaselineTurnId, previousRequestId: null, sequence: 0,
+      text: mainBaselineText, createdAt: "2026-11-02T00:00:03.000Z", state: "submitted", runId,
+      answer: null, outputState: "not_ready", cancellationRequested: false, termination: "not_applicable",
+    });
     const baselineInput = { projectId: workspaceA, expectedBaseRevisionId: null, sourceDraftRevisionId: resolvedDraft.revisionId,
-      revisionId: "baseline-rpc-1", userSourceId: answerSourceId, interpretation: "The user selected the desktop design." };
-    invoke(14, "builder.publish-design-baseline", baselineInput, runContext);
+      revisionId: "baseline-rpc-1", userSourceId: `lead-turn:${mainBaselineTurnId}`, interpretation: "The user selected the desktop design." };
+    invoke(14, "builder.publish-design-baseline", { ...baselineInput, userSourceId: answerSourceId }, runContext);
     assert.ok((await serviceUntil(14)).error, "main cannot reuse a decisions user/run as its own");
     invoke(15, "builder.publish-design-baseline", baselineInput, decisionsRunContext);
-    const baselineReply = await serviceUntil(15);
+    const rejectedNonMainBaseline = await serviceUntil(15);
+    assert.match(rejectedNonMainBaseline.error.message, /Only the Main Lead context/);
+    invoke(18, "builder.publish-design-baseline", baselineInput, runContext);
+    const baselineReply = await serviceUntil(18);
     assert.equal(baselineReply.error, undefined, JSON.stringify(baselineReply.error));
     assert.equal(baselineReply.result.data.status, "published");
     const baseline = baselineReply.result.data.revision;
     assert.deepEqual(baseline.specification.requirements, resolvedDraft.specification.requirements);
     assert.deepEqual(baseline.graph.entities, resolvedDraft.graph.entities);
-    assert.equal(baseline.specification.approvalEvidenceRef, answerSourceId);
+    assert.equal(baseline.specification.approvalEvidenceRef, `lead-turn:${mainBaselineTurnId}`);
     assert.equal(baseline.graph.approvedSpecRevisionId, baseline.specification.revisionId);
-    assert.equal(baseline.userDecision.sourceSha256, sha256("Use the desktop target."));
+    assert.equal(baseline.userDecision.sourceSha256, sha256(mainBaselineText));
     assert.match(baselineReply.result.content, /not independently verified legal approval/);
     send({ jsonrpc: "2.0", id: 16, method: "getData", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
       params: { key: "builder.design-baseline", companyId: workspaceA, params: { projectId: workspaceA } } });

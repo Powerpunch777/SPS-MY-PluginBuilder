@@ -7,7 +7,7 @@ import { readProjectCtos } from "./project-cto-tools.ts";
 import { readWorkstreams, readPinnedWorkstreamSources } from "./workstream-tools.ts";
 import { readDesignBaseline } from "./design-baseline-tools.ts";
 import { readTechnologyDecisions } from "./technology-decision-tools.ts";
-import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
+import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { assertSessionExecutionPolicySupport, CTO_SESSION_EXECUTION_POLICY } from "./session-execution-policy.ts";
 import type { RevisionState } from "./solution-revision-store.ts";
 
@@ -95,6 +95,7 @@ export async function dispatchCtoWorkstream(params: unknown, runContext: unknown
   const projectId = id(input.projectId), workstreamId = id(input.workstreamId), boardRevisionId = id(input.boardRevisionId);
   if (!Number.isSafeInteger(input.specRevision) || (input.specRevision as number) < 1) throw new TypeError("An exact Workstream revision is required.");
   const context = parseLeadToolContext(runContext), authority = await resolveLeadToolAuthority(context, platform);
+  requireLeadFormalPublicationAuthority(authority);
   const board = await readWorkstreams(context.companyId, projectId, platform);
   const source = board?.revision.workstreams.find(item => item.spec.id === workstreamId);
   if (!source || source.spec.revision !== input.specRevision || board!.revision.revisionId !== boardRevisionId) {
@@ -198,6 +199,7 @@ export async function inspectCtoWorkstreamDelivery(params: unknown, runContext: 
   cancel = false) {
   const input = exactToolRecord(params, ["projectId", "ctoId"]), projectId = id(input.projectId), ctoId = id(input.ctoId);
   const context = parseLeadToolContext(runContext), authority = await resolveLeadToolAuthority(context, platform);
+  if (cancel) requireLeadFormalPublicationAuthority(authority);
   const store = currentStore(context.companyId, projectId, ctoId, platform, authority.check);
   let current = (await store.current())?.revision ?? null;
   if (!current) return { content: "No recorded CTO delivery.", data: null };

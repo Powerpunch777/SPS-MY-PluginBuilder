@@ -13,7 +13,7 @@ async function setup() {
   await dispatchCtoWorkstream(f.params, ctx(), f.platform);
   const runId = [...f.runs.keys()][0]!, context = ctx(C, runId), intakeSession = randomUUID(), intakeRun = randomUUID();
   f.values.set(mapKey(key("lead-sessions.v1.1")), { workspaceId: W, selectionRevision: 1, agentId: A,
-    sessions: { main: S, decisions: null, "cto-inbox": intakeSession } });
+    sessions: { main: S, "ui-design": null, background: null, decisions: null, "cto-inbox": intakeSession, "integration-review": null } });
   const original = f.platform.agents.sessions.getRun;
   f.platform.agents.sessions.getRun = async (sessionId, workspaceId, id) => {
     if (sessionId === intakeSession) {

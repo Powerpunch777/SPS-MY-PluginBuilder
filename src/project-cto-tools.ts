@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { parseProjectCtos, type ProjectCto, type ProjectCtoRegistry } from "./domain/project-ctos.ts";
-import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
+import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 
 const hash = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -36,6 +36,7 @@ export async function createProjectCto(params: unknown, runContext: unknown, pla
   const context = parseLeadToolContext(runContext);
   const key = registryKey(context.companyId, projectId);
   const authority = await resolveLeadToolAuthority(context, platform);
+  requireLeadFormalPublicationAuthority(authority);
   if (typeof platform.state.compareAndSet !== "function" || typeof platform.agents.sessions.ensure !== "function") {
     throw new Error("Supported Host CAS and keyed session ensure are required; no get/set or create fallback.");
   }

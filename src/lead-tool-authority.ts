@@ -44,7 +44,8 @@ export async function resolveLeadToolAuthority(context: ReturnType<typeof parseL
   const readSessions = async () => {
     const raw = await platform.state.get(key(`lead-sessions.v1.${binding.revision}`));
     const sessions = parseLeadSessions(raw ?? { workspaceId: context.companyId, selectionRevision: binding.revision,
-      agentId: binding.selectedAgentId, sessions: { main: null, "cto-inbox": null, decisions: null } }, context.companyId);
+      agentId: binding.selectedAgentId, sessions: { main: null, "ui-design": null, background: null,
+        "cto-inbox": null, decisions: null, "integration-review": null } }, context.companyId);
     if (sessions.selectionRevision !== binding.revision || sessions.agentId !== context.agentId) {
       throw new Error("Lead session selection does not match the saved Agent.");
     }
@@ -64,5 +65,11 @@ export async function resolveLeadToolAuthority(context: ReturnType<typeof parseL
       throw new Error("Lead tool session authority changed.");
     }
   };
-  return Object.freeze({ context, selectionRevision: binding.revision, sessions, check });
+  const channel = LEAD_CHANNELS.find(candidate => sessions.sessions[candidate] === context.sessionId)!;
+  return Object.freeze({ context, selectionRevision: binding.revision, sessions, channel, check });
+}
+
+/** Formal design, technology and Workstream publication belongs to Main only. */
+export function requireLeadFormalPublicationAuthority(authority: { channel: string }): void {
+  if (authority.channel !== "main") throw new Error("Only the Main Lead context may publish formal revisions.");
 }

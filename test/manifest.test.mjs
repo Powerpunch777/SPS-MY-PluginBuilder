@@ -6,6 +6,7 @@ import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "../src/cto-question-reply-tool-declarations.mjs";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "../src/task-packet-tool-declarations.mjs";
+import { INSPECT_SPEC_ASSURANCE_TOOL } from "../src/tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
   assert.equal(manifest.companyActivation?.defaultEnabled, false);
@@ -24,6 +25,15 @@ test("Workspace Shell routes match the declared page route rather than a package
   for (const capability of ["agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel"]) {
     assert.ok(manifest.capabilities.includes(capability));
   }
+});
+
+test("D3 assurance inspection is a declared read-only Lead tool", () => {
+  assert.equal(manifest.tools.find(tool => tool.name === INSPECT_SPEC_ASSURANCE_TOOL.name), INSPECT_SPEC_ASSURANCE_TOOL);
+  assert.deepEqual(INSPECT_SPEC_ASSURANCE_TOOL.parametersSchema.required, ["projectId"]);
+  assert.equal(INSPECT_SPEC_ASSURANCE_TOOL.parametersSchema.additionalProperties, false);
+  assert.match(INSPECT_SPEC_ASSURANCE_TOOL.description, /read-only/i);
+  assert.match(INSPECT_SPEC_ASSURANCE_TOOL.description, /UNKNOWN/i);
+  assert.match(INSPECT_SPEC_ASSURANCE_TOOL.description, /Does not publish, dispatch, cancel or execute AI/i);
 });
 
 test("CTO delivery tools expose exact bounded Lead contracts in the manifest", () => {

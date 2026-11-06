@@ -12,7 +12,7 @@ test("creates the empty workspace-scoped snapshot with no phantom state", () => 
     schemaVersion: 1,
     workspaceId: "workspace-a",
     revision: 0,
-    leadSessions: { main: null, "cto-inbox": null, decisions: null },
+    leadSessions: { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null },
     actors: [], messages: [], documents: [], questions: [],
     graph: { revisionId: null, entities: [], relations: [] },
     activity: [],
@@ -36,14 +36,15 @@ test("parses to a detached copy and rejects unknown or foreign workspace data", 
 
 test("accepts empty, partial, and fully assigned Lead sessions while rejecting duplicate IDs", () => {
   assert.deepEqual(parseBuilderSnapshot(empty(), "workspace-a").leadSessions,
-    { main: null, "cto-inbox": null, decisions: null });
+    { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null });
 
   const partial = empty();
   partial.leadSessions.main = "lead-main";
   assert.deepEqual(parseBuilderSnapshot(partial, "workspace-a").leadSessions, partial.leadSessions);
 
   const assigned = empty();
-  assigned.leadSessions = { main: "lead-main", "cto-inbox": "lead-inbox", decisions: "lead-decisions" };
+  assigned.leadSessions = { main: "lead-main", "ui-design": "lead-ui", background: "lead-background",
+    "cto-inbox": "lead-inbox", decisions: "lead-decisions", "integration-review": "lead-review" };
   assert.deepEqual(parseBuilderSnapshot(assigned, "workspace-a").leadSessions, assigned.leadSessions);
 
   assigned.leadSessions.decisions = "lead-main";

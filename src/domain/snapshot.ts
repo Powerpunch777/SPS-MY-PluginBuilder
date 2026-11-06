@@ -10,7 +10,7 @@ import type {
   LeadChannel,
 } from "./model.ts";
 
-const CHANNELS = ["main", "cto-inbox", "decisions"] as const;
+const CHANNELS = ["main", "ui-design", "background", "cto-inbox", "decisions", "integration-review"] as const;
 const ROLES = ["lead", "cto", "development", "qa"] as const;
 const STATUSES = ["idle", "running", "waiting", "failed", "archived"] as const;
 const GRAPH_KINDS = ["requirement", "feature", "component", "agent", "external-system", "data", "workflow", "test", "environment", "approval"] as const;
@@ -213,7 +213,7 @@ export function createEmptyBuilderSnapshot(workspaceId: string): BuilderSnapshot
     schemaVersion: 1,
     workspaceId: safeWorkspaceId,
     revision: 0,
-    leadSessions: { main: null, "cto-inbox": null, decisions: null },
+    leadSessions: { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null },
     actors: [],
     messages: [],
     documents: [],

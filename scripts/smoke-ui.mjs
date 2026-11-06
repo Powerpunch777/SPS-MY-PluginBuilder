@@ -72,7 +72,7 @@ try {
       assert.equal(await page.getByRole("textbox", { name: "Lead에게 메시지" }).isDisabled(), true);
       const bounds = await page.locator(".builder-composer").boundingBox();
       assert.ok(bounds && bounds.y + bounds.height <= height + 1, "Composer must remain inside the viewport.");
-      for (const label of ["설계 시각화", "조직도", "설계 문서", "미결정사항", "시스템", "Lead 대화"]) {
+      for (const label of ["UI 설계", "조사·준비", "CTO 질문 접수", "최종 검토·승인", "설계 시각화", "조직도", "설계 문서", "미결정사항", "시스템", "Lead 대화"]) {
         await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: label, exact: true }).click();
         await page.getByRole("heading", { level: 1, name: label === 'Lead 대화' ? 'Lead와 대화' : label, exact: true }).waitFor();
         if (label === "설계 문서") {
@@ -249,9 +249,12 @@ try {
       await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "Lead 대화", exact: true }).click();
       await page.getByRole("heading", { level: 1, name: "Lead와 대화", exact: true }).waitFor();
       await page.getByRole("button", { name: "상담 텍스트 가져오기", exact: true }).click();
+      assert.equal(await page.getByRole("button", { name: "상담 분석 시작", exact: true }).isDisabled(), true);
       await page.getByRole("textbox", { name: "상담 텍스트", exact: true }).fill("브라우저 검증용 상담 원문");
       await page.getByRole("button", { name: "저장된 입력으로 전달", exact: true }).click();
       await page.getByText("브라우저 검증용 상담 원문", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "상담 분석 시작", exact: true }).click();
+      await page.getByText("분석 요청이 저장되었습니다.", { exact: true }).waitFor();
       const importBox = page.getByRole("textbox", { name: "상담 텍스트", exact: true });
       await importBox.fill("붙여넣은 기존 입력 유지");
       const fileInput = page.getByLabel("상담 .txt 파일");
@@ -319,8 +322,27 @@ try {
         await page.locator(".builder-shell").evaluate(element => { element.style.width = ""; });
       }
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-${name}.png`) });
+      await page.goto(new URL("?fixture=catalog", origin).href);
+      await page.getByRole("button", { name: "상품 선택", exact: true }).click();
+      await page.getByRole("heading", { level: 1, name: "상품 선택", exact: true }).waitFor();
+      await page.getByLabel("상품 규모", { exact: true }).selectOption("M");
+      await page.getByLabel("상품", { exact: true }).selectOption("M02");
+      await page.getByLabel("개발 방식", { exact: true }).selectOption("ASSEMBLY");
+      await page.getByLabel("납품 제품의 AI 사용", { exact: true }).selectOption("false");
+      await page.getByRole("checkbox", { name: "웹·API", exact: true }).check();
+      await page.getByRole("checkbox", { name: "기능 추가", exact: true }).check();
+      await page.getByRole("button", { name: "초안 저장", exact: true }).click();
+      await page.getByRole("button", { name: "Lead 대화", exact: true }).click();
+      await page.getByRole("button", { name: "상품 선택", exact: true }).click();
+      assert.equal(await page.getByLabel("상품", { exact: true }).inputValue(), "M02");
+      assert.equal(await page.getByLabel("납품 제품의 AI 사용", { exact: true }).inputValue(), "false");
+      assert.equal(await page.getByRole("checkbox", { name: "웹·API", exact: true }).isChecked(), true);
+      const catalogFits = await page.locator(".builder-product-selection").evaluate(el => el.scrollWidth <= el.clientWidth + 1);
+      assert.equal(catalogFits, true, "Catalog controls must fit the product selection view.");
+      await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-catalog-${name}.png`) });
       assert.deepEqual(errors, []);
-      console.log(JSON.stringify({ builderUi: name, views: 6, pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
+      console.log(JSON.stringify({ builderUi: name, views: 11, leadContextsVisible: 6, explicitAnalysisPreview: true,
+        pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
         selectedGraphDetails: true, graphKeyboardSelection: true, graphMissingOwnerAndRelations: true, graphOwnerReadOnly: true,
         organizationParentChildLayout: true, organizationLeadNotListedAsWorker: true, organizationActorReadOnly: true,
         documentPreviewSelection: true, documentRemovalRefresh: true, emptyDocumentPanes: true,
@@ -329,7 +351,7 @@ try {
         newerFileWins: true, unmountedReadIgnored: true,
         composerVisible: true, systemNoDuplicateActivityRail: true, systemRunnerUnavailable: true,
         systemLeadAgentControlPreserved: true, systemDesktopMobileEmbedded: true,
-        noOverflow: true, coreHostTested: false, realAi: false }));
+        catalogPreviewSaved: true, noOverflow: true, coreHostTested: false, realAi: false }));
     } catch (error) {
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-failure-${name}.png`), fullPage: true }).catch(() => {});
       throw error;

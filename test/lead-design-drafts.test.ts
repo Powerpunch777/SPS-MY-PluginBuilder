@@ -13,13 +13,19 @@ const RUN = "55555555-5555-4555-8555-555555555555";
 const OTHER_RUN = "99999999-9999-4999-8999-999999999999";
 const SESSIONS = {
   main: "66666666-6666-4666-8666-666666666666",
+  "ui-design": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  background: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
   "cto-inbox": "77777777-7777-4777-8777-777777777777",
   decisions: "88888888-8888-4888-8888-888888888888",
+  "integration-review": "16161616-1616-4161-8161-161616161616",
 };
 const NEXT_SESSIONS = {
   main: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "ui-design": "dddddddd-dddd-4ddd-8ddd-ddddddddddde",
+  background: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeef",
   "cto-inbox": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   decisions: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  "integration-review": "ffffffff-ffff-4fff-8fff-ffffffffffff",
 };
 const CONSULTATION_ID = "consultation-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ASSISTANT_ID = "consultation-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";

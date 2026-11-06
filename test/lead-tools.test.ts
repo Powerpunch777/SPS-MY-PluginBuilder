@@ -5,6 +5,7 @@ import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonp
 import { createBuilderPlatform, readLeadSolution } from "../src/platform.ts";
 import { READ_SOLUTION_TOOL } from "../src/tool-declarations.mjs";
 import { createSolutionRevisionStore } from "../src/solution-revision-store.ts";
+import { requireLeadFormalPublicationAuthority } from "../src/lead-tool-authority.ts";
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
 const OTHER_COMPANY = "22222222-2222-4222-8222-222222222222";
@@ -13,11 +14,21 @@ const OTHER_AGENT = "44444444-4444-4444-8444-444444444444";
 const RUN = "abcdefab-cdef-4abc-8def-abcdefabcdef";
 const SESSION_IDS = {
   main: "66666666-6666-4666-8666-666666666666",
+  "ui-design": "99999999-9999-4999-8999-999999999999",
+  background: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "cto-inbox": "77777777-7777-4777-8777-777777777777",
   decisions: "88888888-8888-4888-8888-888888888888",
+  "integration-review": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 };
 const PROJECT = "builder-project-1";
 const CHANNELS = Object.keys(SESSION_IDS) as Array<keyof typeof SESSION_IDS>;
+
+test("formal publication authority accepts only Main", () => {
+  requireLeadFormalPublicationAuthority({ channel: "main" });
+  for (const channel of CHANNELS.filter(channel => channel !== "main")) {
+    assert.throws(() => requireLeadFormalPublicationAuthority({ channel }), /Only the Main Lead context/);
+  }
+});
 
 type StoredKey = SpsStateKey & { scopeId: string; stateKey: string };
 const fullKey = (key: SpsStateKey) => JSON.stringify([key.scopeKind, key.scopeId, key.namespace, key.stateKey]);
@@ -111,7 +122,7 @@ test("registered read-only tool declaration matches the manifest and platform re
   assert.equal(createBuilderPlatform().actions.some(action => action.key === READ_SOLUTION_TOOL.name), false);
 });
 
-test("current prepared Lead may read a published solution from any of its three channels without writes", async () => {
+test("current prepared Lead may read a published solution from any of its six channels without writes", async () => {
   for (const channel of CHANNELS) {
     const f = fixture({ sessionId: SESSION_IDS[channel] });
     const expected = await withPublishedSolution(f);
@@ -171,14 +182,14 @@ test("rejects a worker, old Lead, other Workspace, or session not in current pre
     workspaceId: COMPANY, revision: 3, selectedAgentId: OTHER_AGENT,
   });
   await assert.rejects(readLeadSolution({ projectId: PROJECT }, oldLead.context, oldLead.platform), /current Builder Lead/);
-  const differentWorkspace = fixture({ companyId: OTHER_COMPANY, sessionId: "99999999-9999-4999-8999-999999999999" });
+  const differentWorkspace = fixture({ companyId: OTHER_COMPANY, sessionId: "12121212-1212-4121-8121-121212121212" });
   await assert.rejects(readLeadSolution({ projectId: PROJECT }, differentWorkspace.context, differentWorkspace.platform), /prepared current Lead session/);
-  const missing = fixture({ sessionId: "99999999-9999-4999-8999-999999999999" });
+  const missing = fixture({ sessionId: "12121212-1212-4121-8121-121212121212" });
   await assert.rejects(readLeadSolution({ projectId: PROJECT }, missing.context, missing.platform), /prepared current Lead session/);
   const unprepared = fixture();
   unprepared.values.set(fullKey({ scopeKind: "company", scopeId: COMPANY, namespace: "sonpark.my-builder", stateKey: "lead-sessions.v1.2" }), {
     workspaceId: COMPANY, selectionRevision: 2, agentId: AGENT,
-    sessions: { main: null, "cto-inbox": null, decisions: null },
+    sessions: { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null },
   });
   await assert.rejects(readLeadSolution({ projectId: PROJECT }, unprepared.context, unprepared.platform), /prepared current Lead session/);
 });
@@ -204,7 +215,7 @@ test("rechecks selection binding and all prepared session IDs after the solution
       const current = f.values.get(full) as Record<string, any>;
       f.values.set(full, changedKey === "lead-agent.v1"
         ? { ...current, revision: current.revision + 1 }
-        : { ...current, sessions: { ...current.sessions, decisions: "99999999-9999-4999-8999-999999999999" } });
+        : { ...current, sessions: { ...current.sessions, decisions: "12121212-1212-4121-8121-121212121212" } });
     });
     await assert.rejects(readLeadSolution({ projectId: PROJECT }, f.context, f.platform), /changed|authority/);
     assert.equal(f.writes, 0);

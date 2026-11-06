@@ -60,7 +60,7 @@ test("BuilderShell server-renders the Lead workspace without inventing activity"
         schemaVersion: 1,
         workspaceId: "workspace-test",
         revision: 3,
-        leadSessions: { main: null, "cto-inbox": null, decisions: null },
+        leadSessions: { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null },
         actors: [
           { id: "lead-1", role: "lead", label: "Lead", parentActorId: null, agentId: null, sessionId: null, status: "running" },
           { id: "cto-1", role: "cto", label: "CTO One", parentActorId: "lead-1", agentId: "agent-1", sessionId: "session-1", status: "running" },

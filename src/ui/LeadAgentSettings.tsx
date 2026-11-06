@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { BuilderLeadAgentOptions, BuilderLeadSessions } from "../domain/model.js";
+import { LEAD_CHANNELS } from "../domain/lead-sessions.ts";
 
 export interface LeadAgentSettingsProps {
   options: BuilderLeadAgentOptions | null;
@@ -81,13 +82,13 @@ export function LeadAgentSettings({ options, loading, error, onSave, sessions, s
       </div>
     </form>
     <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-      <p className="builder-card-sub" role="status" style={{ margin: 0 }}>저장된 Lead 세션 {savedCount}/3 · AI 전송 준비 중</p>
+      <p className="builder-card-sub" role="status" style={{ margin: 0 }}>저장된 Lead 세션 {savedCount}/{LEAD_CHANNELS.length}</p>
       {sessionsError && <p className="builder-feedback" role="alert">{sessionsError}</p>}
       {prepareError && <p className="builder-feedback" role="alert">{prepareError}</p>}
       <button className="builder-primary-button" type="button" aria-label="Lead 세션 준비 및 확인" onClick={() => { void prepare(); }}
         disabled={!onPrepare || !options?.selectedAgentId || loading || saving || preparing || sessionsLoading
           || draft !== selectedAgentId || !eligible || Boolean(sessionsError)}>
-        {preparing ? "세션 확인 중..." : savedCount === 3 ? "Lead 세션 확인" : "Lead 세션 준비"}
+        {preparing ? "세션 확인 중..." : savedCount === LEAD_CHANNELS.length ? "Lead 세션 확인" : "Lead 세션 준비"}
       </button>
     </div>
   </section>;

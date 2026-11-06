@@ -14,8 +14,11 @@ const RUN = "66666666-6666-4666-8666-666666666666";
 const OTHER_RUN = "77777777-7777-4777-8777-777777777777";
 const SESSIONS = {
   main: "88888888-8888-4888-8888-888888888888",
+  "ui-design": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  background: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   "cto-inbox": "99999999-9999-4999-8999-999999999999",
   decisions: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "integration-review": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
 };
 const CONSULTATION_ID = "consultation-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ASSISTANT_ID = "consultation-cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -116,7 +119,8 @@ function fixture(options: { agentId?: string; sessionId?: string } = {}) {
       values.set(scopedKey("lead-agent.v1"), { workspaceId: WORKSPACE, revision: 2, selectedAgentId: WORKER });
       values.set(scopedKey("lead-sessions.v1.2"), {
         workspaceId: WORKSPACE, selectionRevision: 2, agentId: WORKER,
-        sessions: { main: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "cto-inbox": null, decisions: null },
+        sessions: { main: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "ui-design": null, background: null,
+          "cto-inbox": null, decisions: null, "integration-review": null },
       });
     },
   };
@@ -221,6 +225,17 @@ test("publishes one detached baseline from the current Lead draft and actual sub
   assert.deepEqual(await readDesignBaseline(WORKSPACE, PROJECT, restartedPlatform), stored);
   const leadRead = await readLeadDesignBaseline({ projectId: PROJECT }, f.context, restartedPlatform);
   assert.deepEqual((leadRead.data as { current: unknown }).current, stored);
+  assert.equal(f.setCalls, 0);
+});
+
+test("all five non-Main Lead sessions are denied official baseline publication before writes", async () => {
+  const { f } = await prepared();
+  const writes = f.successfulWrites;
+  for (const channel of ["ui-design", "background", "cto-inbox", "decisions", "integration-review"] as const) {
+    await assert.rejects(publishDesignBaseline(publishParams(), { ...f.context, sessionId: SESSIONS[channel] }, f.platform),
+      /Only the Main Lead context/);
+  }
+  assert.equal(f.successfulWrites, writes);
   assert.equal(f.setCalls, 0);
 });
 

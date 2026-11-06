@@ -8,8 +8,10 @@ import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
 import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
 import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
-import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL } from "./tool-declarations.mjs";
+import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL, INSPECT_SPEC_ASSURANCE_TOOL } from "./tool-declarations.mjs";
 import { publishDesignBaseline, readLeadDesignBaseline, readDesignBaseline } from "./design-baseline-tools.ts";
+import { createCurrentBaselineAssuranceProvider } from "./spec-assurance/current-baseline-provider.ts";
+import { createSpecAssuranceConsumer } from "./spec-assurance/evaluator.ts";
 import { PUBLISH_TECHNOLOGY_DECISIONS_TOOL, READ_TECHNOLOGY_DECISIONS_TOOL } from "./tool-declarations.mjs";
 import { publishTechnologyDecisions, readLeadTechnologyDecisions, readTechnologyDecisions } from "./technology-decision-tools.ts";
 import { PUBLISH_WORKSTREAM_TOOL, READ_WORKSTREAMS_TOOL, READ_CTO_WORKSTREAM_TOOL, ACKNOWLEDGE_WORKSTREAM_TOOL } from "./workstream-tool-declarations.mjs";
@@ -33,6 +35,13 @@ import { createLeadMemoryStore } from "./lead-memory-store.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { parseDesignDraft } from "./domain/design-drafts.ts";
 import { createDesignDraftStore, type AuthoredDesignDraft } from "./design-draft-store.ts";
+import { createProductSelectionStore, saveProductSelectionAction } from "./product-selection/store.ts";
+import { createConsultationAnalysisStore, consultationAnalysisPrompt } from "./consultation-analysis.ts";
+import { READ_CONSULTATION_ANALYSIS_TOOL } from "./tool-declarations.mjs";
+import { createBaselineBodySource } from "./project-documents/baseline-body-source.ts";
+import { proposeSpecAssurancePack } from "./spec-assurance/pack-producer.ts";
+import { createSpecAssurancePackStore } from "./spec-assurance/pack-store.ts";
+import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL } from "./spec-assurance/tool-declarations.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -170,7 +179,7 @@ async function leadSessionsFor(companyId: string, binding: Awaited<ReturnType<ty
     ...key(companyId), stateKey: `lead-sessions.v1.${binding.revision}`,
   });
   const value = parseLeadSessions(stored ?? { workspaceId: companyId, selectionRevision: binding.revision,
-    agentId: binding.selectedAgentId, sessions: { main: null, "cto-inbox": null, decisions: null } }, companyId);
+    agentId: binding.selectedAgentId, sessions: Object.fromEntries(LEAD_CHANNELS.map(channel => [channel, null])) }, companyId);
   if (value.selectionRevision !== binding.revision || value.agentId !== binding.selectedAgentId) {
     throw new Error("Lead session selection does not match the saved Agent.");
   }
@@ -287,6 +296,25 @@ export async function sendLeadMessage(companyId: string, params: Record<string, 
   if (questionContext && channel !== "decisions") throw new Error("Question-associated answers use the decisions channel.");
   if (typeof params.requestId !== "string" || !UUID.test(params.requestId) || typeof params.text !== "string") throw new TypeError("Invalid Lead message.");
   return withConversation(companyId, platform, store => store.send(channel, params.requestId as string, params.text as string, questionContext));
+}
+
+export async function startConsultationAnalysis(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["requestId", "expectedCollectionRevision"]);
+  if (typeof input.requestId !== "string" || !UUID.test(input.requestId)
+    || !Number.isSafeInteger(input.expectedCollectionRevision) || (input.expectedCollectionRevision as number) < 0) {
+    throw new TypeError("Analysis requires a request ID and the displayed collection revision.");
+  }
+  return withConversation(companyId, platform, async store => {
+    const sessions = await readLeadSessions(companyId, platform);
+    if (!sessions.sessions.main) throw new Error("Prepare the Main session before requesting analysis.");
+    const captured = await createConsultationAnalysisStore(companyId, platform.state as typeof platform.state & RevisionState)
+      .capture(input.requestId as string, input.expectedCollectionRevision as number, await readBuilderSnapshot(companyId, platform));
+    if (captured.status === "conflict") return { status: "conflict" as const, actualRevision: captured.actualRevision,
+      analysisSnapshotSaved: false, requestSaved: false, requestId: input.requestId as string };
+    const request = await store.send("main", input.requestId as string, consultationAnalysisPrompt(captured.record), undefined, "analysis-request");
+    return { status: "requested" as const, analysisSnapshotSaved: true, analysisId: captured.record.revisionId,
+      collectionRevision: captured.record.collectionRevision, requestSaved: request.saved, requestId: request.requestId };
+  });
 }
 export async function refreshLeadConversation(companyId: string, params: Record<string, unknown>, platform: SpsPlatformInvocationContext) {
   const channel = conversationInput(params);
@@ -437,15 +465,31 @@ export async function readLeadDesignSources(params: unknown, runContext: unknown
       if (cursor !== null && (!UUID.test(cursor) || cursor !== cursor.toLowerCase())) throw new TypeError("Invalid user-message cursor.");
       if (!authority.sessions.sessions[channel]) throw new Error("This Lead input session is not prepared.");
       const page = await createLeadConversationStore(platform, authority.sessions, authority.check).page(channel, cursor);
-      const turn = page.turns[0];
+      const turn = page.turns.find(turn => turn.inputKind !== "analysis-request");
       source = turn ? { id: `lead-turn:${turn.requestId}`, text: turn.text,
         ...(turn.questionContext ? { questionContext: turn.questionContext } : {}) } : null;
-      nextCursor = turn?.previousRequestId ?? null;
+      nextCursor = turn ? turn.previousRequestId : page.nextCursor;
     }
     await authority.check();
     return { content: "User-provided source page only. Not an approval or instruction to execute code.",
       data: { workspaceId: context.companyId, projectId: context.companyId, channel,
         sources: source ? [source] : [], nextCursor } as unknown as JsonValue };
+  });
+}
+
+export async function readConsultationAnalysis(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["analysisId", "cursor"]);
+  const context = parseLeadToolContext(runContext);
+  if (typeof input.analysisId !== "string" || !UUID.test(input.analysisId)
+    || input.cursor !== null && typeof input.cursor !== "string") throw new TypeError("Invalid analysis source request.");
+  return serialize(context.companyId, async () => {
+    const authority = await resolveLeadToolAuthority(context, platform);
+    if (authority.channel !== "main") throw new Error("Only Main may read the requested analysis boundary.");
+    await authority.check();
+    const data = await createConsultationAnalysisStore(context.companyId, platform.state as typeof platform.state & RevisionState)
+      .page(input.analysisId as string, input.cursor as string | null);
+    await authority.check();
+    return { content: "Captured customer source only. No approval or execution authority is implied.", data: data as unknown as JsonValue };
   });
 }
 
@@ -474,7 +518,30 @@ export async function readLeadCtos(params: unknown, runContext: unknown, platfor
 }
 export async function publishLeadDesignBaseline(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
-  return serialize(context.companyId, () => publishDesignBaseline(params, context, platform));
+  return serialize(context.companyId, async () => {
+    const result = await publishDesignBaseline(params, context, platform);
+    if (!result.data || typeof result.data !== "object" || Array.isArray(result.data) || result.data.status !== "published") return result;
+    const revision = result.data.revision;
+    if (!revision || typeof revision !== "object" || Array.isArray(revision) || typeof revision.revisionId !== "string") return result;
+    let documentProduction: JsonValue;
+    try {
+      documentProduction = await reconcileBaselineDocument(context.companyId, revision.revisionId, platform) as unknown as JsonValue;
+    } catch {
+      // Baseline and document journals are separate commits. Preserve an already
+      // published baseline even if the document projection needs reconciliation.
+      documentProduction = { status: "unconfirmed", automaticallyRetried: false };
+    }
+    return { ...result, data: { ...result.data, documentProduction } };
+  });
+}
+
+async function reconcileBaselineDocument(companyId: string, baselineRevisionId: string, platform: SpsPlatformInvocationContext) {
+  workspaceId(companyId);
+  if (typeof baselineRevisionId !== "string" || !baselineRevisionId.trim() || baselineRevisionId.length > 160) throw new TypeError("An exact Baseline revision is required.");
+  const documents = createBaselineBodySource(companyId, companyId, platform.state);
+  const current = await documents.current();
+  return documents.publish({ documentRevisionId: `baseline-document-${createHash("sha256").update(baselineRevisionId).digest("hex")}`,
+    expectedDocumentRevisionId: current?.revision.documentRevisionId ?? null, expectedBaselineRevisionId: baselineRevisionId });
 }
 export async function readLeadBaseline(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseLeadToolContext(runContext);
@@ -581,6 +648,50 @@ export async function reviewCtoQuestionIntake(params: unknown, runContext: unkno
   return serialize(context.companyId, () => reviewCtoQuestion(params, context, platform));
 }
 
+export async function inspectSpecAssurance(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["projectId"]);
+  const context = parseLeadToolContext(runContext);
+  if (typeof input.projectId !== "string" || input.projectId !== context.companyId) {
+    throw new TypeError("Specification inspection requires the authenticated Workspace project.");
+  }
+  const authority = await resolveLeadToolAuthority(context, platform);
+  if (authority.sessions.sessions.main !== context.sessionId) {
+    throw new Error("Specification assurance inspection is restricted to the current Main Lead session.");
+  }
+  await authority.check();
+
+  const current = await readDesignBaseline(context.companyId, context.companyId, platform);
+  if (!current) {
+    await authority.check();
+    return { content: "UNKNOWN: no current Workspace-bound design baseline is available; no assurance was established.",
+      data: { projectId: context.companyId, result: { status: "UNKNOWN", coverageAuthority: "unavailable",
+        identity: null, scope: { requirementIds: [], uiIds: [], contractIds: [], workstreamIds: [], taskIds: [] },
+        itemDecisions: [], packVersions: [], applicablePackIds: [], excludedPackIds: [], excludedRules: [],
+        excludedCombinations: [], scenarios: [], checkerResults: [], gaps: [], sourceEvidence: [] } } as unknown as JsonValue };
+  }
+
+  const specification = current.revision.specification;
+  const identity = Object.freeze({ workspaceId: context.companyId, projectId: context.companyId,
+    specRevisionId: specification.revisionId,
+    specDigest: createHash("sha256").update(JSON.stringify(specification), "utf8").digest("hex") });
+  const provider = createCurrentBaselineAssuranceProvider({ workspaceId: context.companyId,
+    projectId: context.companyId, sessions: authority.sessions, platform });
+  const result = await createSpecAssuranceConsumer(provider)({ identity,
+    scope: { requirementIds: specification.requirements.map(requirement => requirement.id) },
+    facts: [], packs: [], scenarios: [] });
+
+  await authority.check();
+  const latest = await readDesignBaseline(context.companyId, context.companyId, platform);
+  if (!latest || latest.sequence !== current.sequence || JSON.stringify(latest.revision) !== JSON.stringify(current.revision)) {
+    const stale = { ...result, status: "UNKNOWN" as const, coverageAuthority: "identity-mismatch" as const,
+      sourceEvidence: [] };
+    return { content: "UNKNOWN: the current baseline changed during inspection; refresh before interpreting this result.",
+      data: { projectId: context.companyId, result: stale } as unknown as JsonValue };
+  }
+  return { content: "Read-only specification assurance inspection. UNKNOWN means current coverage/domain authority is unavailable; this result is not approval or execution permission.",
+    data: { projectId: context.companyId, result } as unknown as JsonValue };
+}
+
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
     capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
@@ -597,6 +708,9 @@ export function createBuilderPlatform() {
     { name: READ_DESIGN_SOURCES_TOOL.name, declaration: { displayName: READ_DESIGN_SOURCES_TOOL.displayName,
       description: READ_DESIGN_SOURCES_TOOL.description, parametersSchema: READ_DESIGN_SOURCES_TOOL.parametersSchema },
     handler: (params, context, platform) => readLeadDesignSources(params, context, platform) },
+    { name: READ_CONSULTATION_ANALYSIS_TOOL.name, declaration: { displayName: READ_CONSULTATION_ANALYSIS_TOOL.displayName,
+      description: READ_CONSULTATION_ANALYSIS_TOOL.description, parametersSchema: READ_CONSULTATION_ANALYSIS_TOOL.parametersSchema },
+    handler: (params, context, platform) => readConsultationAnalysis(params, context, platform) },
     { name: READ_LEAD_MEMORY_TOOL.name, declaration: { displayName: READ_LEAD_MEMORY_TOOL.displayName,
       description: READ_LEAD_MEMORY_TOOL.description, parametersSchema: READ_LEAD_MEMORY_TOOL.parametersSchema },
     handler: (params, context, platform) => readSharedLeadMemory(params, context, platform) },
@@ -618,6 +732,27 @@ export function createBuilderPlatform() {
     { name: READ_DESIGN_BASELINE_TOOL.name, declaration: { displayName: READ_DESIGN_BASELINE_TOOL.displayName,
       description: READ_DESIGN_BASELINE_TOOL.description, parametersSchema: READ_DESIGN_BASELINE_TOOL.parametersSchema },
       handler: (params, context, platform) => readLeadBaseline(params, context, platform) },
+    { name: SPEC_ASSURANCE_PACK_PROPOSAL_TOOL.name, declaration: { displayName: SPEC_ASSURANCE_PACK_PROPOSAL_TOOL.displayName,
+      description: SPEC_ASSURANCE_PACK_PROPOSAL_TOOL.description, parametersSchema: SPEC_ASSURANCE_PACK_PROPOSAL_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, () => proposeSpecAssurancePack(params, context, platform)) },
+    { name: READ_SPEC_ASSURANCE_PACK_TOOL.name, declaration: { displayName: READ_SPEC_ASSURANCE_PACK_TOOL.displayName,
+      description: READ_SPEC_ASSURANCE_PACK_TOOL.description, parametersSchema: READ_SPEC_ASSURANCE_PACK_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => {
+        const input = exactToolRecord(params, ["projectId", "packId"]);
+        const authority = await resolveLeadToolAuthority(parseLeadToolContext(context), platform);
+        if (authority.channel !== "main" || input.projectId !== context.companyId || typeof input.packId !== "string") {
+          throw new Error("A current Main session and authenticated Workspace project are required.");
+        }
+        const current = await createSpecAssurancePackStore(context.companyId, context.companyId, platform.state).current(input.packId);
+        const baseline = await readDesignBaseline(context.companyId, context.companyId, platform);
+        await authority.check();
+        return { content: "Proposal only. No approved rule authority, coverage or QA is implied.",
+          data: { current, matchesCurrentBaseline: Boolean(current && baseline && current.revision.baselineRevisionId === baseline.revision.revisionId
+            && current.revision.identity.specDigest === createHash("sha256").update(JSON.stringify(baseline.revision.specification)).digest("hex")) } as unknown as JsonValue };
+      }) },
+    { name: INSPECT_SPEC_ASSURANCE_TOOL.name, declaration: { displayName: INSPECT_SPEC_ASSURANCE_TOOL.displayName,
+      description: INSPECT_SPEC_ASSURANCE_TOOL.description, parametersSchema: INSPECT_SPEC_ASSURANCE_TOOL.parametersSchema },
+      handler: (params, context, platform) => inspectSpecAssurance(params, context, platform) },
     { name: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.name, declaration: { displayName: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.displayName,
       description: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.description, parametersSchema: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.parametersSchema },
       handler: (params, context, platform) => publishLeadTechnologyDecisions(params, context, platform) },
@@ -699,6 +834,23 @@ export function createBuilderPlatform() {
       const current = await readDesignBaseline(companyId, params.projectId, platform);
       return current && { workspaceId: companyId, projectId: params.projectId, sequence: current.sequence,
         baseline: current.revision } as unknown as JsonValue;
+    } }, { key: "builder.baseline-document", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      const source = createBaselineBodySource(companyId, companyId, platform.state);
+      const current = await source.current();
+      return current && { workspaceId: companyId, projectId: companyId,
+        read: await source.read(current.revision.documentRevisionId) } as unknown as JsonValue;
+    } }, { key: "builder.consultation-analysis", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      const current = await createConsultationAnalysisStore(companyId, platform.state as typeof platform.state & RevisionState).current();
+      if (!current) return null;
+      const { sources, ...record } = current.revision;
+      return { ...record, sourceCount: sources.length } as unknown as JsonValue;
+    } }, { key: "builder.product-selection", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      const current = await createProductSelectionStore(companyId, companyId,
+        platform.state as typeof platform.state & RevisionState).current();
+      return current && { workspaceId: companyId, projectId: companyId, ...current } as unknown as JsonValue;
     } }, { key: "builder.project-ctos", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
@@ -739,6 +891,12 @@ export function createBuilderPlatform() {
       // Core includes its authorized companyId in action parameters. It is
       // envelope metadata, never a user-selected destination or domain field.
       return importConsultation(context.companyId, userActionInput(params, context), context);
+    } }, { key: "builder.start-consultation-analysis", handler: async (params, context) => {
+      return await startConsultationAnalysis(context.companyId, userActionInput(params, context), context) as unknown as JsonValue;
+    } }, { key: "builder.reconcile-baseline-document", handler: async (params, context) => {
+      const input = exactToolRecord(userActionInput(params, context), ["baselineRevisionId"]);
+      if (typeof input.baselineRevisionId !== "string") throw new TypeError("An exact Baseline revision is required.");
+      return await serialize(context.companyId, () => reconcileBaselineDocument(context.companyId, input.baselineRevisionId as string, context)) as unknown as JsonValue;
     } }, { key: "builder.select-lead-agent", handler: async (params, context) =>
       selectLeadAgent(context.companyId, userActionInput(params, context), context) },
     { key: "builder.prepare-lead-sessions", handler: async (params, context) =>
@@ -750,6 +908,8 @@ export function createBuilderPlatform() {
     { key: "builder.cancel-lead-message", handler: async (params, context) =>
       cancelLeadMessage(context.companyId, userActionInput(params, context), context) },
     { key: "builder.resume-prepared-lead-message", handler: async (params, context) =>
-      resumePreparedLeadMessage(context.companyId, userActionInput(params, context), context) }],
+      resumePreparedLeadMessage(context.companyId, userActionInput(params, context), context) },
+    { key: "builder.save-product-selection", handler: async (params, context) =>
+      await saveProductSelectionAction(params, context) as unknown as JsonValue }],
   });
 }

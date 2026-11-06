@@ -2,7 +2,7 @@ import type { JsonValue, SpsPlatformInvocationContext, SpsAgentSessionRunResult 
 import type { BuilderLeadSessions, LeadChannel } from "./domain/model.ts";
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import { parseQuestionContext, type QuestionContext } from "./domain/question-context.ts";
-import { assertSessionExecutionPolicySupport, LEAD_SESSION_EXECUTION_POLICY, type SessionExecutionPolicy } from "./session-execution-policy.ts";
+import { assertSessionExecutionPolicySupport, policyForLeadChannel, type SessionExecutionPolicy } from "./session-execution-policy.ts";
 import { PROTECTED_SEND_UNAVAILABLE } from "./lead-send-feedback.ts";
 
 type Scope = { workspaceId: string; selectionRevision: number; agentId: string; sessionId: string; channel: LeadChannel };
@@ -14,6 +14,7 @@ export type LeadTurn = Scope & {
   cancellationRequested: boolean; termination: "not_applicable" | "pending" | "confirmed";
   questionContext?: QuestionContext;
   executionPolicy?: SessionExecutionPolicy;
+  inputKind?: "user" | "analysis-request";
 };
 type Head = Scope & { schemaVersion: 1; totalTurns: number; lastRequestId: string | null; activeRequestId: string | null };
 export type LeadConversationActivity = Pick<LeadTurn, "requestId" | "state" | "runId" | "cancellationRequested" | "termination">;
@@ -78,10 +79,12 @@ function parseHead(value: unknown, scope: Scope): Head {
   return { ...scope, schemaVersion: 1, totalTurns: row.totalTurns as number, lastRequestId, activeRequestId };
 }
 function parseTurn(value: unknown, scope: Scope): LeadTurn {
-  const row = record(value, TURN_KEYS, ["questionContext", "executionPolicy"]); matches(row, scope);
+  const row = record(value, TURN_KEYS, ["questionContext", "executionPolicy", "inputKind"]); matches(row, scope);
   const questionContext = Object.hasOwn(row, "questionContext") ? parseQuestionContext(row.questionContext) : undefined;
   const executionPolicy = Object.hasOwn(row, "executionPolicy") ? parseStoredPolicy(row.executionPolicy) : undefined;
   if (questionContext && scope.channel !== "decisions") throw error();
+  if (Object.hasOwn(row, "inputKind") && row.inputKind !== "user" && row.inputKind !== "analysis-request") throw error();
+  if (row.inputKind === "analysis-request" && (scope.channel !== "main" || questionContext)) throw error();
   const requestId = id(row.requestId), previousRequestId = nullableId(row.previousRequestId), runId = nullableId(row.runId);
   if (requestId === previousRequestId || !Number.isSafeInteger(row.sequence) || (row.sequence as number) < 0
     || (row.sequence as number) >= MAX_TURNS || (row.sequence === 0) !== (previousRequestId === null)
@@ -97,7 +100,8 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
     text: text(row.text, MAX_TEXT_BYTES), createdAt: row.createdAt, state: row.state as TurnState, runId,
     answer: row.answer === null ? null : text(row.answer, 65_536), outputState: row.outputState as LeadTurn["outputState"],
     cancellationRequested: row.cancellationRequested, termination: row.termination as LeadTurn["termination"],
-    ...(questionContext ? { questionContext } : {}), ...(executionPolicy ? { executionPolicy } : {}) };
+    ...(questionContext ? { questionContext } : {}), ...(executionPolicy ? { executionPolicy } : {}),
+    ...(row.inputKind ? { inputKind: row.inputKind as LeadTurn["inputKind"] } : {}) };
 }
 function parseStoredPolicy(value: unknown): SessionExecutionPolicy {
   const row = record(value, ["mode", "toolNames"]);
@@ -138,10 +142,11 @@ async function loadTurn(platform: SpsPlatformInvocationContext, scope: Scope, re
 export async function readLeadUserTurn(requestId: string, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
   const raw = await platform.state.get({ scopeKind: "company", scopeId: sessions.workspaceId,
     namespace: "sonpark.my-builder", stateKey: `lead-chat.turn.v1.${id(requestId)}` });
-  const row = record(raw, TURN_KEYS, ["questionContext", "executionPolicy"]);
+  const row = record(raw, TURN_KEYS, ["questionContext", "executionPolicy", "inputKind"]);
   if (row.channel !== "main" && row.channel !== "decisions") throw error();
   const scope = scopeFor(sessions, row.channel);
   const turn = parseTurn(raw, scope);
+  if (turn.inputKind === "analysis-request") throw new Error("A system analysis request is not user-provided source or approval evidence.");
   if (turn.requestId !== requestId) throw error();
   return Object.freeze(turn);
 }
@@ -272,8 +277,13 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       await check();
       return { refreshed: true };
     },
-    async send(channel: LeadChannel, requestId: string, value: string, questionValue?: QuestionContext) {
+    async send(channel: LeadChannel, requestId: string, value: string, questionValue?: QuestionContext,
+      inputKind: "user" | "analysis-request" = "user") {
       const scope = scopeFor(sessions, channel);
+      if (inputKind !== "user" && inputKind !== "analysis-request" || inputKind === "analysis-request" && channel !== "main") throw error();
+      if (channel === "cto-inbox" || channel === "integration-review") {
+        throw new Error("This Lead context is internal and cannot be started by a user chat message.");
+      }
       const questionContext = questionValue === undefined ? undefined : parseQuestionContext(questionValue);
       if (questionContext && channel !== "decisions") throw error();
       id(requestId); text(value, MAX_TEXT_BYTES);
@@ -285,6 +295,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       if (existing !== null) {
         turn = parseTurn(existing, scope);
         if (turn.requestId !== requestId || turn.text !== value
+          || (turn.inputKind ?? "user") !== inputKind
           || JSON.stringify(turn.questionContext) !== JSON.stringify(questionContext)) throw error();
         if (turn.state !== "prepared") {
           if (head.lastRequestId !== requestId && turn.sequence >= head.totalTurns) throw error();
@@ -312,7 +323,8 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
           previousRequestId: head.lastRequestId, sequence: head.totalTurns, text: value, createdAt: new Date().toISOString(),
           state: "prepared", runId: null, answer: null, outputState: "not_ready",
           cancellationRequested: false, termination: "not_applicable",
-          executionPolicy: LEAD_SESSION_EXECUTION_POLICY,
+          inputKind,
+          executionPolicy: policyForLeadChannel(channel),
           ...(questionContext ? { questionContext } : {}) }, check);
       }
       if (head.lastRequestId !== requestId) {
@@ -361,7 +373,7 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       if (head.activeRequestId !== id(requestId)) throw error();
       const turn = await loadTurn(platform, scope, requestId);
       if (turn.state !== "prepared") throw error();
-      return this.send(channel, requestId, turn.text, turn.questionContext);
+      return this.send(channel, requestId, turn.text, turn.questionContext, turn.inputKind ?? "user");
     },
   };
 }

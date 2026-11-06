@@ -1,6 +1,6 @@
 import type { BuilderLeadSessions } from "./model.ts";
 
-export const LEAD_CHANNELS = ["main", "cto-inbox", "decisions"] as const;
+export const LEAD_CHANNELS = ["main", "ui-design", "background", "cto-inbox", "decisions", "integration-review"] as const;
 const UUID = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
 
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {

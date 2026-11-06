@@ -6,7 +6,7 @@ import { parseLeadSessions } from "./domain/lead-sessions.ts";
 import { createDesignBaselineStore, readDesignBaseline } from "./design-baseline-tools.ts";
 import { createTechnologyDecisionStore, readTechnologyDecisions } from "./technology-decision-tools.ts";
 import { readProjectCtos } from "./project-cto-tools.ts";
-import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
+import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 import { resolveCtoDeliveryRun, workstreamInstructionDigest } from "./cto-delivery-store.ts";
 
@@ -43,6 +43,7 @@ export async function publishWorkstream(params: unknown, runContext: unknown, pl
   const spec = parseWorkstreamSpec(input.spec, projectId), change = parseWorkstreamChange(input.change);
   const context = parseLeadToolContext(runContext);
   const authority = await resolveLeadToolAuthority(context, platform);
+  requireLeadFormalPublicationAuthority(authority);
   const current = await readWorkstreams(context.companyId, projectId, platform);
   if ((current?.revision.revisionId ?? null) !== expectedBaseRevisionId) return conflict(current?.revision.revisionId ?? null);
   const old = current?.revision.workstreams.find(record => record.spec.id === spec.id);

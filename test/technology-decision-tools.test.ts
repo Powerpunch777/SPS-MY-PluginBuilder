@@ -18,8 +18,11 @@ const WORKER = "55555555-5555-4555-8555-555555555555";
 const RUN = "66666666-6666-4666-8666-666666666666";
 const SESSIONS = {
   main: "88888888-8888-4888-8888-888888888888",
+  "ui-design": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  background: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   "cto-inbox": "99999999-9999-4999-8999-999999999999",
   decisions: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "integration-review": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
 };
 const NAMESPACE = "sonpark.my-builder";
 type Expected = { exists: false } | { exists: true; value: JsonValue };
@@ -143,7 +146,8 @@ function fixture(options: { agentId?: string; sessionId?: string; cas?: boolean 
       values.set(scopedKey("lead-agent.v1"), { workspaceId: WORKSPACE, revision: 2, selectedAgentId: WORKER });
       values.set(scopedKey("lead-sessions.v1.2"), {
         workspaceId: WORKSPACE, selectionRevision: 2, agentId: WORKER,
-        sessions: { main: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "cto-inbox": null, decisions: null },
+        sessions: { main: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "ui-design": null, background: null,
+          "cto-inbox": null, decisions: null, "integration-review": null },
       });
     },
   };
@@ -216,7 +220,7 @@ test("rejects a Worker and mismatched or unprepared Lead sessions before publica
   const f = await prepared();
   f.values.set(f.scopedKey("lead-sessions.v1.1"), {
     workspaceId: WORKSPACE, selectionRevision: 1, agentId: LEAD,
-    sessions: { ...SESSIONS, main: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
+    sessions: { ...SESSIONS, main: "abababab-abab-4bab-8bab-abababababab" },
   });
   const writes = f.writes;
   await assert.rejects(publishTechnologyDecisions(params(), f.context, f.platform), /prepared current Lead session/);

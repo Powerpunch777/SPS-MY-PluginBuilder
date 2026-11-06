@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Form
 import {
   Activity, AlertCircle, ArrowUp, Bot, Check, ChevronLeft, ChevronRight, CircleHelp, FileText,
   GitBranch, GitFork, LoaderCircle, MessageSquare, Network, PanelRight, RefreshCw, Send,
-  Server, Settings, Upload, X,
+  Package, Server, Settings, Upload, X,
 } from "lucide-react";
 import { Background, Controls, MarkerType, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import flowCss from "@xyflow/react/dist/style.css";
@@ -19,15 +19,30 @@ import type {
 
 const NAV_ITEMS: Array<{ id: BuilderView; label: string; icon: typeof MessageSquare }> = [
   { id: "lead", label: "Lead 대화", icon: MessageSquare },
+  { id: "ui-design", label: "UI 설계", icon: FileText },
+  { id: "background", label: "조사·준비", icon: Bot },
+  { id: "question-intake", label: "CTO 질문 접수", icon: CircleHelp },
+  { id: "decisions", label: "미결정사항", icon: CircleHelp },
+  { id: "integration-review", label: "최종 검토·승인", icon: Check },
+  { id: "product-selection", label: "상품 선택", icon: Package },
   { id: "architecture", label: "설계 시각화", icon: GitBranch },
   { id: "organization", label: "조직도", icon: Network },
   { id: "documents", label: "설계 문서", icon: FileText },
-  { id: "decisions", label: "미결정사항", icon: CircleHelp },
   { id: "system", label: "시스템", icon: Server },
 ];
 
+const LEAD_VIEW_CHANNELS: Partial<Record<BuilderView, LeadChannel>> = {
+  lead: "main", "ui-design": "ui-design", background: "background", "question-intake": "cto-inbox",
+  decisions: "decisions", "integration-review": "integration-review",
+};
+
 const VIEW_TITLES: Record<BuilderView, { title: string; description: string }> = {
   lead: { title: "Lead 대화", description: "요구사항과 설계를 Lead와 함께 정리합니다." },
+  "ui-design": { title: "UI 설계", description: "승인된 설계에 맞춰 UI를 검토합니다." },
+  background: { title: "조사·준비", description: "기술 조사와 작업 준비를 진행합니다." },
+  "question-intake": { title: "CTO 질문 접수", description: "CTO 질문 접수 기록입니다." },
+  "integration-review": { title: "최종 검토·승인", description: "통합 결과와 최종 승인 요청을 검토합니다." },
+  "product-selection": { title: "상품 선택", description: "프로젝트의 상품 선택 초안입니다." },
   architecture: { title: "설계 시각화", description: "현재 Workspace의 설계 Graph를 조회합니다." },
   organization: { title: "조직도", description: "Workspace에 기록된 Lead와 실행 중인 작업 관계입니다." },
   documents: { title: "설계 문서", description: "Lead가 기록한 Workspace 문서와 Revision입니다." },
@@ -179,7 +194,8 @@ function conversationMessages(props: BuilderShellProps, channel: LeadChannel): B
   const page = props.conversation;
   if (!page || page.channel !== channel) return [];
   return [...page.turns].reverse().flatMap(turn => [
-    { id: `${turn.requestId}:user`, channel, actorId: null, role: "user" as const, text: turn.text, createdAt: turn.createdAt, runId: turn.runId },
+    { id: `${turn.requestId}:user`, channel, actorId: null, role: turn.inputKind === "analysis-request" ? "system" as const : "user" as const,
+      text: turn.inputKind === "analysis-request" ? "상담 분석 요청" : turn.text, createdAt: turn.createdAt, runId: turn.runId },
     ...(turn.answer === null ? [] : [{ id: `${turn.requestId}:assistant`, channel, actorId: null, role: "assistant" as const,
       text: turn.answer, createdAt: turn.createdAt, runId: turn.runId }]),
     ...(turn.state === "succeeded" && turn.answer === null ? [{ id: `${turn.requestId}:unavailable`, channel, actorId: null,
@@ -265,29 +281,32 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
   onOpenArchitecture(): void;
 }) {
   const [importOpen, setImportOpen] = useState(false);
-  const readOnly = Boolean(actor);
-  const channel: LeadChannel = actor ? "cto-inbox" : "main";
+  const channel: LeadChannel = actor ? "cto-inbox" : props.conversationChannel ?? "main";
+  const readOnly = Boolean(actor) || channel === "cto-inbox" || channel === "integration-review";
+  const title = channel === "main" ? "Lead와 대화" : channel === "ui-design" ? "UI 설계"
+    : channel === "background" ? "조사·준비" : channel === "integration-review" ? "최종 검토·승인" : "CTO 질문 접수";
   const enabled = !readOnly && Boolean(props.onSendMessage)
     && (props.conversation === undefined ? props.snapshot.integrations.ai === "ready" : props.conversation?.channel === channel && !props.conversation.active);
   return <div className={`builder-message-layout${drawerOpen ? " is-drawer-open" : ""}`}>
     <button aria-label="작업 기록 닫기" className="builder-drawer-backdrop" onClick={onDrawerClose} type="button" />
     <section aria-label={actor ? `${actor.label} 세션` : "Lead 대화"} className="builder-message-main">
       <div className="builder-chat-context">
-        <div className="builder-chat-heading"><h1>{actor?.label ?? "Lead와 대화"}</h1>
+        <div className="builder-chat-heading"><h1>{actor?.label ?? title}</h1>
           <p>{actor ? `${ACTOR_STATUS[actor.status]} · 읽기 전용 세션` : "전체 설계와 기능 통합을 담당하는 AI"}</p></div>
         <div className="builder-header-actions">
           {actions}<span className="builder-agent-dot">{actor ? actorInitial(actor) : "LEAD"}</span>
           <span className={`builder-lead-status${enabled ? " is-ready" : ""}`}>{actor ? "읽기 전용" : enabled ? "전송 준비됨" : props.conversation?.active ? "실행 확인 중" : "미연결"}</span>
-          {!readOnly && props.onImportConsultation && <button aria-expanded={importOpen} aria-label="상담 텍스트 가져오기" className="builder-icon-button" onClick={() => setImportOpen(open => !open)} type="button"><Upload /><span className="builder-refresh-label">상담 가져오기</span></button>}
+          {!readOnly && channel === "main" && props.onImportConsultation && <button aria-expanded={importOpen} aria-label="상담 텍스트 가져오기" className="builder-icon-button" onClick={() => setImportOpen(open => !open)} type="button"><Upload /><span className="builder-refresh-label">상담 가져오기</span></button>}
           <button aria-label="작업 기록 열기" className="builder-icon-button" onClick={onDrawerToggle} type="button"><PanelRight /><span className="builder-refresh-label">작업 기록</span></button>
         </div>
       </div>
       {props.loading && <div className="builder-status-strip"><LoaderCircle /> Workspace 상태를 불러오는 중입니다.</div>}
       {props.error && <div className="builder-status-strip is-error" role="alert"><AlertCircle /> Workspace 상태를 불러오지 못했습니다.</div>}
       {!readOnly && <ConversationControls channel={channel} props={props} />}
+      {!readOnly && channel === "main" && props.consultationAnalysis}
       <MessageList actor={actor} messages={messages} followLatest={Boolean(actor) || !props.conversationHasNewer} />
       {readOnly ? <div className="builder-composer-note" style={{ padding: 13 }}>이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.</div> : <>
-        {importOpen && props.onImportConsultation && <ConsultationImport onImport={props.onImportConsultation} />}
+        {importOpen && channel === "main" && props.onImportConsultation && <ConsultationImport onImport={props.onImportConsultation} />}
         <MessageComposer channel={channel} enabled={enabled} onSend={props.onSendMessage} />
       </>}
     </section>
@@ -565,7 +584,7 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
     </form>{status && <p className="builder-composer-note" role="status">{status}</p>}</section>;
 }
 
-export function BuilderShell(props: BuilderShellProps) {
+export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode }) {
   const [view, setView] = useState<BuilderView>("lead");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -575,13 +594,15 @@ export function BuilderShell(props: BuilderShellProps) {
   const activeActor = actorId ? props.snapshot.actors.find(actor => actor.id === actorId) ?? null : null;
   const current = VIEW_TITLES[view];
   const leadIds = new Set(props.snapshot.actors.filter(actor => actor.role === "lead").map(actor => actor.id));
-  const mainMessages = [...props.snapshot.messages.filter(message => message.channel === "main"
-    && (message.actorId === null || leadIds.has(message.actorId))), ...conversationMessages(props, "main")];
+  const shownChannel = LEAD_VIEW_CHANNELS[view] ?? "main";
+  const mainMessages = [...props.snapshot.messages.filter(message => message.channel === shownChannel
+    && (message.actorId === null || leadIds.has(message.actorId))), ...conversationMessages(props, shownChannel)];
   const openQuestionCount = props.snapshot.questions.filter(question => question.status === "open").length;
 
   function selectView(next: BuilderView) {
     setView(next); setActorId(null); setDrawerOpen(false);
-    if (next === "lead" || next === "decisions") props.onLeadChannelChange?.(next === "lead" ? "main" : "decisions");
+    const channel = LEAD_VIEW_CHANNELS[next];
+    if (channel) props.onLeadChannelChange?.(channel);
   }
   function openActor(id: string) {
     if (props.snapshot.actors.find(actor => actor.id === id)?.role === "lead") selectView("lead");
@@ -597,7 +618,8 @@ export function BuilderShell(props: BuilderShellProps) {
 
   let content: ReactNode;
   if (activeActor) content = <ActorTranscriptView actions={headerActions} actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
-  else if (view === "lead") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
+  else if (LEAD_VIEW_CHANNELS[view] && view !== "decisions") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={{ ...props, conversationChannel: shownChannel }} />;
+  else if (view === "product-selection") content = props.productSelection;
   else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
   else if (view === "organization") content = <OrganizationView onActor={openActor} props={props} />;
   else if (view === "documents") content = <DocumentsView props={props} />;
@@ -610,12 +632,15 @@ export function BuilderShell(props: BuilderShellProps) {
       <aside aria-label="SPS Builder 탐색" className="builder-sidebar">
         <div className="builder-brand"><span className="builder-brand-mark">SPS</span><div className="builder-brand-copy"><strong>SPS Builder</strong><small>PRIVATE SOLUTION STUDIO</small></div></div>
         <div className="builder-workspace"><small>SPS CORE WORKSPACE</small><strong title={props.workspaceLabel}>{props.workspaceLabel || props.snapshot.workspaceId}</strong></div>
-        <div className="builder-nav-label">작업 공간</div>
         <nav aria-label="주 메뉴" className="builder-nav">
-          {NAV_ITEMS.map(item => { const Icon = item.icon; return <button aria-label={item.label} title={item.label} aria-current={view === item.id && !activeActor ? "page" : undefined}
-            className={`builder-nav-item${view === item.id && !activeActor ? " is-active" : ""}`} key={item.id} onClick={() => selectView(item.id)} type="button">
-            <Icon aria-hidden="true" /><span>{item.label}</span>{item.id === "decisions" && openQuestionCount > 0 && <small className="builder-nav-count">{openQuestionCount}</small>}
-          </button>; })}
+          {[true, false].map(isLead => <div className="builder-nav-group" role="group" aria-label={isLead ? "Lead" : "작업 공간"} key={String(isLead)}>
+            <div className="builder-nav-label">{isLead ? "Lead" : "작업 공간"}</div>
+            {NAV_ITEMS.filter(item => Boolean(LEAD_VIEW_CHANNELS[item.id]) === isLead
+              && (item.id !== "product-selection" || props.productSelection != null)).map(item => { const Icon = item.icon; return <button aria-label={item.label} title={item.label} aria-current={view === item.id && !activeActor ? "page" : undefined}
+              className={`builder-nav-item${view === item.id && !activeActor ? " is-active" : ""}`} key={item.id} onClick={() => selectView(item.id)} type="button">
+              <Icon aria-hidden="true" /><span>{item.label}</span>{item.id === "decisions" && openQuestionCount > 0 && <small className="builder-nav-count">{openQuestionCount}</small>}
+            </button>; })}
+          </div>)}
         </nav>
         <div className="builder-sidebar-rule" />
         <div className="builder-nav-label">활성 AI · Lead 제외</div>
@@ -642,7 +667,7 @@ export function BuilderShell(props: BuilderShellProps) {
       <main className="builder-main">
         <DesignDraftSummary draft={props.designDraft ?? null} loading={props.designDraftLoading ?? false} error={props.designDraftError ?? null}
           resolvedQuestionIds={props.designDraftResolvedQuestionIds ?? []} />
-        {view !== "lead" && view !== "decisions" && !activeActor
+        {!LEAD_VIEW_CHANNELS[view] && !activeActor
           ? <div className="builder-view-body"><div className="builder-page-actions"><h1>{current.title}</h1>{headerActions}</div>{content}</div>
           : <div className="builder-view-body">{content}</div>}
       </main>

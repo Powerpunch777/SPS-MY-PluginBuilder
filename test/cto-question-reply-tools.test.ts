@@ -52,7 +52,7 @@ async function setup(disposition: "existing-specification" | "delegated-choice" 
 
   const inboxSession = randomUUID();
   f.values.set(mapKey(key("lead-sessions.v1.1")), { workspaceId: W, selectionRevision: 1, agentId: A,
-    sessions: { main: S, decisions: null, "cto-inbox": inboxSession } });
+    sessions: { main: S, "ui-design": null, background: null, decisions: null, "cto-inbox": inboxSession, "integration-review": null } });
   const sessions = f.platform.agents.sessions as Record<string, (...args: any[]) => Promise<any>>;
   const original = { describePolicySupport: sessions.describePolicySupport, getRequest: sessions.getRequest,
     getRun: sessions.getRun, sendMessage: sessions.sendMessage };
