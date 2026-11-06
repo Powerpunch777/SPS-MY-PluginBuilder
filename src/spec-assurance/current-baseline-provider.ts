@@ -1,16 +1,60 @@
 import { createHash } from "node:crypto";
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { createDesignBaselineStore } from "../design-baseline-tools.ts";
+import { firstDesignReviewApprovalRevision, type DesignBaseline } from "../domain/design-baseline.ts";
+import type { DesignDraft } from "../domain/design-drafts.ts";
 import type { BuilderLeadSessions } from "../domain/model.ts";
+import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { readLeadUserSource, readLeadUserTurn } from "../lead-conversations.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
 import type { CoverageMaterial, CoverageScope } from "../spec-coverage/evaluator.ts";
-import type { AssuranceCoverageProvider, AssuranceCoverageQuery, SpecAssuranceAuthoritySnapshot } from "./evaluator.ts";
+import { readFirstDesignReviewRevision } from "./review-first-design.ts";
+import type { AssuranceCoverageProvider, AssuranceCoverageQuery, DomainPack, SpecAssuranceAuthoritySnapshot } from "./evaluator.ts";
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+function matchesPublishedDraft(draft: DesignDraft, baseline: DesignBaseline): boolean {
+  const specContent = (spec: DesignDraft["specification"]) =>
+    [spec.productTier, spec.requirements, spec.targets, spec.dataPolicyRef];
+  const graphContent = (graph: DesignDraft["graph"]) => [graph.entities, graph.relations, graph.viewLayoutRef];
+  return JSON.stringify(specContent(draft.specification)) === JSON.stringify(specContent(baseline.specification))
+    && JSON.stringify(graphContent(draft.graph)) === JSON.stringify(graphContent(baseline.graph));
+}
+
+async function readFirstReviewSource(sourceId: string, workspaceId: string, sessions: BuilderLeadSessions,
+  platform: SpsPlatformInvocationContext) {
+  if (sourceId.startsWith("lead-turn:")) {
+    const source = await readLeadUserSource(sourceId.slice("lead-turn:".length), sessions, platform);
+    if (source.id !== sourceId) throw new Error("Initial review source ID does not match the authenticated original turn.");
+    return source;
+  }
+  if (sourceId.startsWith("consultation-")) {
+    const raw = await platform.state.get({ scopeKind: "company", scopeId: workspaceId,
+      namespace: "sonpark.my-builder", stateKey: "snapshot.v1" });
+    const snapshot = parseBuilderSnapshot(raw ?? createEmptyBuilderSnapshot(workspaceId), workspaceId);
+    const message = snapshot.messages.find(item => item.id === sourceId && item.role === "user"
+      && item.channel === "main" && item.actorId === null);
+    if (!message || !message.text.trim()) throw new Error("Original initial-design consultation source is unavailable.");
+    return Object.freeze({ id: message.id, text: message.text });
+  }
+  throw new Error("Initial review contains an unsupported original source identity.");
+}
+
+function rebindApprovedPack(bundle: NonNullable<Awaited<ReturnType<typeof readFirstDesignReviewRevision>>>,
+  identity: DomainPack["identity"]): DomainPack {
+  const pack = bundle.pack;
+  const draftIdentityDigest = sha256(JSON.stringify(bundle.draft.specification));
+  if (bundle.status !== "APPROVED" || !bundle.approval
+    || bundle.approval.attestedBundleRevisionId === bundle.revisionId
+    || bundle.workspaceId !== identity.workspaceId || bundle.projectId !== identity.projectId
+    || pack.identity.specRevisionId !== bundle.draft.specification.revisionId || pack.identity.specDigest !== draftIdentityDigest) {
+    throw new Error("Approved first-design binding does not match its exact immutable bundle, pack, or approval pins.");
+  }
+  return Object.freeze({ ...pack, identity });
+}
 /**
- * Bind assurance reads to the current Builder baseline and its actual Lead user turn.
- * This verifies record identity and source bytes only. It does not establish per-requirement
+ * Bind assurance reads to the current Builder Baseline and its actual approval source.
+ * This verifies the approved relations and source bytes. It does not establish per-requirement
  * provenance or supply a Domain Pack/rule authority; those stay absent and coverage stays UNKNOWN.
  * Construct this in server-owned code with current Host/session records, never from client data.
  */
@@ -47,9 +91,84 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
     });
 
     const sourceRef = baseline.userDecision.sourceId;
-    if (specification.approvalEvidenceRef !== sourceRef || !sourceRef.startsWith("lead-turn:")) {
+    if (specification.approvalEvidenceRef !== sourceRef) {
       throw new Error("Current baseline source reference is unsupported.");
     }
+    const firstReviewRevisionId = firstDesignReviewApprovalRevision(sourceRef);
+    if (firstReviewRevisionId !== null) {
+      const reviewBundle = await readFirstDesignReviewRevision(workspaceId, projectId, firstReviewRevisionId,
+        platform.state as unknown as RevisionState);
+      const bundleDigest = reviewBundle ? sha256(JSON.stringify(reviewBundle)) : null;
+      if (!reviewBundle || reviewBundle.revisionId !== firstReviewRevisionId || reviewBundle.status !== "APPROVED"
+        || !reviewBundle.approval || reviewBundle.approval.attestedBundleRevisionId === reviewBundle.revisionId
+        || reviewBundle.workspaceId !== workspaceId || reviewBundle.projectId !== projectId
+        || baseline.sourceDraftRevisionId !== reviewBundle.draftRevisionId
+        || baseline.userDecision.sourceSha256 !== bundleDigest
+        || !matchesPublishedDraft(reviewBundle.draft, baseline)) {
+        throw new Error("Current Baseline does not match the exact approved first-design bundle, digest, Spec or Graph.");
+      }
+
+      const approvedPack = rebindApprovedPack(reviewBundle, identity);
+      const pinsByRequirement = new Map<string, typeof reviewBundle.sourcePins>();
+      for (const pin of reviewBundle.sourcePins) {
+        const requirement = requirementById.get(pin.requirementId);
+        if (!requirement || pin.acId !== null && !requirement.acceptanceCriteriaIds.includes(pin.acId)) {
+          throw new Error("Approved first-design source relationship does not match the current Baseline requirement/AC IDs.");
+        }
+        pinsByRequirement.set(requirement.id, [...(pinsByRequirement.get(requirement.id) ?? []), pin]);
+      }
+      if (reviewBundle.sourcePins.length === 0 || reviewBundle.draft.sourceIds.some(sourceId =>
+        !reviewBundle.sourcePins.some(pin => pin.sourceId === sourceId))) {
+        throw new Error("The approved first-design bundle does not pin every original DesignDraft source.");
+      }
+      const sourceIds = [...new Set(reviewBundle.draft.sourceIds)];
+      const sourceById = new Map<string, Readonly<{ id: string; text: string; digest: string }>>();
+      for (const sourceId of sourceIds) {
+        const source = await readFirstReviewSource(sourceId, workspaceId, sessions, platform);
+        const digest = sha256(source.text);
+        const pins = reviewBundle.sourcePins.filter(pin => pin.sourceId === sourceId);
+        if (pins.some(pin => pin.sourceDigest !== digest)) throw new Error("Original first-design source bytes do not match the approved source pins.");
+        sourceById.set(sourceId, Object.freeze({ id: sourceId, text: source.text, digest }));
+      }
+      const sourceRefs = Object.freeze(scopedRequirements.flatMap(requirement =>
+        (pinsByRequirement.get(requirement.id) ?? []).map(pin => Object.freeze({ requirementId: pin.requirementId,
+          acId: pin.acId, sourceId: pin.sourceId, sourceDigest: pin.sourceDigest, revisionId: specification.revisionId }))));
+      const sourceEntities = Object.freeze([...sourceById.values()].map(source => Object.freeze({ kind: "source" as const,
+        id: source.id, bodyDigest: source.digest, relationIds: Object.freeze([...new Set(sourceRefs.filter(ref => ref.sourceId === source.id)
+          .flatMap(ref => [ref.requirementId, ...(ref.acId === null ? [] : [ref.acId])]))].sort()) })));
+
+      const latest = await store.current();
+      const latestBundle = await readFirstDesignReviewRevision(workspaceId, projectId, firstReviewRevisionId,
+        platform.state as unknown as RevisionState);
+      for (const sourceId of sourceIds) {
+        const reread = await readFirstReviewSource(sourceId, workspaceId, sessions, platform);
+        if (reread.id !== sourceId || sha256(reread.text) !== sourceById.get(sourceId)?.digest) {
+          throw new Error("Original first-design source changed during assurance lookup.");
+        }
+      }
+      if (!latest || latest.sequence !== first.sequence || JSON.stringify(latest.revision) !== JSON.stringify(baseline)
+        || !latestBundle || latestBundle.revisionId !== reviewBundle.revisionId
+        || sha256(JSON.stringify(latestBundle)) !== bundleDigest) {
+        throw new Error("Current Baseline or first-design approval binding changed during assurance lookup.");
+      }
+
+      const materials: CoverageMaterial[] = [
+        Object.freeze({ kind: "specification", identity, presence: completeRequirementLookup ? "present" : "partial",
+          verification: completeRequirementLookup ? "validated" : "unknown",
+          entities: Object.freeze(scopedRequirements.map(requirement => Object.freeze({ kind: "requirement" as const,
+            id: requirement.id, bodyDigest: sha256(JSON.stringify(requirement)),
+            relationIds: Object.freeze([...requirement.acceptanceCriteriaIds]) }))) }),
+        Object.freeze({ kind: "source", identity, presence: sourceRefs.length > 0 ? "present" : "partial",
+          verification: sourceRefs.length > 0 ? "validated" : "unknown", entities: sourceEntities }),
+      ];
+      return Object.freeze({
+        coverageInput: Object.freeze({ identity, scope, rulesVersion: "not-provided", manifest: null,
+          materials: Object.freeze(materials), sourceRefs, checks: Object.freeze([]) }),
+        domainPacks: Object.freeze([approvedPack]),
+        facts: Object.freeze([]),
+      });
+    }
+    if (!sourceRef.startsWith("lead-turn:")) throw new Error("Current baseline source reference is unsupported.");
     const requestId = sourceRef.slice("lead-turn:".length);
     const sourceTurn = await readLeadUserTurn(requestId, sessions, platform);
     const source = await readLeadUserSource(requestId, sessions, platform);
