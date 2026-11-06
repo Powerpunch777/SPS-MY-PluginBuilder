@@ -586,7 +586,7 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
     </form>{status && <p className="builder-composer-note" role="status">{status}</p>}</section>;
 }
 
-export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode }) {
+export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode; finalReview?: ReactNode }) {
   const [view, setView] = useState<BuilderView>("lead");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -620,6 +620,7 @@ export function BuilderShell(props: BuilderShellProps & { productSelection?: Rea
 
   let content: ReactNode;
   if (activeActor) content = <ActorTranscriptView actions={headerActions} actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
+  else if (view === "integration-review") content = <div className="builder-page">{props.finalReview ?? <p role="status">최종 검토 자료를 확인할 수 없습니다.</p>}</div>;
   else if (LEAD_VIEW_CHANNELS[view] && view !== "decisions") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={{ ...props, conversationChannel: shownChannel }} />;
   else if (view === "product-selection") content = props.productSelection;
   else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
@@ -669,7 +670,7 @@ export function BuilderShell(props: BuilderShellProps & { productSelection?: Rea
       <main className="builder-main">
         <DesignDraftSummary draft={props.designDraft ?? null} loading={props.designDraftLoading ?? false} error={props.designDraftError ?? null}
           resolvedQuestionIds={props.designDraftResolvedQuestionIds ?? []} />
-        {!LEAD_VIEW_CHANNELS[view] && !activeActor
+        {(!LEAD_VIEW_CHANNELS[view] || view === "integration-review") && !activeActor
           ? <div className="builder-view-body"><div className="builder-page-actions"><h1>{current.title}</h1>{headerActions}</div>{content}</div>
           : <div className="builder-view-body">{content}</div>}
       </main>

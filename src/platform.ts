@@ -46,6 +46,9 @@ import { createUiContractStore } from "./ui-contracts/store.ts";
 import { parseUiApproval, parseUiRevision, revisionDigest, type UiApproval, type UiRevision } from "./ui-contracts/domain.ts";
 import { uiReviewApprovalPrompt, uiReviewRequestId } from "./ui-contracts/review-dispatch.ts";
 import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
+import { createFinalPacketStore } from "./delivery-evidence/final-packet.ts";
+import { readFinalReview } from "./delivery-evidence/final-review.ts";
+import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -765,6 +768,14 @@ async function notifyUiApproval(companyId: string, approval: UiApproval,
   });
 }
 
+async function finalReviewView(companyId: string, platform: SpsPlatformInvocationContext) {
+  const binding = await readLeadAgentBinding(companyId, platform);
+  const sessions = await leadSessionsFor(companyId, binding, platform);
+  const view = await readFinalReview(createFinalPacketStore(companyId, companyId, platform.state), sessions, platform);
+  await assertLeadSelection(companyId, binding, platform);
+  return view;
+}
+
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
     capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
@@ -772,6 +783,23 @@ export function createBuilderPlatform() {
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
     handler: (params, context, platform) => readLeadSolution(params, context, platform) },
+    { name: READ_FINAL_REVIEW_TOOL.name, declaration: READ_FINAL_REVIEW_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => {
+        exactToolRecord(params, []);
+        const run = parseLeadToolContext(context);
+        if (run.projectId !== undefined && run.projectId !== run.companyId) throw new Error("Final review requires the authenticated Workspace project.");
+        const authority = await resolveLeadToolAuthority(run, platform);
+        if (authority.channel !== "main" && authority.channel !== "integration-review") throw new Error("Only Main and Integration Review may inspect Final Packet records.");
+        const view = await finalReviewView(run.companyId, platform);
+        await authority.check();
+        return { content: "Final Packet review records only. UNKNOWN is not QA, user approval, or permission to deliver.", data: view as unknown as JsonValue };
+      }) },
+    { name: ATTEST_FINAL_PACKET_TOOL.name, declaration: ATTEST_FINAL_PACKET_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({ content: "Main readiness check only; never a user approval.",
+        data: await createFinalPacketStore(context.companyId, context.companyId, platform.state).attestFinalPacket(params, context, platform) as unknown as JsonValue })) },
+    { name: REQUEST_FINAL_REVIEW_TOOL.name, declaration: REQUEST_FINAL_REVIEW_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({ content: "Integration Review request only; never a user approval.",
+        data: await createFinalPacketStore(context.companyId, context.companyId, platform.state).publishApprovalRequest(params, context, platform) as unknown as JsonValue })) },
     { name: PROPOSE_DESIGN_TOOL.name, declaration: { displayName: PROPOSE_DESIGN_TOOL.displayName,
       description: PROPOSE_DESIGN_TOOL.description, parametersSchema: PROPOSE_DESIGN_TOOL.parametersSchema },
     handler: (params, context, platform) => proposeLeadDesign(params, context, platform) },
@@ -900,7 +928,10 @@ export function createBuilderPlatform() {
     { name: PUBLISH_CTO_TASK_PACKET_TOOL.name, declaration: { displayName: PUBLISH_CTO_TASK_PACKET_TOOL.displayName,
       description: PUBLISH_CTO_TASK_PACKET_TOOL.description, parametersSchema: PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema },
       handler: (params, context, platform) => publishAssignedCtoTaskPacket(params, context, platform) }],
-    data: [{ key: "builder.ui-contracts", handler: async (params, platform) =>
+    data: [{ key: "builder.final-review", handler: async (params, platform) => {
+      const companyId = workspaceId(params.companyId);
+      return serialize(companyId, async () => await finalReviewView(companyId, platform) as unknown as JsonValue);
+    } }, { key: "builder.ui-contracts", handler: async (params, platform) =>
       await readUiContractView(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.workstreams", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
@@ -973,7 +1004,18 @@ export function createBuilderPlatform() {
       const { companyId, renderEnvironment: _renderEnvironment, ...input } = params;
       return await readLeadConversation(workspaceId(companyId), input, platform) as unknown as JsonValue;
     } }],
-    actions: [{ key: "builder.import-consultation", handler: async (params, context) => {
+    actions: [{ key: "builder.final-review-decision", handler: async (params, context) => {
+      const input = exactToolRecord(userActionInput(params, context), ["eventId", "requestId", "expectedBaseRevisionId", "action"], ["reason"]);
+      const companyId = workspaceId(context.companyId);
+      return serialize(companyId, async () => {
+        const view = await finalReviewView(companyId, context);
+        if (view.status !== "ready" || !view.mainReceipt || !view.integrationReviewReceipt || view.decision
+          || !view.approvalRequest || view.approvalRequest.requestId !== input.requestId
+          || view.approvalRequest.eventId !== input.expectedBaseRevisionId) throw new Error("The current final review request and its authenticated run receipts could not be verified.");
+        if (input.action === "approve" && view.approvalEligibility.status !== "eligible") throw new Error("The current Final Packet is not eligible for user approval.");
+        return await createFinalPacketStore(companyId, companyId, context.state).respond(input, context) as unknown as JsonValue;
+      });
+    } }, { key: "builder.import-consultation", handler: async (params, context) => {
       // Core includes its authorized companyId in action parameters. It is
       // envelope metadata, never a user-selected destination or domain field.
       return importConsultation(context.companyId, userActionInput(params, context), context);

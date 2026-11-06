@@ -15,7 +15,7 @@
 | D3 | 실제 Main 원문·현재 Baseline 조회와 Main 전용 팩 제안/조회 연결. 팩 제안은 승인된 규칙·Coverage가 아니며 미등록 권위는 `UNKNOWN` 유지. |
 | UI Contract | 정확한 HTML과 시안·사용자 승인·Main 공식 발행을 연결. 접수 미확인 시 같은 요청 ID를 조회하고 이미 시도한 실행을 재전송하지 않음. 데스크톱/모바일 미리보기 통과. 자동 알림 복구에는 동일 Workspace Worker 경로가 필요하며 실제 AI 승인 흐름은 미검증. |
 | Gate producer/consumer | G4/G6 평가기·CAS 소비 helper와 fixture 테스트가 있음. 현재 Source Inventory·완료 Run/QA 권위 reader 및 등록된 VERIFIED 생산·이벤트 경로는 없음. D3 미등록 Coverage authority와 부분 Baseline inventory는 `UNKNOWN`; VERIFIED/자동 통합 근거가 아님. |
-| Manager / Final Packet | Manager 기본 프로필 helper와 Packet 검증·요청 helper는 있으나 platform/event 실행 등록이 없음. Packet의 authoritative current-evidence reader와 atomic approval writer도 미연결. pinned SDK에서 필요한 owned-agent lifecycle도 확인되지 않아 실행·사용자 승인 미인수. |
+| Manager / Final Packet | Manager 기본 프로필과 이벤트 소비 지원은 실제 자동 실행에 아직 미연결. 최종 검토 페이지, Main G7 확인, Integration Review 요청, 인증 사용자 결정 경로는 역할별로 등록함. 격리 Host에서 패킷 없는 확정을 거부함. 현재 패킷·원문 근거 reader 및 원자 승인 writer가 연결되기 전에는 실제 납품 확정 불가. |
 | Reuse | 분류·권리 후보 구현은 별도 범위에 있음. 실제 자산별 권리 증거·외부 연결·비SPS 산출물은 미검증. |
 
 빌드·타입·테스트는 선언된 SDK commit `c69915a518f0eb600f0ace8238144059911f8d04`와

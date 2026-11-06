@@ -4,6 +4,7 @@ import { BuilderShell } from "./BuilderShell.tsx";
 import { ProductSelectionPanel, type ProductSelectionSave } from "./ProductSelectionPanel.tsx";
 import { ConsultationAnalysisControl } from "./ConsultationAnalysisControl.tsx";
 import { UiContractPanel } from "./UiContractPanel.tsx";
+import { IntegrationReviewPanel, parseIntegrationReviewDTO, type IntegrationReviewDTO } from "./IntegrationReviewPanel.tsx";
 import type { ApproveUiProposalInput } from "./UiHtmlReview.tsx";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
@@ -33,6 +34,9 @@ export function BuilderPage() {
   const uiContracts = usePluginData<unknown>("builder.ui-contracts");
   const approveUiProposal = usePluginAction<ApproveUiProposalInput, unknown>("builder.approve-ui-proposal");
   const retryUiNotification = usePluginAction<{ approvalRevisionId: string }, unknown>("builder.retry-ui-approval-notification");
+  const finalReview = usePluginData<unknown>("builder.final-review");
+  const decideFinalReview = usePluginAction<{ eventId: string; requestId: string; expectedBaseRevisionId: string;
+    action: "approve" | "request-changes" | "hold"; reason?: string }, { status: string }>("builder.final-review-decision");
   const technology = usePluginData<unknown>("builder.technology-decisions", { projectId: context.companyId ?? "" });
   const workstreams = usePluginData<unknown>("builder.workstreams", { projectId: context.companyId ?? "" });
   const memory = usePluginData<unknown>("builder.lead-memory", { projectId: context.companyId ?? "" });
@@ -161,8 +165,33 @@ export function BuilderPage() {
     conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, baselineDocument.refresh, uiContracts.refresh, technology.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
+  let review: IntegrationReviewDTO = { status: "unknown" };
+  let reviewError = Boolean(finalReview.error);
+  if (finalReview.loading) review = { status: "loading" };
+  else if (!reviewError) {
+    try {
+      review = parseIntegrationReviewDTO(finalReview.data);
+      if (review.status === "ready" && (review.snapshot.workspaceId !== workspaceId || review.snapshot.projectId !== workspaceId)) {
+        review = { status: "unknown" }; reviewError = true;
+      }
+    } catch { reviewError = true; }
+  }
+  const reviewRequest = review.status === "ready" && !review.decision ? review.approvalRequest : null;
+  async function respondToFinalReview(action: "approve" | "request-changes" | "hold", reason?: string) {
+    if (!reviewRequest || reviewError) throw new Error("The current approval request is not available.");
+    try {
+      const result = await decideFinalReview({ eventId: crypto.randomUUID(), requestId: reviewRequest.requestId,
+        expectedBaseRevisionId: reviewRequest.eventId, action, ...(reason === undefined ? {} : { reason }) });
+      if (result?.status !== "recorded") throw new Error("Final review decision was not confirmed.");
+    } finally { finalReview.refresh(); }
+  }
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
+    finalReview={<IntegrationReviewPanel key={reviewRequest?.eventId ?? workspaceId} view={review}
+      error={reviewError ? "최종 검토 자료를 불러오지 못했습니다." : null}
+      onApprove={reviewRequest && review.status === "ready" && review.approvalEligibility.status === "eligible" ? () => respondToFinalReview("approve") : undefined}
+      onRequestChanges={reviewRequest ? reason => respondToFinalReview("request-changes", reason) : undefined}
+      onHold={reviewRequest ? reason => respondToFinalReview("hold", reason) : undefined} />}
     uiReview={<UiContractPanel workspaceId={workspaceId} value={uiContracts.data} loading={uiContracts.loading}
       unavailable={Boolean(uiContracts.error)} approve={approveUiProposal} retryNotification={retryUiNotification}
       refresh={() => { uiContracts.refresh(); conversation.refresh(); }} />}
@@ -200,7 +229,7 @@ export function BuilderPage() {
     conversation={conversationPage} conversationChannel={channel} conversationLoading={conversation.loading}
     conversationError={leadSessions?.sessions[channel] && !conversation.loading && !conversationPage ? "대화 기록을 확인하지 못했습니다. 새로고침해 주세요." : null}
     conversationHasNewer={cursor !== null}
-    onLeadChannelChange={next => { setChannel(next); setCursor(null); if (next === "ui-design") uiContracts.refresh(); }}
+    onLeadChannelChange={next => { setChannel(next); setCursor(null); if (next === "ui-design") uiContracts.refresh(); if (next === "integration-review") finalReview.refresh(); }}
     onOlderConversation={conversationPage?.nextCursor ? () => setCursor(conversationPage.nextCursor) : undefined}
     onLatestConversation={cursor !== null ? () => setCursor(null) : undefined}
     onRefreshConversation={leadSessions?.sessions[channel] ? async () => {
@@ -268,7 +297,7 @@ export function BuilderPage() {
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
     loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? documentsView.error ?? ctoQuestionsView.error ?? (baselineDocument.error ? "기준선 문서를 불러오지 못했습니다." : null) ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
+    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); finalReview.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };

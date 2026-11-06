@@ -37,7 +37,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   const manifestNames = manifestTools.map(tool => tool.name);
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   const specializedOnly = new Set<string>(["builder.read-cto-intake", "builder.answer-cto-question",
-    "builder.propose-ui-contract",
+    "builder.propose-ui-contract", "builder.request-final-review",
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());
@@ -76,7 +76,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
 test("Lead channel policies preserve shared reads and keep formal writes Main-only", () => {
   const policies = Object.fromEntries(LEAD_CHANNELS.map(channel => [channel, policyForLeadChannel(channel)]));
   const formalWrites = ["builder.publish-design-baseline", "builder.publish-technology-decisions",
-    "builder.create-cto", "builder.publish-workstream", "builder.dispatch-workstream"];
+    "builder.create-cto", "builder.publish-workstream", "builder.dispatch-workstream", "builder.attest-final-packet"];
   for (const channel of LEAD_CHANNELS) {
     const allowed = new Set(policies[channel]!.toolNames);
     for (const read of ["builder.read-solution", "builder.read-design-draft", "builder.read-design-sources",
@@ -99,8 +99,12 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
   }
   assert.ok(policyForLeadChannel("cto-inbox").toolNames.includes("builder.review-cto-question"));
   assert.ok(policyForLeadChannel("integration-review").toolNames.includes("builder.review-cto-question"));
+  assert.ok(policyForLeadChannel("integration-review").toolNames.includes("builder.request-final-review"));
+  assert.ok(!policyForLeadChannel("main").toolNames.includes("builder.request-final-review"));
+  assert.ok(LEAD_CHANNELS.every(channel => !policyForLeadChannel(channel).toolNames.includes("builder.final-review-decision")));
   assert.deepEqual(LEAD_SESSION_EXECUTION_POLICY, policyForLeadChannel("main"));
 });
+
 
 test("requires the exact advertised mode and its enforcement/readiness/isolation semantics", async () => {
   assert.deepEqual(await assertSessionExecutionPolicySupport(platform(), sessionId, workspaceId), supported);

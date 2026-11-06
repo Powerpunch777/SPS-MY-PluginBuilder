@@ -277,6 +277,24 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.ok(noProposal.status >= 400, "A nonexistent proposal cannot be approved through the actual Host action.");
   assert.match(noProposal.body, /immutable published UI proposal/);
   assert.equal((await uiRecords(company.id)).approval, null);
+  const readFinal = companyId => request(`/api/plugins/${plugin.id}/data/builder.final-review`, {
+    method: "POST", body: { companyId, params: {} },
+  }).then(value => value.data);
+  assert.deepEqual(await readFinal(company.id), { status: "unknown" });
+  assert.deepEqual(await readFinal(secondCompany.id), { status: "unknown" });
+  await click(workspace, '.builder-nav [aria-label="최종 검토·승인"]', "Open the actual final review page");
+  await eventually(() => workspace.evaluate(`document.querySelector('.sps-integration-review [role="status"]')?.textContent`),
+    value => value?.includes("승인이 차단"), "fail-closed final review state");
+  assert.equal(await workspace.evaluate(`Boolean(document.querySelector('.sps-integration-review .sps-ir-actions button:not(:disabled)'))`), false);
+  const noPacket = await workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.final-review-decision`)}, {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      companyId:${JSON.stringify(company.id)},params:{eventId:${JSON.stringify(randomUUID())},requestId:'missing-packet',
+        expectedBaseRevisionId:'missing-request',action:'approve'}
+    })}).then(async r=>({status:r.status,body:await r.text()}))`, true);
+  assert.ok(noPacket.status >= 400, "The real Host action must reject approval without a current Final Packet.");
+  assert.match(noPacket.body, /authenticated run receipts could not be verified/);
+  assert.deepEqual(await readFinal(company.id), { status: "unknown" });
+  await click(workspace, '.builder-nav [aria-label="시스템"]', "Return to the system page after the final review check");
   assert.ok((await request(`/api/agents/${leadAgent.id}/task-sessions`)).every(row => row.lastRunId === null));
 
   // Presentation fixtures only. They exercise the compiled UI with intercepted
@@ -602,6 +620,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
     leadSixSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     uiContractEmptyScopedRead: true, uiApprovalMissingProposalDenied: true, liveUiApprovalTested: false,
+    finalReviewHostPage: true, finalApprovalMissingPacketDenied: true, actualFinalPacketApproval: false,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,
