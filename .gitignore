@@ -1,0 +1,10 @@
+node_modules/
+dist/
+artifacts/
+.ui-test-*
+.ui-bridge-test-*
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
