@@ -82,14 +82,14 @@ async function runWorkstreamsAcceptance(context) {
   assert.deepEqual(await getTechnology(), null);
   assert.deepEqual((await getCtos()).ctos, []);
   assert.equal(await getBoard(), null);
-  assert.equal((await runs()).length, 2);
-  assert.equal((await sessions()).length, 3);
-  assert.equal(leadRuns.length, 2);
+  assert.equal((await runs()).length, 3);
+  assert.equal((await sessions()).length, 6);
+  assert.equal(leadRuns.length, 3);
   const draftCalls = await inspectScopedRun(request, leadRuns[0].runId,
     ["builder.read-design-sources", "builder.read-design-draft", "builder.propose-design"].map(name => pluginPrefix + name));
   assert.equal(draftCalls.filter(call => call.arguments?.toolName === pluginPrefix + "builder.propose-design").length, 1);
-  const baselineCalls = await inspectScopedRun(request, leadRuns[1].runId,
-    ["builder.read-design-sources", "builder.read-design-draft", "builder.read-design-baseline",
+  const baselineCalls = await inspectScopedRun(request, leadRuns[2].runId,
+    ["builder.read-first-design-review", "builder.read-design-draft", "builder.read-design-baseline",
       "builder.publish-design-baseline", "builder.read-solution"].map(name => pluginPrefix + name));
   assert.equal(baselineCalls.filter(call => call.arguments?.toolName === pluginPrefix + "builder.publish-design-baseline").length, 1);
 
@@ -102,7 +102,7 @@ async function runWorkstreamsAcceptance(context) {
   const technologyName = "Existing SPS Plugin SDK integration";
 
   await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Open the prepared Lead for one planning-only Workstream request");
-  await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled===false`), Boolean, "third Lead composer");
+  await eventually(() => workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]')?.disabled===false`), Boolean, "Workstream Lead composer");
   const message = `Authorized planning-only Workstream trial for Builder project ${projectId}. The current saved draft revision is ${draft.draft.revisionId}; the exact existing internal baseline revision is ${baseline.baseline.revisionId}, its specification revision is ${baseline.baseline.specification.revisionId}, Graph revision is ${baseline.baseline.graph.graphRevisionId}, and one actual Graph node to assign is ${graphNode.id} (kind ${graphNode.kind}, specRef ${graphNode.specRef}).
 
 Discover tools and read the current design baseline, current technology register, CTO registry, and Workstream board. Then in this Lead turn perform exactly these four writes once each, in order: (1) publish one technology register revision ${techRevisionId} pinned to the exact baseline/specification/Graph above. Record only the existing ${technologyName} integration as required for this already existing Builder plugin. Explicitly set licenseReview status unreviewed with null expression and no evidence, and verification level not-verified with no evidence. State that no new research, license check, version compatibility, cost, or integration verification was performed. Do not invent alternatives or research. (2) register exactly one stable logical CTO id ${ctoId}, display name "Isolated Workstream Trial CTO", using this already selected Lead Agent and a separate keyed session; do not create an Agent or change account/configuration. Read the registry to verify that exact identity and session. (3) publish exactly one Workstream id ${workstreamId}, revision 1, for only Graph node ${graphNode.id}, using sourceSpecRevisionId ${baseline.baseline.specification.revisionId}, assignedCtoId ${ctoId}, and technologyDecisionsRef ${techRevisionId}. Specify included and excluded planning scope, no dependencies or interface contracts, acceptance/evidence that require only exact CTO read and acknowledgement, and change.previousRevision null with impactNodeIds containing only ${graphNode.id}. Use a new board revision id ${boardRevisionId}; read the board and capture its exact current revision id. (4) dispatch exactly once with projectId ${projectId}, workstreamId ${workstreamId}, specRevision 1, and the exact boardRevisionId returned by the board read. Dispatch must be your final tool operation. Immediately respond exactly SPS_WORKSTREAMS_DISPATCHED; do not wait for the CTO, read again, or dispatch again.
@@ -119,7 +119,7 @@ Unknown writes are never repeated: reconcile only by reading the same record, an
       method: "POST", body: { companyId: projectId, params: { channel: "main" } },
     });
     return conversation();
-  }, page => page.totalTurns === 3 && page.active === null, "terminal third Lead run", 240_000);
+  }, page => page.totalTurns === 4 && page.active === null, "terminal Workstream Lead run", 240_000);
   const leadTurn = completed.turns[0];
   assert.equal(leadTurn.state, "succeeded", "Do not create a replacement request after a failed/uncertain run.");
   assert.equal(leadTurn.answer?.trim(), "SPS_WORKSTREAMS_DISPATCHED");
@@ -166,7 +166,7 @@ Unknown writes are never repeated: reconcile only by reading the same record, an
   assert.equal(cto.ctoId, ctoId);
   assert.equal(cto.agentId, agent.id);
   assert.ok(cto.sessionId && !Object.values(leadSessions.sessions).includes(cto.sessionId));
-  assert.equal((await sessions()).length, 4, "Three prepared Lead sessions and one independent CTO session are expected.");
+  assert.equal((await sessions()).length, 7, "Six prepared Lead sessions and one separate logical CTO session are expected.");
   const boardNow = await getBoard();
   assert.ok(boardNow?.board);
   const workstream = boardNow.board.workstreams.find(row => row.spec.id === workstreamId);
@@ -231,7 +231,7 @@ Unknown writes are never repeated: reconcile only by reading the same record, an
   assert.equal(ctoAck.arguments?.params?.specRevision, 1);
 
   const allRuns = await runs();
-  assert.equal(allRuns.length, 4, "Exactly three Lead runs and one registered CTO run are expected.");
+  assert.equal(allRuns.length, 5, "Exactly four Lead runs and one registered logical CTO run are expected.");
   const runIds = new Set(allRuns.map(run => run.runId ?? run.id));
   for (const runId of [...leadRuns.map(run => run.runId), leadTurn.runId, ctoRunId]) assert.ok(runIds.has(runId));
   const agentAfter = await request(`/api/agents/${agent.id}`);
@@ -249,13 +249,13 @@ Unknown writes are never repeated: reconcile only by reading the same record, an
   assert.deepEqual(await conversation(), completed);
   assert.deepEqual(await data(request, plugin.id, "builder.design-draft", { projectId }, projectId), draft);
   assert.deepEqual(await data(request, plugin.id, "builder.snapshot", {}, secondCompany.id), beforeOther);
-  assert.equal((await runs()).length, 4);
-  assert.equal((await sessions()).length, 4);
+  assert.equal((await runs()).length, 5);
+  assert.equal((await sessions()).length, 7);
   assert.deepEqual((await request(`/api/agents/${agent.id}`)).adapterConfig, agent.adapterConfig);
   assert.deepEqual(await readdir(workingDirectory), []);
 
-  console.log(JSON.stringify({ liveWorkstreams: true, aiExecuted: true, actualUiLeadTurns: 3, actualProviderRuns: 4,
-    leadRuns: 3, independentCtoRuns: 1, registeredCtoSessions: 1, technologyRegisterWrites: 1,
+  console.log(JSON.stringify({ liveWorkstreams: true, aiExecuted: true, actualUiLeadTurns: 4, actualProviderRuns: 5,
+    leadRuns: 4, logicalCtoSessionRuns: 1, separateCtoAgent: false, registeredCtoSessions: 1, technologyRegisterWrites: 1,
     workstreamWrites: 1, dispatchCalls: 1, ctoReadCalls: 1, ctoAcknowledgementCalls: 1,
     ctoPrivateMemoryReadCalls: memoryReads.length, ctoPrivateMemoryWriteCalls: memoryWrites.length,
     exactCoreReceiptObserved: true, terminalCoreRunObserved: true, readinessIsNotImplementation: true,
