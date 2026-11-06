@@ -11,8 +11,15 @@ export type RevisionState = {
   expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue): Promise<
     { status: "committed" | "conflict" } | { status: "unsupported"; reason: "missing-guard" }
   >;
+  guardedCompareAndSetWithJobWakeV1?(key: SpsStateKey & { scopeKind: "company"; scopeId: string;
+    guards: readonly { stateKey: string; namespace?: string; expectedValue: JsonValue }[] },
+  expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue,
+  wake: Readonly<{ name: string; eventId: string; jobKey: string; payload: JsonValue }>): Promise<
+    { status: "committed" | "conflict" } | { status: "unsupported"; reason: "missing-guard" }
+  >;
 };
 export type RevisionPublicationGuard = Readonly<{ stateKey: string; namespace?: string; expectedValue: JsonValue }>;
+export type RevisionJobWake = Readonly<{ name: string; eventId: string; jobKey: string; payload: JsonValue }>;
 type Pointer = Readonly<{ revisionId: string; sequence: number; digest: string }>;
 type Entry<T> = Readonly<{
   schemaVersion: 1;
@@ -196,6 +203,70 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
     return receipt.swapped;
   }
 
+  function validateJobWake(value: unknown): RevisionJobWake {
+    const row = fields(value, ["name", "eventId", "jobKey", "payload"], "revision job wake");
+    for (const key of ["name", "eventId", "jobKey"] as const) {
+      if (typeof row[key] !== "string" || !row[key].trim() || (row[key] as string).length > 256) {
+        throw new TypeError(`Invalid revision job wake ${key}.`);
+      }
+    }
+    return Object.freeze({ name: row.name as string, eventId: row.eventId as string,
+      jobKey: row.jobKey as string, payload: row.payload as JsonValue });
+  }
+
+  async function publishGuarded(patchValue: unknown, rawGuards: readonly RevisionPublicationGuard[], wake?: RevisionJobWake) {
+    const guardedWithWake = state.guardedCompareAndSetWithJobWakeV1;
+    const guarded = state.guardedCompareAndSet;
+    if (wake ? typeof guardedWithWake !== "function" : typeof guarded !== "function") {
+      return Object.freeze({ status: "unsupported" as const,
+        reason: wake ? "guarded-cas-job-wake-unavailable" as const : "guarded-cas-unavailable" as const });
+    }
+    const guards = validatePublicationGuards(rawGuards);
+    const patch = fields(patchValue, ["expectedBaseRevisionId", "revision"], "solution patch");
+    const expectedId = patch.expectedBaseRevisionId === null ? null : identifier(patch.expectedBaseRevisionId);
+    const proposed = codec.parse(patch.revision);
+    const proposedId = identifier(codec.revisionId(proposed));
+    const current = await head();
+    const actualId = current.ref?.revisionId ?? null;
+    if (expectedId !== actualId) return Object.freeze({ status: "conflict" as const, actualBaseRevisionId: actualId });
+    if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
+    const sequence = (current.ref?.sequence ?? 0) + 1;
+    if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
+    const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence, parent: current.ref, revision: proposed };
+    const entry: Entry<T> = Object.freeze({ ...body, digest: hash(json(body)) });
+    if (Buffer.byteLength(json(entry), "utf8") > MAX_ENTRY_BYTES) throw new TypeError("Solution revision exceeds 192 KiB; no state was changed.");
+    const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
+    if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
+      const existing = await entryAt(next);
+      if (json(existing) !== json(entry)) throw new Error("Solution revision ID already contains different immutable content.");
+    }
+    // A rejected atomic call may have committed. Preserve the staged entry and never retry or split the wake from its head CAS.
+    const guardedKey = { ...headKey, scopeKind: "company" as const, scopeId: workspaceId, guards };
+    const expectedHead = current.raw === null ? { exists: false as const } : { exists: true as const, value: current.raw };
+    const receiptValue = wake
+      ? await guardedWithWake!.call(state, guardedKey, expectedHead, asJson(next), wake)
+      : await guarded!.call(state, guardedKey, expectedHead, asJson(next));
+    const statusField = receiptValue && typeof receiptValue === "object"
+      ? Object.getOwnPropertyDescriptor(receiptValue, "status") : undefined;
+    if (!statusField?.enumerable || !Object.hasOwn(statusField, "value")) {
+      throw new TypeError("Invalid guarded publication receipt.");
+    }
+    const receipt = fields(receiptValue, statusField.value === "unsupported" ? ["status", "reason"] : ["status"],
+      "guarded publication receipt");
+    if (receipt.status === "unsupported") {
+      if (receipt.reason !== "missing-guard") throw new TypeError("Invalid guarded publication receipt.");
+      return Object.freeze({ status: "unsupported" as const, reason: "missing-guard" as const,
+        stagedRevisionId: proposedId, expectedBaseRevisionId: actualId });
+    }
+    if (receipt.status === "conflict") {
+      const latest = await head();
+      return Object.freeze({ status: "conflict" as const,
+        actualBaseRevisionId: latest.ref?.revisionId ?? null, stagedRevisionId: proposedId });
+    }
+    if (receipt.status !== "committed") throw new TypeError("Invalid guarded publication receipt.");
+    return Object.freeze({ status: "published" as const, sequence, revision: proposed });
+  }
+
   return Object.freeze({
     async current(): Promise<Readonly<{ sequence: number; revision: T }> | null> {
       const { entry } = await head();
@@ -334,54 +405,15 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
      * callers must inspect current state and must not delete or rewrite it.
      */
     async publishGuarded(patchValue: unknown, rawGuards: readonly RevisionPublicationGuard[]) {
-      if (typeof state.guardedCompareAndSet !== "function") {
-        return Object.freeze({ status: "unsupported" as const, reason: "guarded-cas-unavailable" as const });
+      return publishGuarded(patchValue, rawGuards);
+    },
+
+    async publishGuardedWithJobWakeV1(patchValue: unknown, rawGuards: readonly RevisionPublicationGuard[], wakeValue: unknown) {
+      if (typeof state.guardedCompareAndSetWithJobWakeV1 !== "function") {
+        return Object.freeze({ status: "unsupported" as const, reason: "guarded-cas-job-wake-unavailable" as const });
       }
-      const guards = validatePublicationGuards(rawGuards);
-      const patch = fields(patchValue, ["expectedBaseRevisionId", "revision"], "solution patch");
-      const expectedId = patch.expectedBaseRevisionId === null ? null : identifier(patch.expectedBaseRevisionId);
-      const proposed = codec.parse(patch.revision);
-      const proposedId = identifier(codec.revisionId(proposed));
-      const current = await head();
-      const actualId = current.ref?.revisionId ?? null;
-      if (expectedId !== actualId) return Object.freeze({ status: "conflict" as const, actualBaseRevisionId: actualId });
-      if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
-      const sequence = (current.ref?.sequence ?? 0) + 1;
-      if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
-      const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence, parent: current.ref, revision: proposed };
-      const entry: Entry<T> = Object.freeze({ ...body, digest: hash(json(body)) });
-      if (Buffer.byteLength(json(entry), "utf8") > MAX_ENTRY_BYTES) throw new TypeError("Solution revision exceeds 192 KiB; no state was changed.");
-      const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
-      if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
-        const existing = await entryAt(next);
-        if (json(existing) !== json(entry)) throw new Error("Solution revision ID already contains different immutable content.");
-      }
-      // Do not retry or fall back if this call rejects: the Host may have committed
-      // before its response was lost. The staged entry remains available for reconciliation.
-      const receiptValue = await state.guardedCompareAndSet({ ...headKey,
-        scopeKind: "company", scopeId: workspaceId, guards },
-      current.raw === null ? { exists: false } : { exists: true, value: current.raw }, asJson(next));
-      const statusField = receiptValue && typeof receiptValue === "object"
-        ? Object.getOwnPropertyDescriptor(receiptValue, "status") : undefined;
-      if (!statusField?.enumerable || !Object.hasOwn(statusField, "value")) {
-        throw new TypeError("Invalid guarded publication receipt.");
-      }
-      const receipt = fields(receiptValue, statusField.value === "unsupported" ? ["status", "reason"] : ["status"],
-        "guarded publication receipt");
-      if (receipt.status === "unsupported") {
-        if (receipt.reason !== "missing-guard") throw new TypeError("Invalid guarded publication receipt.");
-        return Object.freeze({ status: "unsupported" as const, reason: "missing-guard" as const,
-          stagedRevisionId: proposedId, expectedBaseRevisionId: actualId });
-      }
-      if (receipt.status === "conflict") {
-        const latest = await head();
-        return Object.freeze({ status: "conflict" as const,
-          actualBaseRevisionId: latest.ref?.revisionId ?? null, stagedRevisionId: proposedId });
-      }
-      if (receipt.status !== "committed") {
-        throw new TypeError("Invalid guarded publication receipt.");
-      }
-      return Object.freeze({ status: "published" as const, sequence, revision: proposed });
+      const wake = validateJobWake(wakeValue);
+      return publishGuarded(patchValue, rawGuards, wake);
     },
   });
 }
