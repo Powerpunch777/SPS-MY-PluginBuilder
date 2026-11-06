@@ -51,7 +51,9 @@ test("projects an empty or absent board without adding synthetic work", () => {
 
 test("adds one Korean read-only document per workstream with pinned source and change details", () => {
   const snapshot = createEmptyBuilderSnapshot(workspaceId);
-  snapshot.documents.push({ id: "existing", title: "기존", revisionId: "r1", createdAt: "now", text: "보존" });
+  snapshot.documents.push({ id: "existing", title: "기존", revisionId: "r1", createdAt: "now", text: "보존",
+    category: "unclassified", sourceKind: "builder-document", approvalStatus: "unknown", freshnessStatus: "unknown",
+    bodyAvailable: true, sourcePins: [], relatedIds: [] });
   const original = structuredClone(snapshot);
   const projected = projectWorkstreams(snapshot, view({ board: board([record(), record({
     spec: { ...record().spec, id: "WS-002", title: "공통 사용자 모델", revision: 1 },
@@ -61,6 +63,9 @@ test("adds one Korean read-only document per workstream with pinned source and c
   assert.deepEqual(snapshot, original);
   assert.equal(projected.documents.length, 3);
   const document = projected.documents[1]!;
+  assert.equal(document.category, "development");
+  assert.equal(document.approvalStatus, "unknown");
+  assert.equal(document.freshnessStatus, "unknown");
   assert.equal(document.id, "workstream:WS-001");
   assert.equal(document.title, "CTO 작업 명세 · 인증 API");
   assert.equal(document.revisionId, "2");

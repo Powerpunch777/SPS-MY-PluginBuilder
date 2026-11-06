@@ -60,6 +60,11 @@ test("Main Baseline publication produces a pinned body and the registered read p
   assert.equal(body.read.document.inventory.status, "partial");
   assert.equal(body.read.document.historicalApproval.status, "unknown");
   const projected = projectBaselineDocument(f.snapshot, body);
+  assert.equal(projected.documents[0].category, "design");
+  assert.equal(projected.documents[0].sourceKind, "baseline-body");
+  assert.equal(projected.documents[0].approvalStatus, "unknown");
+  assert.equal(projected.documents[0].freshnessStatus, "current");
+  assert.equal(projected.documents[0].sourcePins.length, 6);
   assert.match(projected.documents[0].text, /Document this requirement/);
   assert.equal(projected.documents[0].revisionId, body.read.document.documentRevisionId);
   assert.equal(await read({ companyId: uuid(900) }, f.platform), null);

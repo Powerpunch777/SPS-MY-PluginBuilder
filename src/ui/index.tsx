@@ -187,6 +187,9 @@ export function BuilderPage() {
   }
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
+    documentsLoading={state.loading || design.loading || baselineDocument.loading || designBaseline.loading || technology.loading || workstreams.loading || memory.loading}
+    documentsError={documentsView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? draftView.error
+      ?? (state.error || baselineDocument.error || design.error || memory.error ? "문서를 불러오지 못했습니다." : null)}
     finalReview={<IntegrationReviewPanel key={reviewRequest?.eventId ?? workspaceId} view={review}
       error={reviewError ? "최종 검토 자료를 불러오지 못했습니다." : null}
       onApprove={reviewRequest && review.status === "ready" && review.approvalEligibility.status === "eligible" ? () => respondToFinalReview("approve") : undefined}

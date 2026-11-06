@@ -57,6 +57,10 @@ test("adds the scoped baseline as an interpreted document without changing graph
   assert.equal(projected.documents[0]?.title, "설계 기준 · Lead 해석 기록");
   assert.equal(projected.documents[0]?.revisionId, "baseline-r01");
   assert.equal(projected.documents[0]?.createdAt, baseline().createdAt);
+  assert.equal(projected.documents[0]?.category, "design");
+  assert.equal(projected.documents[0]?.approvalStatus, "unknown");
+  assert.equal(projected.documents[0]?.freshnessStatus, "unknown");
+  assert.deepEqual(projected.documents[0]?.relatedIds, ["draft-r01", "spec-r01", "graph-r01", "REQ-1"]);
   assert.deepEqual({ actors: projected.actors, graph: projected.graph, activity: projected.activity, messages: projected.messages }, untouched);
   const text = JSON.parse(projected.documents[0]!.text) as { notice: string; projectId: string; graph: { entities: unknown[] } };
   assert.match(text.notice, /외부 계약 체결이나 코드 실행 권한이 아닙니다/);

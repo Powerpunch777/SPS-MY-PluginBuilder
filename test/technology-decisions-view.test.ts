@@ -102,6 +102,9 @@ test("validates the complete authored register and keeps source references histo
   } })));
 
   const document = projectTechnologyDecisions(snapshot, view()).documents[0]!;
+  assert.equal(document.category, "technical-research");
+  assert.equal(document.approvalStatus, "unknown");
+  assert.equal(document.freshnessStatus, "unknown");
   assert.ok(document.text.includes("설계 기준: baseline-r03"));
   assert.ok(document.text.includes("명세: spec-r04 · Graph: graph-r02"));
   assert.deepEqual(snapshot.graph.entities, []);

@@ -76,11 +76,9 @@ try {
         await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: label, exact: true }).click();
         await page.getByRole("heading", { level: 1, name: label === 'Lead 대화' ? 'Lead와 대화' : label, exact: true }).waitFor();
         if (label === "설계 문서") {
-          await page.getByRole("heading", { level: 2, name: "프로젝트 파일", exact: true }).waitFor();
-          await page.getByRole("heading", { level: 2, name: "미리보기", exact: true }).waitFor();
-          await page.getByText("저장된 프로젝트 문서가 없습니다.", { exact: true }).waitFor();
-          await page.getByText("문서를 선택하면 저장된 내용이 표시됩니다.", { exact: true }).waitFor();
-          assert.equal(await page.locator(".builder-doc-layout > .builder-card").count(), 2);
+          await page.locator(".sps-document-center").waitFor();
+          await page.getByText("현재 snapshot에 표시할 문서가 없습니다.", { exact: true }).waitFor();
+          assert.equal(await page.locator(".sps-dc-body").count(), 0);
         }
         if (label === "시스템") {
           const system = page.locator(".builder-system-page");
@@ -118,24 +116,29 @@ try {
       }
       await page.goto(`${origin}?fixture=documents`);
       await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "설계 문서", exact: true }).click();
-      await page.getByRole("heading", { level: 2, name: "프로젝트 파일", exact: true }).waitFor();
-      await page.getByRole("heading", { level: 2, name: "미리보기", exact: true }).waitFor();
+      await page.getByRole("heading", { level: 3, name: "문서 목록", exact: true }).waitFor();
+      await page.getByRole("heading", { level: 3, name: "문서 상세", exact: true }).waitFor();
       assert.equal(await page.getByRole('complementary', { name: 'AI 작업 기록', exact: true }).count(), 0);
-      const documentPreview = page.locator(".builder-document-preview");
+      const documentPreview = page.locator(".sps-dc-body");
+      await page.getByRole("button", { name: /Lead 설계·계약 명세/ }).click();
       await documentPreview.filter({ hasText: "저장된 Workspace 문서 fixture입니다." }).waitFor();
+      const searchDocuments = page.locator(".sps-document-center input[type=search]").first();
+      await searchDocuments.fill("두 번째 저장 문서");
+      await page.getByText("선택 문서는 현재 필터 결과 밖에 있습니다. 선택은 유지됩니다.", { exact: true }).waitFor();
+      assert.equal(await page.locator(".sps-dc-item").count(), 1);
       await page.getByRole("button", { name: /기술 선정 명세/ }).click();
+      await searchDocuments.clear();
       await documentPreview.filter({ hasText: "두 번째 저장 문서 fixture입니다." }).waitFor();
       assert.equal((await documentPreview.innerText()).includes("저장된 Workspace 문서 fixture입니다."), false);
       assert.equal(await page.getByRole("button", { name: /다운로드|편집|삭제/ }).count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      if (width <= 790) assert.equal(await page.locator(".builder-doc-layout").evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length), 1);
+      if (width <= 790) assert.equal(await page.locator(".sps-dc-layout").evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length), 1);
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-documents-${name}.png`) });
       await page.getByRole('button', { name: 'Workspace 새로고침', exact: true }).click();
       await documentPreview.filter({ hasText: "저장된 Workspace 문서 fixture입니다." }).waitFor();
       assert.equal(await page.getByRole('button', { name: /Lead 설계·계약 명세/ }).getAttribute('aria-pressed'), 'true');
       await page.getByRole('button', { name: 'Workspace 새로고침', exact: true }).click();
-      await page.getByText("저장된 프로젝트 문서가 없습니다.", { exact: true }).waitFor();
-      await page.getByText("문서를 선택하면 저장된 내용이 표시됩니다.", { exact: true }).waitFor();
+      await page.getByText("현재 snapshot에 표시할 문서가 없습니다.", { exact: true }).waitFor();
       assert.equal(await documentPreview.count(), 0);
       await page.goto(`${origin}?fixture=graph`);
       await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "설계 시각화", exact: true }).click();

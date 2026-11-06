@@ -39,7 +39,10 @@ export function projectDesignDraft(snapshot: BuilderSnapshot, view: DesignDraftV
   const labels = new Map(draft.specification.requirements.map(requirement => [requirement.id, requirement.description]));
   return { ...snapshot,
     documents: [...snapshot.documents, { id: `draft:${draft.revisionId}`, title: "설계 초안 · 승인 전",
-      revisionId: draft.revisionId, createdAt: view.createdAt, text: JSON.stringify(draft.specification, null, 2) }],
+      revisionId: draft.revisionId, createdAt: view.createdAt, text: JSON.stringify(draft.specification, null, 2),
+      category: "design", sourceKind: "design-draft", approvalStatus: "unapproved", freshnessStatus: "unknown",
+      bodyAvailable: true, sourcePins: [], relatedIds: [draft.specification.revisionId, draft.graph.graphRevisionId,
+        ...draft.specification.requirements.map(requirement => requirement.id), ...draft.sourceIds] }],
     graph: { revisionId: draft.graph.graphRevisionId,
       entities: draft.graph.entities.map(entity => ({ id: entity.id, kind: entity.kind,
         label: entity.specRef ? labels.get(entity.specRef) ?? entity.id : entity.id,

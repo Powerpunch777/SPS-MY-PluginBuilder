@@ -67,6 +67,11 @@ export function projectTechnologyDecisions(snapshot: BuilderSnapshot, value: unk
       revisionId: record.register.revisionId,
       createdAt: record.createdAt,
       text: lines.join("\n"),
+      category: "technical-research", sourceKind: "technology-decision", approvalStatus: "unknown", freshnessStatus: "unknown",
+      bodyAvailable: true, sourcePins: [{ sourceId: `design-baseline:${record.register.sourceBaselineRevisionId}`,
+        revisionId: record.register.sourceBaselineRevisionId, sha256: record.baselineDigest }],
+      relatedIds: [...new Set([record.register.sourceBaselineRevisionId, record.register.sourceSpecRevisionId,
+        record.register.sourceGraphRevisionId, ...record.register.entries.flatMap(entry => entry.scopeNodeIds)])],
     }],
   };
 }

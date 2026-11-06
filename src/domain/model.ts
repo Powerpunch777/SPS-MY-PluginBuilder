@@ -44,7 +44,22 @@ export interface BuilderDocument {
   revisionId: string;
   text: string;
   createdAt: string;
+  category?: DocumentCategory;
+  sourceKind?: DocumentSourceKind;
+  approvalStatus?: DocumentApprovalStatus;
+  freshnessStatus?: DocumentFreshnessStatus;
+  bodyAvailable?: boolean;
+  sourcePins?: readonly BuilderDocumentPin[];
+  relatedIds?: readonly string[];
 }
+
+export type DocumentCategory = "consultation" | "design" | "ui-design" | "validation" | "technical-research"
+  | "development" | "change-history" | "test-qa" | "delivery" | "unclassified";
+export type DocumentSourceKind = "builder-document" | "baseline-body" | "design-baseline" | "design-draft"
+  | "technology-decision" | "workstream" | "lead-memory" | "consultation-source";
+export type DocumentApprovalStatus = "approved" | "unapproved" | "unknown";
+export type DocumentFreshnessStatus = "current" | "stale" | "review-required" | "unknown";
+export type BuilderDocumentPin = Readonly<{ sourceId: string; revisionId: string; sha256: string }>;
 
 export interface BuilderQuestion {
   id: string;

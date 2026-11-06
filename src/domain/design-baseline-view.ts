@@ -41,6 +41,12 @@ export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown)
         notice: "사용자 입력에 대한 Lead의 설계 해석입니다. 외부 계약 체결이나 코드 실행 권한이 아닙니다.",
         ...baseline,
       }, null, 2),
+      category: "design", sourceKind: "design-baseline", approvalStatus: "unknown", freshnessStatus: "unknown",
+      bodyAvailable: true,
+      sourcePins: [{ sourceId: `design-draft:${baseline.sourceDraftRevisionId}`, revisionId: baseline.sourceDraftRevisionId,
+        sha256: baseline.draftDigest }],
+      relatedIds: [baseline.sourceDraftRevisionId, baseline.specification.revisionId, baseline.graph.graphRevisionId,
+        ...baseline.specification.requirements.map(requirement => requirement.id)],
     }],
   };
 }

@@ -13,6 +13,9 @@ test("memory is a read-only interpreted document, not snapshot mutation or appro
   const snapshot = createEmptyBuilderSnapshot(workspace);
   const before = structuredClone(snapshot);
   const shown = projectLeadMemory(snapshot, view());
+  assert.equal(shown.documents[0]?.category, "unclassified");
+  assert.equal(shown.documents[0]?.approvalStatus, "unknown");
+  assert.equal(shown.documents[0]?.freshnessStatus, "unknown");
   assert.deepEqual(snapshot, before);
   assert.equal(shown.documents.length, 1);
   assert.match(shown.documents[0]!.title, /공유 기억/);

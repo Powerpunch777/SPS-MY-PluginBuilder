@@ -100,6 +100,11 @@ export function projectWorkstreams(snapshot: BuilderSnapshot, value: unknown): B
       revisionId: String(record.spec.revision),
       createdAt: record.createdAt,
       text: renderWorkstream(record),
+      category: "development" as const, sourceKind: "workstream" as const, approvalStatus: "unknown" as const, freshnessStatus: "unknown" as const,
+      bodyAvailable: true, sourcePins: [{ sourceId: `design-baseline:${record.sourceBaselineRevisionId}`,
+        revisionId: record.sourceBaselineRevisionId, sha256: record.baselineDigest }],
+      relatedIds: [`workstream:${record.spec.id}`, record.spec.sourceSpecRevisionId, record.sourceBaselineRevisionId,
+        record.spec.technologyDecisionsRef, ...record.spec.scopeNodeIds, ...record.change.impactTaskIds],
     }))],
   };
 }

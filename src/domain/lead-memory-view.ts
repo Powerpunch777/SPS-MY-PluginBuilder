@@ -20,5 +20,7 @@ export function projectLeadMemory(snapshot: BuilderSnapshot, value: unknown): Bu
   const memory: LeadMemoryRevision = parseLeadMemoryRevision(row.memory, snapshot.workspaceId);
   return { ...snapshot, documents: [...snapshot.documents, { id: `lead-memory:${memory.revisionId}`,
     title: "Lead 공유 기억 · 해석 기록", revisionId: memory.revisionId, createdAt: row.createdAt,
-    text: JSON.stringify({ notice: "세 Lead 세션의 해석 기록입니다. 실행 권한이나 고객 승인을 뜻하지 않습니다.", ...memory }, null, 2) }] };
+    text: JSON.stringify({ notice: "세 Lead 세션의 해석 기록입니다. 실행 권한이나 고객 승인을 뜻하지 않습니다.", ...memory }, null, 2),
+    category: "unclassified", sourceKind: "lead-memory", approvalStatus: "unknown", freshnessStatus: "unknown",
+    bodyAvailable: true, sourcePins: [], relatedIds: [...new Set(memory.entries.flatMap(entry => entry.sourceIds))] }] };
 }

@@ -9,6 +9,8 @@ import flowCss from "@xyflow/react/dist/style.css";
 import builderCss from "./builder.css";
 import { LeadAgentSettings } from "./LeadAgentSettings.tsx";
 import { DesignDraftSummary } from "./DesignDraftSummary.tsx";
+import { DocumentCenter } from "./DocumentCenter.tsx";
+import { projectConsultationDocuments } from "../domain/document-center.ts";
 import { leadSendFailureMessage } from "../lead-send-feedback.ts";
 import { isNearTranscriptBottom, transcriptScrollAction, type TranscriptPage } from "./transcript-scroll.ts";
 import { selectLeadDecisionTranscript } from "../domain/selectors.ts";
@@ -432,27 +434,6 @@ function OrganizationView({ props, onActor }: { props: BuilderShellProps; onActo
       : <div className="builder-card builder-empty-card"><Network /><strong>조직 정보가 없습니다</strong><p>이 Workspace의 Actor와 관계가 아직 저장되지 않았습니다.</p></div>}</div>;
 }
 
-export function resolveSelectedDocument(documents: BuilderShellProps["snapshot"]["documents"], selectedId: string | null) {
-  return documents.find(document => document.id === selectedId) ?? documents[0] ?? null;
-}
-
-function DocumentsView({ props }: { props: BuilderShellProps }) {
-  const [selectedId, setSelectedId] = useState<string | null>(props.snapshot.documents[0]?.id ?? null);
-  const selected = resolveSelectedDocument(props.snapshot.documents, selectedId);
-  useEffect(() => {
-    if (selectedId !== (selected?.id ?? null)) setSelectedId(selected?.id ?? null);
-  }, [selectedId, selected?.id]);
-  return <div className="builder-page builder-doc-page"><div className="builder-page-intro"><p>Lead가 관리하는 계약·기술 선정·변경 명세를 조회합니다. 상담 원문은 별도 보관합니다.</p></div>
-    <div className="builder-doc-layout">
-      <section className="builder-card"><h2>프로젝트 파일</h2><p className="builder-card-sub">현재 Workspace에 저장된 문서입니다. 프로젝트별 분류는 아직 연결되지 않았습니다.</p><div className="builder-record-list">{props.snapshot.documents.length ? props.snapshot.documents.map(document => <button
-        aria-pressed={selected?.id === document.id} className={`builder-record-button${selected?.id === document.id ? " is-selected" : ""}`} key={document.id} onClick={() => setSelectedId(document.id)} type="button">
-        <strong>{document.title}</strong><small>{document.revisionId} · {displayTime(document.createdAt)}</small>
-      </button>) : <p className="builder-card-sub">저장된 프로젝트 문서가 없습니다.</p>}</div></section>
-      <section className="builder-card"><h2>미리보기</h2><p className="builder-card-sub">{selected ? `${selected.title} · Revision ${selected.revisionId} · ${displayTime(selected.createdAt)}` : "파일을 선택하세요"}</p>
-        {selected ? <pre className="builder-document-preview">{selected.text}</pre> : <p className="builder-card-sub">문서를 선택하면 저장된 내용이 표시됩니다.</p>}</section>
-    </div></div>;
-}
-
 export function DecisionsView({ props, drawerOpen, onDrawerToggle, onDrawerClose }: {
   props: BuilderShellProps; drawerOpen: boolean; onDrawerToggle(): void; onDrawerClose(): void;
 }) {
@@ -586,7 +567,8 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
     </form>{status && <p className="builder-composer-note" role="status">{status}</p>}</section>;
 }
 
-export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode; finalReview?: ReactNode }) {
+export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode; finalReview?: ReactNode;
+  documentsLoading?: boolean; documentsError?: string | null }) {
   const [view, setView] = useState<BuilderView>("lead");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -599,6 +581,7 @@ export function BuilderShell(props: BuilderShellProps & { productSelection?: Rea
   const shownChannel = LEAD_VIEW_CHANNELS[view] ?? "main";
   const mainMessages = [...props.snapshot.messages.filter(message => message.channel === shownChannel
     && (message.actorId === null || leadIds.has(message.actorId))), ...conversationMessages(props, shownChannel)];
+  const documents = useMemo(() => projectConsultationDocuments(props.snapshot), [props.snapshot]);
   const openQuestionCount = props.snapshot.questions.filter(question => question.status === "open").length;
 
   function selectView(next: BuilderView) {
@@ -625,7 +608,11 @@ export function BuilderShell(props: BuilderShellProps & { productSelection?: Rea
   else if (view === "product-selection") content = props.productSelection;
   else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
   else if (view === "organization") content = <OrganizationView onActor={openActor} props={props} />;
-  else if (view === "documents") content = <DocumentsView props={props} />;
+  else if (view === "documents") content = <div className="builder-page builder-document-center-page">
+    {props.documentsError && documents.length > 0 && <p role="status">일부 문서를 불러오지 못했습니다.</p>}
+    <DocumentCenter documents={documents} loading={props.documentsLoading && documents.length === 0}
+      error={documents.length === 0 ? props.documentsError : null} />
+  </div>;
   else if (view === "decisions") content = <DecisionsView drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} props={props} />;
   else content = <SystemView props={props} />;
 

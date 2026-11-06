@@ -22,7 +22,9 @@ test("creates the empty workspace-scoped snapshot with no phantom state", () => 
 
 test("parses to a detached copy and rejects unknown or foreign workspace data", () => {
   const input = empty();
-  input.documents.push({ id: "doc-1", title: "Spec", revisionId: "rev-1", text: "body", createdAt: "now" });
+  input.documents.push({ id: "doc-1", title: "Spec", revisionId: "rev-1", text: "body", createdAt: "now",
+    category: "unclassified", sourceKind: "builder-document", approvalStatus: "unknown", freshnessStatus: "unknown",
+    bodyAvailable: true, sourcePins: [], relatedIds: [] });
   const parsed = parseBuilderSnapshot(input, "workspace-a");
   assert.notEqual(parsed, input);
   assert.notEqual(parsed.documents, input.documents);

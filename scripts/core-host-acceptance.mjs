@@ -99,6 +99,11 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(visual.tabs.map(value => value.label), ['수정사항','작업 지시','기록','작업 파일','설계']);
   assert.deepEqual(visual.tabs.map(value => value.disabled), [true,true,false,true,false]);
   assert.equal(await workspace.evaluate(`document.querySelector('textarea[aria-label="Lead에게 메시지"]').disabled`), true);
+  await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Open the actual empty document center");
+  await eventually(() => workspace.evaluate(`document.querySelector('.sps-document-center [role="status"]')?.textContent`),
+    value => value?.includes('표시할 문서가 없습니다'), "empty document center before consultation import");
+  assert.equal(await workspace.evaluate(`document.querySelectorAll('.sps-dc-item,.sps-dc-body').length`), 0);
+  await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to Lead consultation intake");
   await click(workspace, '[aria-label="상담 텍스트 가져오기"]', "Open Builder consultation import");
   const text = "Isolated actual Host consultation input";
   await workspace.evaluate(`(() => {const field=document.querySelector('textarea[aria-label="상담 텍스트"]');
@@ -138,20 +143,13 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes(${JSON.stringify(text)})`), Boolean, "saved input rendered");
   assert.deepEqual((await data(company.id)).documents, []);
   await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Open stored Workspace document view");
-  await eventually(() => workspace.evaluate(`(() => {
-    const layout=document.querySelector('.builder-doc-layout');
-    return {panes:layout?.querySelectorAll(':scope > .builder-card').length,
-      headings:[...(layout?.querySelectorAll('h2')||[])].map(node=>node.textContent),
-      empty:layout?.textContent.includes('저장된 프로젝트 문서가 없습니다.'),
-      previewEmpty:layout?.textContent.includes('문서를 선택하면 저장된 내용이 표시됩니다.'),
-      duplicatedRail:Boolean(document.querySelector('.builder-activity-rail')),
-      overflow:document.querySelector('.builder-shell').scrollWidth>document.querySelector('.builder-shell').clientWidth};
-  })()`), value => value.panes === 2 && value.empty && value.previewEmpty, "actual empty document panes");
+  await eventually(() => workspace.evaluate(`document.querySelector('.sps-dc-body')?.textContent`),
+    value => value === text, "actual captured consultation source projected in the document center");
   const documentView = await workspace.evaluate(`({
-    headings:[...document.querySelectorAll('.builder-doc-layout h2')].map(node=>node.textContent),
+    documents:document.querySelectorAll('.sps-dc-item').length,
     duplicatedRail:Boolean(document.querySelector('.builder-activity-rail')),
     overflow:document.querySelector('.builder-shell').scrollWidth>document.querySelector('.builder-shell').clientWidth})`);
-  assert.deepEqual(documentView.headings, ['프로젝트 파일', '미리보기']);
+  assert.equal(documentView.documents, 1);
   assert.equal(documentView.duplicatedRail, false);
   assert.equal(documentView.overflow, false);
   assert.deepEqual((await data(company.id)).actors, []);
@@ -377,7 +375,9 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     await eventually(() => workspace.evaluate(`document.querySelector('.builder-graph-meta')?.textContent`),
       value => value?.includes("계획") && !value.includes("검증 완료"), "draft is planned, not verified work");
     await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Read the draft specification document");
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('설계 초안 · 승인 전')))`), Boolean, "draft fixture document");
+    await workspace.evaluate(`[...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('설계 초안 · 승인 전')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.sps-dc-body')?.textContent`),
       value => value?.includes("REQ-FIXTURE"), "draft document projection");
     await click(workspace, '[aria-label="Lead 설계 초안"] summary', "Expand the persisted draft question summary");
     await eventually(() => workspace.evaluate(`document.querySelector('[aria-label="Lead 설계 초안"]')?.textContent`),
@@ -417,11 +417,11 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Return to refresh the explicitly marked baseline DTO");
     await click(workspace, '[aria-label="Workspace 새로고침"]', "Load internal-baseline presentation fixture without a Host write");
     await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Inspect the read-only baseline presentation");
-    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('설계 기준 · Lead 해석 기록')))`), Boolean, "baseline fixture document");
-    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('설계 기준 · Lead 해석 기록')).click()`);
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('설계 기준 · Lead 해석 기록')))`), Boolean, "baseline fixture document");
+    await workspace.evaluate(`[...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('설계 기준 · Lead 해석 기록')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.sps-dc-body')?.textContent`),
       value => value?.includes("fixture-baseline-1") && value.includes("외부 계약 체결이나 코드 실행 권한이 아닙니다"), "baseline record is not execution authority");
-    assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
+    assert.equal(await workspace.evaluate(`document.querySelectorAll('.sps-dc-body button,.sps-dc-body input').length`), 0);
     if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-baseline-fixture.png"));
     const technologyFixture = { workspaceId: company.id, projectId: company.id, sequence: 1,
       record: { author: baselineFixture.baseline.author, createdAt: draftFixture.createdAt, baselineDigest: "c".repeat(64),
@@ -439,12 +439,12 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Refresh the marked technology presentation fixture");
     await click(workspace, '[aria-label="Workspace 새로고침"]', "Read technology choices without a Host write or AI run");
     await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Inspect read-only technology record");
-    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('기술 선정 명세 · Lead 기록')))`), Boolean, "technology fixture document");
-    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('기술 선정 명세 · Lead 기록')).click()`);
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('기술 선정 명세 · Lead 기록')))`), Boolean, "technology fixture document");
+    await workspace.evaluate(`[...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('기술 선정 명세 · Lead 기록')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.sps-dc-body')?.textContent`),
       value => value?.includes("fixture-technology-1") && value.includes("독립 검증이나 실행 승인이 아닙니다")
         && ["required", "allowed", "prohibited", "undecided"].every(word => value.includes(word)), "technology choices are reports, not verified execution");
-    assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
+    assert.equal(await workspace.evaluate(`document.querySelectorAll('.sps-dc-body button,.sps-dc-body input').length`), 0);
     if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-technology-fixture.png"));
     const workstreamsFixture = { workspaceId: company.id, projectId: company.id, sequence: 1,
       board: { projectId: company.id, revisionId: "fixture-board-1", workstreams: [{
@@ -463,9 +463,9 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Refresh marked Workstream presentation fixture");
     await click(workspace, '[aria-label="Workspace 새로고침"]', "Load pending instruction without real CTO or Host write");
     await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Read Workstream instruction document");
-    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')))`), Boolean, "Workstream fixture document");
-    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')).click()`);
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+    await eventually(() => workspace.evaluate(`Boolean([...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')))`), Boolean, "Workstream fixture document");
+    await workspace.evaluate(`[...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.sps-dc-body')?.textContent`),
       value => value?.includes("수신 확인 대기") && value.includes("실행 권한을 만들지 않습니다"), "pending instruction is not delivered or started");
     await workspace.evaluate(`globalThis.__spsBuilderWorkstreamsFixture.board.workstreams[0].receipt=${JSON.stringify({
       revision: 1, agentId: leadAgent.id, sessionId: "12121212-1212-4212-8212-121212121212",
@@ -474,10 +474,10 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     await click(workspace, '.builder-nav [aria-label="Lead 대화"]', "Refresh marked readiness presentation fixture");
     await click(workspace, '[aria-label="Workspace 새로고침"]', "Read readiness report without executing a CTO");
     await click(workspace, '.builder-nav [aria-label="설계 문서"]', "Inspect readiness versus execution distinction");
-    await workspace.evaluate(`[...document.querySelectorAll('.builder-record-button')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')).click()`);
-    await eventually(() => workspace.evaluate(`document.querySelector('.builder-document-preview')?.textContent`),
+    await workspace.evaluate(`[...document.querySelectorAll('.sps-dc-item')].find(node=>node.textContent.includes('CTO 작업 명세 · Fixture workstream')).click()`);
+    await eventually(() => workspace.evaluate(`document.querySelector('.sps-dc-body')?.textContent`),
       value => value?.includes("착수 가능 보고 · 실행 시작 아님") && value.includes("Presentation report only"), "CTO readiness is not a running state");
-    assert.equal(await workspace.evaluate(`document.querySelectorAll('.builder-document-preview button,.builder-document-preview input').length`), 0);
+    assert.equal(await workspace.evaluate(`document.querySelectorAll('.sps-dc-body button,.sps-dc-body input').length`), 0);
     if (screenshotPath) await captureScreenshot(workspace, path.join(path.dirname(screenshotPath), "my-builder-workstream-fixture.png"));
   } finally {
     await workspace.evaluate(`(() => { if(globalThis.__spsBuilderSavedFetch){globalThis.fetch=globalThis.__spsBuilderSavedFetch;delete globalThis.__spsBuilderSavedFetch;}
@@ -621,6 +621,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     leadSixSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
     uiContractEmptyScopedRead: true, uiApprovalMissingProposalDenied: true, liveUiApprovalTested: false,
     finalReviewHostPage: true, finalApprovalMissingPacketDenied: true, actualFinalPacketApproval: false,
+    documentCenterEmptyHost: true, documentCenterActualConsultationSource: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,

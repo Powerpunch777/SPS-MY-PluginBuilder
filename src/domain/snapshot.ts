@@ -129,13 +129,70 @@ function parseMessage(value: unknown, index: number): BuilderMessage {
 
 function parseDocument(value: unknown, index: number): BuilderDocument {
   const label = `documents[${index}]`;
-  const row = record(value, ["id", "title", "revisionId", "text", "createdAt"], label);
+  const baseFields = ["id", "title", "revisionId", "text", "createdAt"] as const;
+  const metadataFields = ["category", "sourceKind", "approvalStatus", "freshnessStatus", "bodyAvailable", "sourcePins", "relatedIds"] as const;
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError(`${label} must be a plain record.`);
+  const keys = Reflect.ownKeys(value);
+  if (baseFields.some(key => !Object.hasOwn(value, key)) || keys.some(key => typeof key !== "string"
+    || ![...baseFields, ...metadataFields].includes(key as typeof baseFields[number] | typeof metadataFields[number]))) {
+    throw new TypeError(`${label} has unknown or missing fields.`);
+  }
+  const row: Record<string, unknown> = Object.create(null);
+  for (const key of keys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError(`${label}.${key} must be an enumerable data field.`);
+    row[key] = descriptor.value;
+  }
+  const docId = id(row.id, `${label}.id`);
+  const sourceKind = row.sourceKind === undefined ? "builder-document" : oneOf(row.sourceKind,
+    ["builder-document", "baseline-body", "design-baseline", "design-draft", "technology-decision", "workstream", "lead-memory", "consultation-source"] as const,
+    `${label}.sourceKind`);
+  const categoryForSource = { "builder-document": "unclassified", "baseline-body": "design", "design-baseline": "design",
+    "design-draft": "design", "technology-decision": "technical-research", workstream: "development", "lead-memory": "unclassified",
+    "consultation-source": "consultation" } as const;
+  const expectedPrefix = { "builder-document": null, "baseline-body": "baseline-body:", "design-baseline": "design-baseline:",
+    "design-draft": "draft:", "technology-decision": "technology-decisions:", workstream: "workstream:", "lead-memory": "lead-memory:",
+    "consultation-source": "consultation-source:" } as const;
+  if (expectedPrefix[sourceKind] !== null && !docId.startsWith(expectedPrefix[sourceKind]!)) {
+    throw new TypeError(`${label}.sourceKind does not match its source identity.`);
+  }
+  const category = row.category === undefined ? categoryForSource[sourceKind]
+    : oneOf(row.category, ["consultation", "design", "ui-design", "validation", "technical-research", "development",
+      "change-history", "test-qa", "delivery", "unclassified"] as const, `${label}.category`);
+  if (category !== categoryForSource[sourceKind]) throw new TypeError(`${label}.category conflicts with the authoritative source mapping.`);
+  const approvalStatus = row.approvalStatus === undefined ? sourceKind === "design-draft" ? "unapproved" : "unknown"
+    : oneOf(row.approvalStatus, ["approved", "unapproved", "unknown"] as const, `${label}.approvalStatus`);
+  if (approvalStatus === "approved") throw new TypeError(`${label}.approvalStatus cannot be inferred from a document projection.`);
+  if (sourceKind === "design-draft" && approvalStatus !== "unapproved") throw new TypeError(`${label}.approvalStatus conflicts with a draft source.`);
+  if (sourceKind !== "design-draft" && approvalStatus !== "unknown") throw new TypeError(`${label}.approvalStatus is unsupported for this source.`);
+  const freshnessStatus = row.freshnessStatus === undefined ? "unknown"
+    : oneOf(row.freshnessStatus, ["current", "stale", "review-required", "unknown"] as const, `${label}.freshnessStatus`);
+  if (sourceKind !== "baseline-body" && freshnessStatus !== "unknown"
+    || sourceKind === "baseline-body" && freshnessStatus === "review-required") {
+    throw new TypeError(`${label}.freshnessStatus is unsupported for this source.`);
+  }
+  const textValue = text(row.text, `${label}.text`, MAX_DOCUMENT_TEXT, true);
+  const bodyAvailable = row.bodyAvailable === undefined ? true : row.bodyAvailable;
+  if (typeof bodyAvailable !== "boolean") throw new TypeError(`${label}.bodyAvailable must be boolean.`);
+  if (!bodyAvailable && textValue.length > 0) throw new TypeError(`${label}.bodyAvailable conflicts with a populated body.`);
+  const sourcePins = row.sourcePins === undefined ? [] : list(row.sourcePins, 256, `${label}.sourcePins`).map((item, pinIndex) => {
+    const pinLabel = `${label}.sourcePins[${pinIndex}]`;
+    const pinRow = record(item, ["sourceId", "revisionId", "sha256"], pinLabel);
+    if (typeof pinRow.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(pinRow.sha256)) throw new TypeError(`${pinLabel}.sha256 is invalid.`);
+    return Object.freeze({ sourceId: id(pinRow.sourceId, `${pinLabel}.sourceId`), revisionId: id(pinRow.revisionId, `${pinLabel}.revisionId`), sha256: pinRow.sha256 });
+  });
+  if (new Set(sourcePins.map(pin => `${pin.sourceId}\0${pin.revisionId}`)).size !== sourcePins.length) throw new TypeError(`${label}.sourcePins contains duplicates.`);
+  const relatedIds = row.relatedIds === undefined ? [] : list(row.relatedIds, 1_000, `${label}.relatedIds`).map((item, refIndex) => id(item, `${label}.relatedIds[${refIndex}]`));
+  if (new Set(relatedIds).size !== relatedIds.length) throw new TypeError(`${label}.relatedIds contains duplicates.`);
   return {
-    id: id(row.id, `${label}.id`),
+    id: docId,
     title: text(row.title, `${label}.title`, MAX_LABEL),
     revisionId: id(row.revisionId, `${label}.revisionId`),
-    text: text(row.text, `${label}.text`, MAX_DOCUMENT_TEXT, true),
+    text: textValue,
     createdAt: text(row.createdAt, `${label}.createdAt`, 100),
+    category, sourceKind, approvalStatus, freshnessStatus, bodyAvailable,
+    sourcePins: Object.freeze(sourcePins), relatedIds: Object.freeze(relatedIds),
   };
 }
 

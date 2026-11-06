@@ -33,6 +33,10 @@ test("draft projection is non-mutating, read-only and never invents verified wor
   assert.equal(projected.graph.entities[0]?.ownerActorId, null);
   assert.deepEqual(projected.graph.entities[0]?.evidenceRefs, []);
   assert.match(projected.documents[0]!.title, /초안.*승인 전/);
+  assert.equal(projected.documents[0]?.category, "design");
+  assert.equal(projected.documents[0]?.approvalStatus, "unapproved");
+  assert.equal(projected.documents[0]?.freshnessStatus, "unknown");
+  assert.deepEqual(projected.documents[0]?.relatedIds, ["spec-1", "graph-1", "REQ-1", "consultation-33333333-3333-4333-8333-333333333333"]);
   assert.deepEqual(projected.actors, []);
   assert.deepEqual(projected.messages, []);
   assert.deepEqual(projected.integrations, original.integrations);
