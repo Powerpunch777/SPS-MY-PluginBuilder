@@ -129,6 +129,28 @@ function readBundle(value: unknown): ReadableBundle | null {
     || !value.pack.exceptions.every(item => plain(item) && text(item.id) && text(item.from) && text(item.event) && text(item.to))
     || !value.pack.excludedCombinations.every(item => plain(item) && text(item.from) && text(item.event)
       && text(item.to) && text(item.reason))) return null;
+  if (value.designModel !== undefined) {
+    const model = value.designModel;
+    const decisionStatuses = new Set(["RESOLVED", "DELEGATED", "UNDECIDED", "NOT_APPLICABLE", "NOT_CHECKED", "INCONCLUSIVE"]);
+    if (!plain(model) || model.kind !== "design-model-v1" || !Array.isArray(model.facts) || !model.facts.every(text)
+      || !plain(model.rulesManifest) || !text(model.rulesManifest.rulesVersion) || !digest(model.rulesManifest.digest)
+      || !Array.isArray(model.rulesManifest.rules) || !Array.isArray(model.rulesManifest.targets)
+      || !plain(model.rulesManifest.identity) || model.rulesManifest.identity.workspaceId !== value.workspaceId
+      || model.rulesManifest.identity.projectId !== value.projectId
+      || model.rulesManifest.identity.specRevisionId !== value.pack.identity.specRevisionId
+      || model.rulesManifest.identity.specDigest !== value.pack.identity.specDigest
+      || !Array.isArray(model.scenarios) || !Array.isArray(model.itemDecisions) || !Array.isArray(model.acceptanceCriteria)
+      || !model.scenarios.every(item => plain(item) && text(item.id) && text(item.state) && text(item.event)
+        && text(item.nextState) && (item.exceptionId === null || text(item.exceptionId)))
+      || !model.itemDecisions.every(item => plain(item) && scope.has(String(item.requirementId)) && decisionStatuses.has(String(item.status))
+        && text(item.reason) && Array.isArray(item.sourceIds) && item.sourceIds.every(sourceId => text(sourceId)
+          && pinsByRequirement.get(String(item.requirementId))?.some(pin => pin.sourceId === sourceId)))
+      || new Set(model.itemDecisions.map(item => plain(item) ? item.requirementId : null)).size !== requirements.length
+      || !model.acceptanceCriteria.every(item => plain(item) && text(item.acId) && text(item.text)
+        && text(item.sourceId) && digest(item.textSha256) && digest(item.sourceDigest)
+        && pinsByRequirement.get(String(item.requirementId))?.some(pin => pin.acId === item.acId && pin.sourceId === item.sourceId
+          && pin.sourceDigest === item.sourceDigest))) return null;
+  }
   return { bundle: value as unknown as FirstDesignReviewBundle,
     requirements: Object.freeze(requirements),
     pinsByRequirement, issues: Object.freeze(issues) };
@@ -216,6 +238,23 @@ export function FirstDesignReviewPanel({ view, onApprove }: FirstDesignReviewPan
             <pre className="sps-fdr-pre">{shown({ transitions: bundle!.pack.transitions, exceptions: bundle!.pack.exceptions,
               excludedCombinations: bundle!.pack.excludedCombinations })}</pre>
           </details>
+          {bundle!.designModel && <section className="sps-fdr-section" aria-label="명세 모델 검사 입력">
+            <h3>명세 모델 검사 입력</h3>
+            <p className="sps-fdr-muted">이 자료의 검사는 설계 모델의 정합성을 확인하며 실제 코드 실행이나 QA 합격을 뜻하지 않습니다.</p>
+            <div className="sps-fdr-grid">
+              <DataItem label="Coverage 규칙 버전" value={bundle!.designModel.rulesManifest.rulesVersion} />
+              <DataItem label="명세 조건값" value={bundle!.designModel.facts.join(", ") || "없음"} />
+              <DataItem label="유한 시나리오" value={bundle!.designModel.scenarios.length} />
+            </div>
+            <ul className="sps-fdr-list">{bundle!.designModel.itemDecisions.map(item => <li className="sps-fdr-item" key={item.requirementId}>
+              <strong>{item.requirementId} · {item.status}</strong><small>{item.reason}</small>
+              <small className="sps-fdr-mono">{item.sourceIds.join(", ")}</small>
+            </li>)}</ul>
+            {bundle!.designModel.acceptanceCriteria.map(item => <blockquote className="sps-fdr-rule" key={item.requirementId + "/" + item.acId + "/" + item.sourceId}>
+              <strong>{item.acId}</strong><p>{item.text}</p><small className="sps-fdr-mono">{item.sourceId} · {item.sourceDigest}</small>
+            </blockquote>)}
+            <details><summary>Coverage·시나리오 전체 내용</summary><pre className="sps-fdr-pre">{shown(bundle!.designModel)}</pre></details>
+          </section>}
           {snapshot.issues.length > 0 && <div className="sps-fdr-section" role="status">
             <h3 className="sps-fdr-warning">미확인 또는 연결 누락</h3>
             <ul>{snapshot.issues.map((issue, index) => <li key={index + "-" + issue}>{issue}</li>)}</ul>

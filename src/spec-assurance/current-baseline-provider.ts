@@ -9,7 +9,9 @@ import { readLeadUserSource, readLeadUserTurn } from "../lead-conversations.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
 import type { CoverageMaterial, CoverageScope } from "../spec-coverage/evaluator.ts";
 import { readFirstDesignReviewRevision } from "./review-first-design.ts";
-import type { AssuranceCoverageProvider, AssuranceCoverageQuery, DomainPack, SpecAssuranceAuthoritySnapshot } from "./evaluator.ts";
+import { evaluateSpecAssurance, type AssuranceCoverageProvider, type AssuranceCoverageQuery, type DomainPack, type SpecAssuranceAuthoritySnapshot } from "./evaluator.ts";
+import { rebindDesignModelMaterial } from "./design-model-material.ts";
+import { coverageRulesManifestDigest, type CoverageCheck } from "../spec-coverage/evaluator.ts";
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -158,30 +160,82 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
         id: source.id, bodyDigest: source.digest, relationIds: Object.freeze([...new Set(sourceRefs.filter(ref => ref.sourceId === source.id)
           .flatMap(ref => [ref.requirementId, ...(ref.acId === null ? [] : [ref.acId])]))].sort()) })));
 
-      const latest = await store.current();
-      const latestBundle = await readFirstDesignReviewRevision(workspaceId, projectId, firstReviewRevisionId,
-        platform.state as unknown as RevisionState);
-      for (const sourceId of sourceIds) {
-        const reread = await readFirstReviewSource(sourceId, workspaceId, sessions, platform);
-        if (reread.id !== sourceId || sha256(reread.text) !== sourceById.get(sourceId)?.digest) {
-          throw sourceFailure("original-source-changed-during-read");
+      const assertCurrentSnapshot = async () => {
+        const latest = await store.current();
+        const latestBundle = await readFirstDesignReviewRevision(workspaceId, projectId, firstReviewRevisionId,
+          platform.state as unknown as RevisionState);
+        for (const sourceId of sourceIds) {
+          const reread = await readFirstReviewSource(sourceId, workspaceId, sessions, platform);
+          if (reread.id !== sourceId || sha256(reread.text) !== sourceById.get(sourceId)?.digest) {
+            throw sourceFailure("original-source-changed-during-read");
+          }
         }
-      }
-      if (!latest || latest.sequence !== first.sequence || JSON.stringify(latest.revision) !== JSON.stringify(baseline)
-        || !latestBundle || latestBundle.revisionId !== reviewBundle.revisionId
-        || sha256(JSON.stringify(latestBundle)) !== bundleDigest) {
-        throw new Error("Current Baseline or first-design approval binding changed during assurance lookup.");
+        if (!latest || latest.sequence !== first.sequence || JSON.stringify(latest.revision) !== JSON.stringify(baseline)
+          || !latestBundle || latestBundle.revisionId !== reviewBundle.revisionId
+          || sha256(JSON.stringify(latestBundle)) !== bundleDigest) {
+          throw new Error("Current Baseline or first-design approval binding changed during assurance lookup.");
+        }
+      };
+      await assertCurrentSnapshot();
+
+      const model = reviewBundle.designModel ? rebindDesignModelMaterial(reviewBundle.designModel, identity) : null;
+      for (const ac of model?.acceptanceCriteria ?? []) {
+        const source = sourceById.get(ac.sourceId);
+        if (!source || source.digest !== ac.sourceDigest || !source.text.includes(ac.text) || sha256(ac.text) !== ac.textSha256) {
+          throw sourceFailure("original-source-digest-mismatch");
+        }
       }
 
       const materials: CoverageMaterial[] = [
         Object.freeze({ kind: "specification", identity, presence: completeRequirementLookup ? "present" : "partial",
           verification: completeRequirementLookup ? "validated" : "unknown",
-          entities: Object.freeze(scopedRequirements.map(requirement => Object.freeze({ kind: "requirement" as const,
+          entities: Object.freeze([...scopedRequirements.map(requirement => Object.freeze({ kind: "requirement" as const,
             id: requirement.id, bodyDigest: sha256(JSON.stringify(requirement)),
-            relationIds: Object.freeze([...requirement.acceptanceCriteriaIds]) }))) }),
+            relationIds: Object.freeze([...requirement.acceptanceCriteriaIds]) })),
+          ...[...new Map((model?.acceptanceCriteria ?? []).filter(ac => scope.acIds.includes(ac.acId))
+            .map(ac => [ac.acId, Object.freeze({ kind: "ac" as const, id: ac.acId, bodyDigest: ac.textSha256,
+              relationIds: Object.freeze([ac.requirementId, ac.sourceId]) })])).values()]]) }),
         Object.freeze({ kind: "source", identity, presence: sourceRefs.length > 0 ? "present" : "partial",
           verification: sourceRefs.length > 0 ? "validated" : "unknown", entities: sourceEntities }),
       ];
+      if (model) {
+        const factSet = new Set(model.facts);
+        const matches = (predicate: DomainPack["applicability"]) => (predicate.all ?? []).every(fact => factSet.has(fact))
+          && (!predicate.any?.length || predicate.any.some(fact => factSet.has(fact)))
+          && !(predicate.none ?? []).some(fact => factSet.has(fact));
+        const analysis = await evaluateSpecAssurance({ identity, scope: { requirementIds }, facts: model.facts,
+          packs: [approvedPack], scenarios: model.scenarios });
+        const ruleById = new Map(approvedPack.rules.map(rule => [rule.id, rule]));
+        const manifestBase = { ...model.rulesManifest, scope,
+          targets: model.rulesManifest.targets.filter(target => (target.targetKind === "requirement" ? scope.requirementIds : scope.acIds).includes(target.targetId)),
+          rules: model.rulesManifest.rules.map(rule => {
+            const domainRule = ruleById.get(rule.id)!;
+            return matches(approvedPack.applicability) && matches(domainRule.appliesWhen) ? rule
+              : { ...rule, requiresCheck: false, requiredEvidenceKinds: [] };
+          }), digest: "0".repeat(64) };
+        const manifest = Object.freeze({ ...manifestBase, digest: coverageRulesManifestDigest(manifestBase) });
+        const checks: CoverageCheck[] = [];
+        for (const target of manifest.targets) for (const ruleId of target.ruleIds) {
+          if (!manifest.rules.find(rule => rule.id === ruleId)?.requiresCheck) continue;
+          const linked = target.targetKind === "requirement" ? [target.targetId]
+            : scopedRequirements.filter(requirement => requirement.acceptanceCriteriaIds.includes(target.targetId)).map(requirement => requirement.id);
+          const results = analysis.checkerResults.filter(result => result.ruleId === ruleId && linked.includes(result.requirementId));
+          const status = results.some(result => result.status === "FAIL") ? "failed"
+            : linked.length > 0 && linked.every(id => results.some(result => result.requirementId === id && result.status === "PASS")) ? "passed" : "not-run";
+          const refs = sourceRefs.filter(ref => target.targetKind === "requirement"
+            ? ref.requirementId === target.targetId && ref.acId === null : ref.acId === target.targetId);
+          checks.push(Object.freeze({ targetId: target.targetId, targetKind: target.targetKind, ruleId, status,
+            evidenceRefs: Object.freeze(status === "not-run" ? [] : [...new Set([target.targetId, ...refs.map(ref => ref.sourceId)])]) }));
+        }
+        await assertCurrentSnapshot();
+        return Object.freeze({ coverageInput: Object.freeze({ identity, scope, rulesVersion: manifest.rulesVersion, manifest,
+          materials: Object.freeze(materials), sourceRefs, checks: Object.freeze(checks) }),
+          domainPacks: Object.freeze([approvedPack]), facts: model.facts, scenarios: model.scenarios,
+          designModelEvidence: Object.freeze({ kind: "design-model-v1" as const, approvalRevisionId: firstReviewRevisionId,
+            materialSha256: sha256(JSON.stringify(reviewBundle.designModel)) }),
+          itemDecisions: Object.freeze(model.itemDecisions.filter(item => requirementIds.includes(item.requirementId))
+            .map(item => Object.freeze({ requirementId: item.requirementId, status: item.status, reason: item.reason }))) });
+      }
       return Object.freeze({
         coverageInput: Object.freeze({ identity, scope, rulesVersion: "not-provided", manifest: null,
           materials: Object.freeze(materials), sourceRefs, checks: Object.freeze([]) }),

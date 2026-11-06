@@ -35,7 +35,7 @@ export const READ_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
 
 export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
   name: "builder.propose-first-design-review", displayName: "Propose the initial design review",
-  description: "Main proposes original-source links and a versioned rule pack for the exact current DesignDraft before the first Baseline. Read the draft and review head first. Identity and source hashes are server-derived; the proposal must be confirmed by the user in Builder.",
+  description: "Main proposes original-source links and a versioned rule pack for the exact current DesignDraft before the first Baseline. Optional designModel supplies explicit design facts, coverage rules/targets, finite design scenarios, source-linked item decisions and exact AC quotes for the same user review. These are static design inputs, not runtime observations or QA. Identity and source hashes are server-derived; the exact proposal must be confirmed by the user in Builder.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"],
     properties: { projectId: firstId, expectedDraftRevisionId: firstId, expectedReviewHeadRevisionId: { type: ["string", "null"], maxLength: 160 },
@@ -44,6 +44,15 @@ export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
         properties: { packId: firstId, version: firstId, applicability: { type: "object" }, rules: { type: "array" },
           transitions: { type: "array" }, exceptions: { type: "array" }, excludedCombinations: { type: "array" } } },
       sourcePins: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false,
-        required: ["requirementId", "acId", "sourceId"], properties: { requirementId: firstId, acId: { type: ["string", "null"] }, sourceId: firstId } } } },
+        required: ["requirementId", "acId", "sourceId"], properties: { requirementId: firstId, acId: { type: ["string", "null"] }, sourceId: firstId } } },
+      designModel: { type: "object", additionalProperties: false,
+        required: ["facts", "rulesVersion", "coverageRules", "coverageTargets", "scenarios", "itemDecisions", "acceptanceCriteria"],
+        properties: { facts: { type: "array", maxItems: 1000, items: firstId }, rulesVersion: firstId,
+          coverageRules: { type: "array", maxItems: 1000 }, coverageTargets: { type: "array", maxItems: 101000 },
+          scenarios: { type: "array", maxItems: 10000 }, itemDecisions: { type: "array", maxItems: 1000 },
+          acceptanceCriteria: { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+            required: ["requirementId", "acId", "sourceId", "quote"], properties: { requirementId: firstId, acId: firstId,
+              sourceId: firstId, quote: { type: "string", minLength: 1, maxLength: 8192 } } } } } },
+    },
   },
 });

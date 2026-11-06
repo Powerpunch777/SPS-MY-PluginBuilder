@@ -39,6 +39,31 @@ const scenario = { id: "case-1", state: "draft", event: "submit", nextState: "pe
 const base = (overrides: Partial<AssuranceInput> = {}): AssuranceInput => ({ identity, scope: { requirementIds: [requirementId], uiIds: ["UI-1"], workstreamIds: ["WS-1"], taskIds: ["TASK-1"] },
   facts: ["orders", "enabled"], packs: [pack], scenarios: [scenario], ...overrides });
 
+test("a shared finite rule checks each scoped requirement instead of skipping later requirements", async () => {
+  const second = "REQ-2";
+  const input = structuredClone(coverageInput) as unknown as {
+    scope: { requirementIds: string[]; acIds: string[] }; manifest: typeof coverageManifest;
+    materials: { kind: string; entities: { kind: string; id: string; bodyDigest: string; relationIds: string[] }[] }[];
+    sourceRefs: { requirementId: string; acId: null; sourceId: string; sourceDigest: string; revisionId: string }[];
+    checks: { targetId: string; ruleId: string; status: string; evidenceRefs: string[] }[];
+  };
+  input.scope.requirementIds.push(second);
+  input.manifest.scope = { requirementIds: [...input.scope.requirementIds], acIds: [] };
+  input.manifest.targets.push({ ...input.manifest.targets[0]!, targetId: second });
+  input.manifest.digest = coverageRulesManifestDigest(input.manifest);
+  input.materials.find(item => item.kind === "specification")!.entities.push({ kind: "requirement", id: second,
+    bodyDigest: "d".repeat(64), relationIds: [] });
+  input.sourceRefs.push({ ...input.sourceRefs[0]!, requirementId: second });
+  input.checks.push({ ...input.checks[0]!, targetId: second });
+  const shared: DomainPack = { ...pack, rules: [{ ...rule, requirementIds: [requirementId, second],
+    modelCases: [{ when: {}, state: scenario.state, event: scenario.event, allowedNextStates: [scenario.nextState] }] }] };
+  const result = await createSpecAssuranceConsumer(async () => authoritySnapshot(input as unknown as SpecCoverageInput, [shared]))(
+    base({ scope: { requirementIds: [requirementId, second] } }));
+  assert.equal(result.status, "PASS");
+  assert.deepEqual(result.checkerResults.map(item => item.requirementId), [requirementId, second]);
+  assert(result.checkerResults.every(item => item.status === "PASS"));
+});
+
 test("composes applicable versioned packs and deduplicates identical rules deterministically", () => {
   const result = composeDomainPacks([pack, { ...pack, rules: [...pack.rules].reverse(), transitions: [...pack.transitions].reverse() },
     { ...pack, packId: "not-applicable", applicability: { all: ["missing"] } }], identity, ["orders"]);

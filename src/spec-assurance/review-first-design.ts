@@ -11,6 +11,7 @@ import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import type { AuthoredDesignDraft } from "../design-draft-store.ts";
 import { createRevisionJournal, type RevisionState } from "../solution-revision-store.ts";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
+import { parseDesignModelMaterial, type DesignModelMaterial } from "./design-model-material.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const ID = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= 160
@@ -35,6 +36,7 @@ export type FirstDesignReviewBundle = Readonly<{
   draft: AuthoredDesignDraft["draft"];
   sourcePins: readonly FirstDesignSourcePin[];
   pack: DomainPack;
+  designModel?: DesignModelMaterial;
   author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number; createdAt: string }>;
   approval?: Readonly<{ userId: string; approvedAt: string; attestedBundleRevisionId: string }>;
 }>;
@@ -45,6 +47,7 @@ export type FirstDesignReviewProposalInput = Readonly<{
   expectedReviewHeadRevisionId: string | null;
   pack: Readonly<Omit<DomainPack, "identity">>;
   sourcePins: readonly Readonly<{ requirementId: string; acId: string | null; sourceId: string }>[];
+  designModel?: unknown;
 }>;
 
 function freezeTree<T>(value: T): T {
@@ -74,13 +77,14 @@ function validatePack(value: unknown, identity: DomainPack["identity"], requirem
   return freezeTree(pack);
 }
 
-function proposalFingerprint(bundle: Pick<FirstDesignReviewBundle, "workspaceId" | "projectId" | "draftRevisionId" | "draftDigest" | "draft" | "sourcePins" | "pack" | "author">) {
+function proposalFingerprint(bundle: Pick<FirstDesignReviewBundle, "workspaceId" | "projectId" | "draftRevisionId" | "draftDigest" | "draft" | "sourcePins" | "pack" | "designModel" | "author">) {
   return hash([bundle.workspaceId, bundle.projectId, bundle.draftRevisionId, bundle.draftDigest, bundle.draft,
-    bundle.sourcePins, bundle.pack, bundle.author.agentId, bundle.author.sessionId, bundle.author.runId, bundle.author.selectionRevision]);
+    bundle.sourcePins, bundle.pack, bundle.author.agentId, bundle.author.sessionId, bundle.author.runId, bundle.author.selectionRevision,
+    ...(bundle.designModel ? [bundle.designModel] : [])]);
 }
 
 function parseBundle(value: unknown, workspaceId: string, projectId: string): FirstDesignReviewBundle {
-  const row = exactToolRecord(value, ["status", "revisionId", "workspaceId", "projectId", "priorBaseline", "draftRevisionId", "draftDigest", "draft", "sourcePins", "pack", "author"], ["approval"]);
+  const row = exactToolRecord(value, ["status", "revisionId", "workspaceId", "projectId", "priorBaseline", "draftRevisionId", "draftDigest", "draft", "sourcePins", "pack", "author"], ["approval", "designModel"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision", "createdAt"]);
   if (!(row.status === "PROPOSED" || row.status === "APPROVED") || !ID(row.revisionId)
     || row.workspaceId !== workspaceId || row.projectId !== projectId || row.priorBaseline !== null
@@ -116,6 +120,8 @@ function parseBundle(value: unknown, workspaceId: string, projectId: string): Fi
   const identity = Object.freeze({ workspaceId, projectId, specRevisionId: draft.specification.revisionId,
     specDigest: hash(draft.specification) });
   const pack = validatePack(row.pack, identity, new Set(draft.specification.requirements.map(item => item.id)));
+  const designModel = Object.hasOwn(row, "designModel")
+    ? parseDesignModelMaterial(row.designModel, identity, draft.specification.requirements, pack, sourcePins, true) : undefined;
   const approval = Object.hasOwn(row, "approval") ? exactToolRecord(row.approval, ["userId", "approvedAt", "attestedBundleRevisionId"]) : undefined;
   if ((row.status === "APPROVED") !== !!approval) throw new TypeError("Approval evidence must be explicit and consistent with bundle status.");
   if (approval && (!ID(approval.userId) || typeof approval.approvedAt !== "string" || !Number.isFinite(Date.parse(approval.approvedAt))
@@ -125,6 +131,7 @@ function parseBundle(value: unknown, workspaceId: string, projectId: string): Fi
   }
   return freezeTree({ status: row.status, revisionId: row.revisionId, workspaceId, projectId, priorBaseline: null,
     draftRevisionId: row.draftRevisionId, draftDigest: row.draftDigest, draft, sourcePins: Object.freeze(sourcePins), pack,
+    ...(designModel ? { designModel } : {}),
     author: Object.freeze({ agentId: author.agentId as string, sessionId: author.sessionId as string,
       runId: author.runId as string, selectionRevision: author.selectionRevision as number, createdAt: author.createdAt as string }),
     ...(approval ? { approval: Object.freeze({ userId: approval.userId as string, approvedAt: approval.approvedAt as string,
@@ -201,12 +208,12 @@ async function readOriginalDesignSource(sourceId: string, workspaceId: string,
 async function verifiedDraftSources(draft: AuthoredDesignDraft, workspaceId: string,
   sessions: Awaited<ReturnType<typeof currentDraft>>["sessions"], context: ReviewContext) {
   const sourceDigests = new Map(draft.sourceDigests.map(item => [item.id, item.sha256]));
-  const verified = new Map<string, string>();
+  const verified = new Map<string, Readonly<{ digest: string; text: string }>>();
   for (const sourceId of draft.draft.sourceIds) {
     const source = await readOriginalDesignSource(sourceId, workspaceId, sessions, context);
     const digest = createHash("sha256").update(source.text, "utf8").digest("hex");
     if (source.id !== sourceId || sourceDigests.get(sourceId) !== digest) throw new Error("Original customer source bytes no longer match the immutable DesignDraft.");
-    verified.set(sourceId, digest);
+    verified.set(sourceId, Object.freeze({ digest, text: source.text }));
   }
   return verified;
 }
@@ -248,7 +255,7 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
     } : undefined,
   } } as ReviewContext;
   const workspaceId = context.companyId;
-  const input = exactToolRecord(params, ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"]);
+  const input = exactToolRecord(params, ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"], ["designModel"]);
   if (!ID(input.projectId) || input.projectId !== workspaceId) throw new TypeError("First-design review requires the authenticated single-project Workspace ID.");
   if (!ID(input.expectedDraftRevisionId) || input.expectedReviewHeadRevisionId !== null && !ID(input.expectedReviewHeadRevisionId)) {
     throw new TypeError("Exact current DesignDraft revision and observed review head are required.");
@@ -277,13 +284,16 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
     if (!ID(row.requirementId) || row.acId !== null && !ID(row.acId) || typeof row.sourceId !== "string"
       || !sources.has(row.sourceId)) throw new TypeError("Source pin must cite an in-scope requirement and original source in the current DesignDraft.");
     return { requirementId: row.requirementId, acId: row.acId as string | null,
-      sourceId: row.sourceId, sourceDigest: sources.get(row.sourceId)! };
+      sourceId: row.sourceId, sourceDigest: sources.get(row.sourceId)!.digest };
   });
   const base = { status: "PROPOSED" as const, workspaceId, projectId, priorBaseline: null,
     draftRevisionId: parsedDraft.revisionId, draftDigest: hash(parsedDraft), draft: parsedDraft,
     sourcePins, pack, author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId,
       selectionRevision: authority.selectionRevision, createdAt: new Date().toISOString() } };
-  const fingerprint = proposalFingerprint(base);
+  const proposed = Object.hasOwn(input, "designModel") ? { ...base,
+    designModel: parseDesignModelMaterial(input.designModel, identity, parsedDraft.specification.requirements, pack, sourcePins,
+      false, new Map([...sources].map(([id, source]) => [id, source.text]))) } : base;
+  const fingerprint = proposalFingerprint(proposed);
   await authority.check();
   const store = createFirstDesignReviewStore(workspaceId, projectId, state);
   const current = await store.current();
@@ -297,7 +307,7 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
       actualDraftRevisionId: parsedDraft.revisionId, content: "Review head changed; refresh before proposing. No revision was overwritten." };
   }
   const revisionId = `first-review-${hash([fingerprint, actualHead])}`;
-  const proposal = parseBundle({ ...base, revisionId }, workspaceId, projectId);
+  const proposal = parseBundle({ ...proposed, revisionId }, workspaceId, projectId);
   await authority.check();
   const result = await store.proposeCAS({ expectedBaseRevisionId: actualHead, revision: proposal });
   await authority.check();
@@ -390,7 +400,7 @@ export async function assertCurrentFirstDesignApproval(params: unknown, runConte
     || hash(normalizedDraft) !== exact.revision.draftDigest
     || JSON.stringify(normalizedDraft) !== JSON.stringify(exact.revision.draft)) return null;
   const sources = await verifiedDraftSources(draft.revision, workspaceId, sessions, guardedContext);
-  if (exact.revision.sourcePins.some(pin => sources.get(pin.sourceId) !== pin.sourceDigest)) return null;
+  if (exact.revision.sourcePins.some(pin => sources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return null;
   await assertDraftStillCurrent(workspaceId, projectId, draft, guardedContext);
   await assertNoBaseline(workspaceId, projectId, guardedContext);
   const latest = await reviewStore.current();
@@ -398,7 +408,7 @@ export async function assertCurrentFirstDesignApproval(params: unknown, runConte
   const latestDraft = await currentDraft(workspaceId, projectId, guardedContext);
   if (latestDraft.draft.sequence !== draft.sequence || JSON.stringify(latestDraft.draft.revision) !== JSON.stringify(draft.revision)) return null;
   const latestSources = await verifiedDraftSources(latestDraft.draft.revision, workspaceId, latestDraft.sessions, guardedContext);
-  if (exact.revision.sourcePins.some(pin => latestSources.get(pin.sourceId) !== pin.sourceDigest)) return null;
+  if (exact.revision.sourcePins.some(pin => latestSources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return null;
   await assertNoBaseline(workspaceId, projectId, guardedContext);
   await authority.check();
   const bundleDigest = hash(exact.revision);

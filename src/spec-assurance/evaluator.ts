@@ -31,6 +31,7 @@ export type AssuranceGap = Readonly<{ id: string; fingerprint: string; requireme
   severity: string | null; decisionOwnerId: string | null; detectionMethod: string; resolutionEvidence: readonly string[];
   reason: string; status: "candidate" }>;
 export type ItemDecisionStatus = "VERIFIED" | "RESOLVED" | "DELEGATED" | "UNDECIDED" | "NOT_APPLICABLE" | "NOT_CHECKED" | "INCONCLUSIVE";
+export type DesignModelEvidence = Readonly<{ kind: "design-model-v1"; approvalRevisionId: string; materialSha256: string }>;
 export type AssuranceResult = Readonly<{
   /** Checker outcome only. It is not an item decision or execution authorization. */
   status: AssuranceStatus;
@@ -50,6 +51,7 @@ export type AssuranceResult = Readonly<{
     reason: string | null }>[];
   gaps: readonly AssuranceGap[];
   sourceEvidence: readonly Readonly<{ sourceId: string; sourceDigest: string; revisionId: string }>[];
+  designModelEvidence?: DesignModelEvidence;
 }>;
 
 export type AssuranceInput = Readonly<{
@@ -80,6 +82,10 @@ export type SpecAssuranceAuthoritySnapshot = Readonly<{
   coverageInput: SpecCoverageInput;
   domainPacks: readonly DomainPack[];
   facts: readonly string[];
+  /** Approved static design-model inputs, never runtime/process observations. */
+  scenarios?: readonly AssuranceScenario[];
+  itemDecisions?: readonly AssuranceResult["itemDecisions"][number][];
+  designModelEvidence?: DesignModelEvidence;
 }>;
 /** Inject only at the server-owned consumer boundary; never deserialize this provider from a client/model payload. */
 export type AssuranceCoverageProvider = (query: AssuranceCoverageQuery) => SpecAssuranceAuthoritySnapshot | null
@@ -257,6 +263,9 @@ async function evaluateSpecAssuranceFromProvider(input: AssuranceInput, provider
   let trustedCoverage: SpecCoverageResult | null = null;
   let trustedPacks: readonly DomainPack[] | null = null;
   let trustedFacts: readonly string[] | null = null;
+  let trustedScenarios: readonly AssuranceScenario[] | null = null;
+  let trustedDecisions: AssuranceResult["itemDecisions"] | null = null;
+  let trustedModelEvidence: DesignModelEvidence | null = null;
   let coverageAuthority: CoverageAuthorityStatus = "unavailable";
   if (provider) {
     const query: AssuranceCoverageQuery = Object.freeze({ identity: Object.freeze({ ...input.identity }),
@@ -281,6 +290,27 @@ async function evaluateSpecAssuranceFromProvider(input: AssuranceInput, provider
         else {
           composeDomainPacks(snapshot.domainPacks, input.identity, snapshot.facts);
           trustedCoverage = result; trustedPacks = snapshot.domainPacks; trustedFacts = snapshot.facts; coverageAuthority = "verified";
+          if (snapshot.scenarios !== undefined) {
+            ensure(Array.isArray(snapshot.scenarios), "Trusted design scenarios must be an array.");
+            trustedScenarios = snapshot.scenarios;
+          }
+          if (snapshot.itemDecisions !== undefined) {
+            ensure(Array.isArray(snapshot.itemDecisions) && snapshot.itemDecisions.length === query.requirementIds.length,
+              "Trusted item decisions must match the exact query scope.");
+            const decisionIds = new Set<string>();
+            const statuses = new Set(["VERIFIED", "RESOLVED", "DELEGATED", "UNDECIDED", "NOT_APPLICABLE", "NOT_CHECKED", "INCONCLUSIVE"]);
+            for (const item of snapshot.itemDecisions) {
+              ensure(query.requirementIds.includes(item.requirementId) && !decisionIds.has(item.requirementId)
+                && statuses.has(item.status) && typeof item.reason === "string" && !!item.reason.trim(), "Invalid trusted item decision.");
+              decisionIds.add(item.requirementId);
+            }
+            trustedDecisions = snapshot.itemDecisions;
+          }
+          if (snapshot.designModelEvidence !== undefined) {
+            ensure(snapshot.designModelEvidence.kind === "design-model-v1" && idOk(snapshot.designModelEvidence.approvalRevisionId)
+              && /^[a-f0-9]{64}$/u.test(snapshot.designModelEvidence.materialSha256), "Invalid design-model evidence binding.");
+            trustedModelEvidence = snapshot.designModelEvidence;
+          }
         }
         }
       }
@@ -288,13 +318,15 @@ async function evaluateSpecAssuranceFromProvider(input: AssuranceInput, provider
       coverageAuthority = error === evidenceTimeout ? "timeout" : "failed";
     }
   }
-  return evaluateSpecAssuranceWithCoverage(input, trustedCoverage, trustedPacks, trustedFacts, coverageAuthority);
+  return evaluateSpecAssuranceWithCoverage(trustedScenarios === null ? input : { ...input, scenarios: trustedScenarios },
+    trustedCoverage, trustedPacks, trustedFacts, coverageAuthority, trustedDecisions, trustedModelEvidence);
 }
 
 /** Evaluate bounded supplied state/event/exception examples and provider-verified coverage. */
 async function evaluateSpecAssuranceWithCoverage(input: AssuranceInput, trustedCoverage: SpecCoverageResult | null,
   trustedPacks: readonly DomainPack[] | null, trustedFacts: readonly string[] | null,
-  coverageAuthority: CoverageAuthorityStatus): Promise<AssuranceResult> {
+  coverageAuthority: CoverageAuthorityStatus, trustedDecisions: AssuranceResult["itemDecisions"] | null = null,
+  trustedModelEvidence: DesignModelEvidence | null = null): Promise<AssuranceResult> {
   ensure(input, "Assurance input is required.");
   ensure(Array.isArray(input.scope.requirementIds) && input.scope.requirementIds.length <= SPEC_ASSURANCE_LIMITS.rules
     && input.scope.requirementIds.every(idOk), "Invalid requirement scope.");
@@ -343,7 +375,11 @@ async function evaluateSpecAssuranceWithCoverage(input: AssuranceInput, trustedC
     else if (r.requirementIds.every(id => !input.scope.requirementIds.includes(id))) excludedRules.push({ packId: p.packId, ruleId: r.id, reason: "requirement-out-of-scope" });
   }
   for (const requirementId of input.scope.requirementIds) {
-    gaps.push(makeGap(input, requirementId, "item-decision-status", "approved-specification-item-decision-resolver-unavailable", trustedCoverage));
+    const decision = coverageAuthority === "verified" ? trustedDecisions?.find(item => item.requirementId === requirementId) : undefined;
+    if (!decision || ["UNDECIDED", "NOT_CHECKED", "INCONCLUSIVE"].includes(decision.status)) {
+      gaps.push(makeGap(input, requirementId, "item-decision-status", decision
+        ? `approved-specification-item-${decision.status.toLowerCase()}` : "approved-specification-item-decision-resolver-unavailable", trustedCoverage));
+    }
     // Coverage evidence is useful even when no Domain Pack applies. Keep missing
     // requirement-to-source/rule linkage visible instead of relying on a rule loop
     // that may have no rules to visit.
@@ -390,7 +426,7 @@ async function evaluateSpecAssuranceWithCoverage(input: AssuranceInput, trustedC
     if (!rule.requiresCheck || !predicateMatches(rule.appliesWhen, facts)) continue;
     for (const requirementId of rule.requirementIds) {
       if (!input.scope.requirementIds.includes(requirementId)) continue;
-      const ruleKey = `${rule.id}\0${[...rule.requirementIds].sort().join("\0")}\0${canonicalPredicate(rule.appliesWhen)}\0${JSON.stringify(rule.modelCases ?? [])}`;
+      const ruleKey = `${rule.id}\0${requirementId}\0${[...rule.requirementIds].sort().join("\0")}\0${canonicalPredicate(rule.appliesWhen)}\0${JSON.stringify(rule.modelCases ?? [])}`;
       if (checkedRuleKeys.has(ruleKey)) continue;
       checkedRuleKeys.add(ruleKey);
       const requestCore = { identity: input.identity, scope: requestedScope, packId: p.packId, packVersion: p.version,
@@ -463,8 +499,9 @@ async function evaluateSpecAssuranceWithCoverage(input: AssuranceInput, trustedC
       .map(({ sourceId, sourceDigest, revisionId }) => Object.freeze({ sourceId, sourceDigest, revisionId }))) ?? [];
   const uniqueSourceEvidence = new Map(sourceEvidence.map(item => [`${item.sourceId}\0${item.sourceDigest}\0${item.revisionId}`, item]));
   return Object.freeze({ status, coverageAuthority, identity: Object.freeze({ ...input.identity }), scope: requestedScope,
-    itemDecisions: Object.freeze(input.scope.requirementIds.map(requirementId => Object.freeze({ requirementId,
-      status: "NOT_CHECKED" as const, reason: "approved-specification-item-decision-resolver-unavailable" }))),
+    itemDecisions: Object.freeze(input.scope.requirementIds.map(requirementId => Object.freeze(
+      coverageAuthority === "verified" && trustedDecisions?.find(item => item.requirementId === requirementId)
+      || { requirementId, status: "NOT_CHECKED" as const, reason: "approved-specification-item-decision-resolver-unavailable" }))),
     packVersions: Object.freeze([...new Map(packsForEvaluation.map(p => [p.packId, p.version])).entries()].map(([packId, version]) => Object.freeze({ packId, version })).sort((a, b) => a.packId.localeCompare(b.packId))),
     applicablePackIds: Object.freeze(packs.map(p => p.packId)),
     excludedPackIds: Object.freeze([...new Set(packsForEvaluation.filter(p => !packs.some(a => a.packId === p.packId)).map(p => p.packId))].sort()),
@@ -472,6 +509,7 @@ async function evaluateSpecAssuranceWithCoverage(input: AssuranceInput, trustedC
     excludedCombinations: Object.freeze(scenarioResults.filter(s => s.status === "FAIL").map(s => Object.freeze({ scenarioId: s.scenarioId, reason: s.reason! }))),
     scenarios: Object.freeze(scenarioResults), checkerResults: Object.freeze(checkerResults),
     gaps: Object.freeze([...uniqGaps.values()].sort((a, b) => a.fingerprint.localeCompare(b.fingerprint))),
+    ...(coverageAuthority === "verified" && trustedModelEvidence ? { designModelEvidence: Object.freeze({ ...trustedModelEvidence }) } : {}),
     sourceEvidence: Object.freeze([...uniqueSourceEvidence.values()].sort((a, b) => `${a.sourceId}\0${a.sourceDigest}\0${a.revisionId}`
       .localeCompare(`${b.sourceId}\0${b.sourceDigest}\0${b.revisionId}`))) });
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,6 +55,44 @@ function fixture(): ReadyFixture {
       createdAt: "2026-11-06T01:00:00.000Z" },
   };
   return { status: "ready", bundle, proposalRevisionId, expectedHead };
+}
+
+function modelFixture(): ReadyFixture {
+  const ready = fixture();
+  const longSourceId = "consultation-capture:workspace-fixture:source-" + "long-id-".repeat(12);
+  const sourceDigest = "b".repeat(64);
+  const quote = "원문 인용: 사용자는 가입 안내를 확인하고 나중에 이어서 진행할 수 있어야 합니다. ".repeat(12);
+  const bundle = { ...ready.bundle,
+    draft: { ...ready.bundle.draft, sourceIds: [ready.bundle.draft.sourceIds[0]!, longSourceId] },
+    sourcePins: ready.bundle.sourcePins.map(pin => pin.sourceId === "consultation-capture-fixture-2"
+      ? { ...pin, sourceId: longSourceId } : pin),
+    designModel: {
+      kind: "design-model-v1" as const,
+      facts: ["가입 경로: 신규 사용자", "원문 인용은 그대로 확인"],
+      rulesManifest: {
+        rulesVersion: "coverage-r3", digest: "d".repeat(64),
+        identity: { workspaceId: ready.bundle.workspaceId, projectId: ready.bundle.projectId,
+          specRevisionId: ready.bundle.pack.identity.specRevisionId, specDigest: ready.bundle.pack.identity.specDigest },
+        scope: { requirementIds: ["REQ-1", "REQ-2"], acIds: ["AC-1", "AC-3"] },
+        rules: [{ id: "coverage-presence", requiresCheck: true, requiredEvidenceKinds: ["specification"] }],
+        targets: [{ targetId: "REQ-1", targetKind: "requirement", ruleIds: ["coverage-presence"] }],
+      },
+      scenarios: [{ id: "scenario-long-source", state: "draft", event: "continue", nextState: "profile", exceptionId: null }],
+      itemDecisions: [
+        { requirementId: "REQ-1", status: "RESOLVED", reason: "원문 핀에 연결된 조건으로 확인했습니다.",
+          sourceIds: ["lead-turn:turn-fixture-1"] },
+        { requirementId: "REQ-2", status: "INCONCLUSIVE", reason: "추가 확인이 필요한 원문 범위입니다.", sourceIds: [longSourceId] },
+      ],
+      acceptanceCriteria: [
+        { requirementId: "REQ-1", acId: "AC-1", sourceId: "lead-turn:turn-fixture-1", sourceDigest: "a".repeat(64),
+          text: quote, textSha256: createHash("sha256").update(quote, "utf8").digest("hex") },
+        { requirementId: "REQ-2", acId: "AC-3", sourceId: longSourceId, sourceDigest,
+          text: "나중에 다시 시작할 때 입력이 보존됩니다.",
+          textSha256: createHash("sha256").update("나중에 다시 시작할 때 입력이 보존됩니다.", "utf8").digest("hex") },
+      ],
+    },
+  } as unknown as FirstDesignReviewBundle;
+  return { ...ready, bundle };
 }
 
 async function loadPanel() {
@@ -145,6 +184,89 @@ test("callback receives only proposalRevisionId and expectedHead; CAS conflict m
     assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
     await page.setViewportSize({ width: 1440, height: 900 });
     assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
+  } finally {
+    await browser?.close();
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("design model requires its kind, exact identity, and complete arrays before approval", async () => {
+  const { Panel, temporary } = await loadPanel();
+  try {
+    const ready = modelFixture();
+    const invalidModels = [
+      { ...ready.bundle.designModel!, kind: "design-model-v2" },
+      { ...ready.bundle.designModel!, rulesManifest: { ...ready.bundle.designModel!.rulesManifest,
+        identity: { ...ready.bundle.designModel!.rulesManifest.identity, projectId: "other-project" } } },
+      { ...ready.bundle.designModel!, scenarios: undefined },
+    ];
+    for (const designModel of invalidModels) {
+      const html = renderToStaticMarkup(createElement(Panel, { view: { ...ready,
+        bundle: { ...ready.bundle, designModel } }, onApprove() {} }));
+      assert.match(html, /제안 구조가 올바르지 않아 검토와 승인을 차단했습니다/u);
+      assert.doesNotMatch(html, /<button\b[^>]*>정확한 제안 승인<\/button>/u);
+    }
+
+    const legacy = fixture();
+    const legacyHtml = renderToStaticMarkup(createElement(Panel, { view: legacy, onApprove() {} }));
+    assert.match(legacyHtml, /<button[^>]*>정확한 제안 승인/u);
+    assert.doesNotMatch(legacyHtml, /명세 모델 검사 입력/u);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("design model renders pinned quotes responsively and approval sends only the unchanged revision pair", async () => {
+  const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".first-design-review-model-browser-"));
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  try {
+    const contents = [
+      'import { createElement } from "react";',
+      'import { createRoot } from "react-dom/client";',
+      'import { FirstDesignReviewPanel } from "./src/ui/FirstDesignReviewPanel.tsx";',
+      "window.calls = [];",
+      "window.mount = (view) => createRoot(document.getElementById('root')).render(createElement(FirstDesignReviewPanel, {",
+      " view, onApprove: async (input) => { window.calls.push(input); return { status: 'accepted' }; },",
+      "}));",
+    ].join("\n");
+    const result = await build({ stdin: { sourcefile: "review-harness.tsx", resolveDir: projectRoot, contents },
+      bundle: true, write: false, platform: "browser", format: "iife", jsx: "automatic" });
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    await page.setContent("<div id='root'></div>");
+    await page.addScriptTag({ content: result.outputFiles[0]!.text });
+    const ready = modelFixture();
+    await page.evaluate(view => (window as unknown as { mount: (value: unknown) => void }).mount(view), ready);
+
+    const quote = ("원문 인용: 사용자는 가입 안내를 확인하고 나중에 이어서 진행할 수 있어야 합니다. ").repeat(12);
+    const longSourceId = "consultation-capture:workspace-fixture:source-" + "long-id-".repeat(12);
+    await page.getByText(quote, { exact: true }).waitFor();
+    await page.getByText(longSourceId, { exact: true }).first().waitFor();
+    await page.getByText("coverage-r3", { exact: true }).waitFor();
+
+    const inspectLayout = () => page.evaluate(() => {
+      const overflowing = Array.from(document.querySelectorAll<HTMLElement>(".sps-fdr *"))
+        .filter(element => element.scrollWidth > element.clientWidth + 1)
+        .map(element => element.tagName + "." + element.className);
+      const selectors = ".sps-fdr-item, .sps-fdr-rule, blockquote, .sps-fdr-actions > *";
+      const overlaps: string[] = [];
+      for (const parent of Array.from(document.querySelectorAll<HTMLElement>(".sps-fdr *"))) {
+        const children = Array.from(parent.children).filter((child): child is HTMLElement => child instanceof HTMLElement && child.matches(selectors));
+        for (let left = 0; left < children.length; left++) for (let right = left + 1; right < children.length; right++) {
+          const a = children[left]!.getBoundingClientRect(), b = children[right]!.getBoundingClientRect();
+          if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1
+            && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1) overlaps.push(children[left]!.className + " / " + children[right]!.className);
+        }
+      }
+      return { pageFits: document.documentElement.scrollWidth <= innerWidth,
+        panelFits: document.querySelector<HTMLElement>(".sps-fdr")!.scrollWidth <= document.querySelector<HTMLElement>(".sps-fdr")!.clientWidth + 1,
+        overflowing, overlaps };
+    });
+    assert.deepEqual(await inspectLayout(), { pageFits: true, panelFits: true, overflowing: [], overlaps: [] });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.deepEqual(await inspectLayout(), { pageFits: true, panelFits: true, overflowing: [], overlaps: [] });
+    await page.getByRole("button", { name: "정확한 제안 승인" }).click();
+    assert.deepEqual(await page.evaluate(() => (window as unknown as { calls: unknown[] }).calls), [
+      { proposalRevisionId, expectedHead },
+    ]);
   } finally {
     await browser?.close();
     await rm(temporary, { recursive: true, force: true });

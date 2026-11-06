@@ -9,6 +9,9 @@ import type { RevisionState } from "../../src/solution-revision-store.ts";
 import { approveFirstDesignReview, assertCurrentFirstDesignApproval, proposeFirstDesignReview,
   readFirstDesignApprovalBinding, readFirstDesignApprovalRevision, readFirstDesignReviewBundle,
   readFirstDesignReviewRevision } from "../../src/spec-assurance/review-first-design.ts";
+import { createCurrentBaselineAssuranceProvider } from "../../src/spec-assurance/current-baseline-provider.ts";
+import { createSpecAssuranceConsumer } from "../../src/spec-assurance/evaluator.ts";
+import { createBuilderPlatform } from "../../src/platform.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const PROJECT = WORKSPACE;
@@ -67,6 +70,93 @@ function fixture(actor: { type: "user" | "agent" | "system"; companyId: string; 
     pack, sourcePins: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: source.id }] };
   return { values, state, put, drafts, published, context, platform, runContext, params, pack, source };
 }
+
+function modelProposal(f: ReturnType<typeof fixture>) {
+  return { ...f.params,
+    pack: { ...f.pack, applicability: { all: ["design.onboarding"] },
+      rules: [{ ...f.pack.rules[0]!, modelCases: [{ when: {}, state: "new", event: "open", allowedNextStates: ["ready"] }] }],
+      transitions: [{ from: "new", event: "open", to: "ready" }] },
+    sourcePins: [{ requirementId: "REQ-1", acId: null, sourceId: f.source.id }, ...f.params.sourcePins],
+    designModel: { facts: ["design.onboarding"], rulesVersion: "reviewed-v1",
+      coverageRules: [{ id: "onboarding-clear", requiresCheck: true, requiredEvidenceKinds: ["specification", "source"] }],
+      coverageTargets: [{ targetKind: "requirement", targetId: "REQ-1", ruleIds: ["onboarding-clear"] },
+        { targetKind: "ac", targetId: "AC-1", ruleIds: ["onboarding-clear"] }],
+      scenarios: [{ id: "scenario-open", state: "new", event: "open", nextState: "ready", exceptionId: null }],
+      itemDecisions: [{ requirementId: "REQ-1", status: "RESOLVED", reason: "Exact user-reviewed requirement.", sourceIds: [f.source.id] }],
+      acceptanceCriteria: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: f.source.id, quote: f.source.text }] } };
+}
+
+test("exact approved design-model inputs produce static checks, not runtime QA, and caller scenarios cannot replace them", async () => {
+  const f = fixture(); await f.published;
+  const proposal = await proposeFirstDesignReview(modelProposal(f), f.runContext, f.platform);
+  if (!proposal.revision) throw new Error("Model proposal was not published.");
+  const approved = await approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: proposal.revision.revisionId }, f.context);
+  if (!("revision" in approved)) throw new Error("Exact model approval was not published.");
+  const bundle = approved.revision;
+  assert(bundle.designModel);
+  assert.equal(bundle.designModel.acceptanceCriteria[0]?.textSha256, digest(f.source.text));
+  const binding = await assertCurrentFirstDesignApproval({ projectId: PROJECT, approvedRevisionId: bundle.revisionId }, f.runContext, f.platform);
+  assert(binding);
+  const spec = { ...bundle.draft.specification, projectId: PROJECT, revisionId: "published-model-spec",
+    approvalEvidenceRef: binding.reviewReference };
+  const published = await createDesignBaselineStore(WORKSPACE, PROJECT, f.state).publish({ expectedBaseRevisionId: null,
+    revision: { projectId: PROJECT, revisionId: "published-model-baseline", sourceDraftRevisionId: bundle.draftRevisionId,
+      draftDigest: digest(JSON.stringify((await f.drafts.current())!.revision)), createdAt: "2026-11-06T00:02:00.000Z",
+      author: { agentId: AGENT, sessionId: SESSION, runId: RUN, selectionRevision: 1 },
+      userDecision: { sourceId: binding.reviewReference, sourceSha256: binding.bundleDigest, interpretation: "Exact model and design approved." },
+      specification: spec, graph: { ...bundle.draft.graph, approvedSpecRevisionId: spec.revisionId } } });
+  assert.equal(published.status, "published");
+  const sessions = { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT,
+    sessions: { main: SESSION, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null } };
+  const provider = createCurrentBaselineAssuranceProvider({ workspaceId: WORKSPACE, projectId: PROJECT, sessions, platform: f.platform });
+  const currentBaseline = await createDesignBaselineStore(WORKSPACE, PROJECT, f.state).current();
+  assert(currentBaseline);
+  const identity = { workspaceId: WORKSPACE, projectId: PROJECT, specRevisionId: spec.revisionId,
+    specDigest: digest(JSON.stringify(currentBaseline.revision.specification)) };
+  const loaded = await provider({ identity, requirementIds: ["REQ-1"] });
+  assert(loaded?.coverageInput.manifest);
+  assert.deepEqual(loaded.scenarios, bundle.designModel.scenarios);
+  assert.equal(loaded.coverageInput.checks.every(item => item.status === "passed"), true);
+  const result = await createSpecAssuranceConsumer(provider)({ identity, scope: { requirementIds: ["REQ-1"] },
+    facts: ["caller-forged-condition"], packs: [],
+    scenarios: [{ id: "caller-failure", state: "new", event: "open", nextState: "wrong", exceptionId: null }] });
+  assert.equal(result.coverageAuthority, "verified");
+  assert.equal(result.status, "PASS");
+  assert.equal(result.itemDecisions[0]?.status, "RESOLVED");
+  assert.deepEqual(result.designModelEvidence, { kind: "design-model-v1", approvalRevisionId: bundle.revisionId,
+    materialSha256: digest(JSON.stringify(bundle.designModel)) });
+  assert.deepEqual(result.scenarios.map(item => item.scenarioId), ["scenario-open"]);
+  assert.equal(result.checkerResults[0]?.status, "PASS");
+  assert.equal(result.gaps.some(item => item.ruleId === "item-decision-status"), false);
+  const inspect = createBuilderPlatform().tools.find(tool => tool.name === "builder.inspect-spec-assurance");
+  assert(inspect);
+  const before = structuredClone(f.values);
+  const inspected = await inspect.handler({ projectId: PROJECT }, f.runContext, f.platform) as unknown as {
+    data: { result: typeof result };
+  };
+  assert.equal(inspected.data.result.status, "PASS");
+  assert.equal(inspected.data.result.itemDecisions[0]?.status, "RESOLVED");
+  assert.deepEqual(f.values, before, "static inspection must not publish completion, QA, permission, or a new revision");
+});
+
+test("design-model changes create a different proposal and invalid AC quotes never enter the review journal", async () => {
+  const f = fixture(); await f.published;
+  const input = modelProposal(f);
+  await assert.rejects(proposeFirstDesignReview({ ...input, designModel: { ...input.designModel,
+    acceptanceCriteria: [{ ...input.designModel.acceptanceCriteria[0]!, quote: "This text is not in the source." }] } },
+  f.runContext, f.platform), /exact pinned original-source quote/);
+  assert.equal(await readFirstDesignReviewBundle(WORKSPACE, PROJECT, f.state), null);
+  const first = await proposeFirstDesignReview(input, f.runContext, f.platform);
+  if (!first.revision) throw new Error("First model proposal was not published.");
+  const changed = await proposeFirstDesignReview({ ...input, expectedReviewHeadRevisionId: first.revision.revisionId,
+    designModel: { ...input.designModel, itemDecisions: [{ ...input.designModel.itemDecisions[0]!, status: "UNDECIDED" }] } },
+  f.runContext, f.platform);
+  if (!changed.revision) throw new Error("Changed model proposal was not published.");
+  assert.notEqual(first.revision.revisionId, changed.revision.revisionId);
+  await assert.rejects(proposeFirstDesignReview({ ...input, designModel: { ...input.designModel,
+    coverageTargets: [{ targetKind: "requirement", targetId: "forged-requirement", ruleIds: [] }] } }, f.runContext, f.platform),
+  /exact in-scope/);
+});
 
 test("authenticated first-design flow stores proposal and exact-user attestation before any Baseline", async () => {
   const f = fixture();
