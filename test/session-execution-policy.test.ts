@@ -37,10 +37,12 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   const manifestNames = manifestTools.map(tool => tool.name);
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   const specializedOnly = new Set<string>(["builder.read-cto-intake", "builder.answer-cto-question",
+    "builder.propose-ui-contract",
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());
   const allPlanningTools = new Set<string>([...LEAD_PLANNING_TOOL_NAMES, ...CTO_WORKSTREAM_TOOL_NAMES,
+    ...LEAD_CHANNELS.flatMap(channel => policyForLeadChannel(channel).toolNames),
     ...CTO_INTAKE_EXECUTION_POLICY.toolNames, ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...allPlanningTools].sort(), manifestNames.sort());
   assert.ok(!new Set<string>(LEAD_PLANNING_TOOL_NAMES).has("builder.read-cto-intake"));
@@ -86,6 +88,10 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
     else for (const write of formalWrites) assert.ok(!allowed.has(write), `${channel} must not have ${write}`);
   }
   assert.ok(policyForLeadChannel("ui-design").toolNames.includes("builder.propose-design"));
+  assert.ok(policyForLeadChannel("ui-design").toolNames.includes("builder.propose-ui-contract"));
+  assert.ok(policyForLeadChannel("background").toolNames.includes("builder.propose-ui-contract"));
+  assert.ok(!new Set<string>(LEAD_PLANNING_TOOL_NAMES).has("builder.propose-ui-contract"));
+  assert.ok(LEAD_PLANNING_TOOL_NAMES.includes("builder.publish-ui-contract"));
   assert.ok(policyForLeadChannel("background").toolNames.includes("builder.propose-design"));
   assert.ok(policyForLeadChannel("main").toolNames.includes("builder.read-consultation-analysis"));
   for (const channel of LEAD_CHANNELS.filter(channel => channel !== "main")) {

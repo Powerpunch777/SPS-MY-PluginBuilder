@@ -3,6 +3,8 @@ import { useHostContext, usePluginAction, usePluginData } from "@sonparkserver/p
 import { BuilderShell } from "./BuilderShell.tsx";
 import { ProductSelectionPanel, type ProductSelectionSave } from "./ProductSelectionPanel.tsx";
 import { ConsultationAnalysisControl } from "./ConsultationAnalysisControl.tsx";
+import { UiContractPanel } from "./UiContractPanel.tsx";
+import type { ApproveUiProposalInput } from "./UiHtmlReview.tsx";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
 import { parseLeadSessions } from "../domain/lead-sessions.ts";
@@ -28,6 +30,9 @@ export function BuilderPage() {
   const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
   const designBaseline = usePluginData<unknown>("builder.design-baseline", { projectId: context.companyId ?? "" });
   const baselineDocument = usePluginData<unknown>("builder.baseline-document");
+  const uiContracts = usePluginData<unknown>("builder.ui-contracts");
+  const approveUiProposal = usePluginAction<ApproveUiProposalInput, unknown>("builder.approve-ui-proposal");
+  const retryUiNotification = usePluginAction<{ approvalRevisionId: string }, unknown>("builder.retry-ui-approval-notification");
   const technology = usePluginData<unknown>("builder.technology-decisions", { projectId: context.companyId ?? "" });
   const workstreams = usePluginData<unknown>("builder.workstreams", { projectId: context.companyId ?? "" });
   const memory = usePluginData<unknown>("builder.lead-memory", { projectId: context.companyId ?? "" });
@@ -142,7 +147,7 @@ export function BuilderPage() {
       if (document.visibilityState === "hidden") { timer = setTimeout(() => void poll(), 2_000); return; }
       try {
         await refreshConversation({ channel });
-        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
+        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
       } catch {
         // Polling only observes the exact saved request. Stop on error; the
         // explicit button remains available and no send is retried here.
@@ -153,11 +158,14 @@ export function BuilderPage() {
     timer = setTimeout(() => void poll(), 2_000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [conversationPage?.active?.requestId, conversationPage?.active?.runId, conversationPage?.active?.state,
-    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, baselineDocument.refresh, technology.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
+    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, baselineDocument.refresh, uiContracts.refresh, technology.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
+    uiReview={<UiContractPanel workspaceId={workspaceId} value={uiContracts.data} loading={uiContracts.loading}
+      unavailable={Boolean(uiContracts.error)} approve={approveUiProposal} retryNotification={retryUiNotification}
+      refresh={() => { uiContracts.refresh(); conversation.refresh(); }} />}
     consultationAnalysis={<ConsultationAnalysisControl enabled={channel === "main" && Boolean(leadSessions?.sessions.main)
       && Boolean(conversationPage && !conversationPage.active) && !state.loading && !state.error && !current.error
       && current.snapshot.messages.some(message => message.id.startsWith("consultation-") && message.role === "user")}
@@ -192,14 +200,14 @@ export function BuilderPage() {
     conversation={conversationPage} conversationChannel={channel} conversationLoading={conversation.loading}
     conversationError={leadSessions?.sessions[channel] && !conversation.loading && !conversationPage ? "대화 기록을 확인하지 못했습니다. 새로고침해 주세요." : null}
     conversationHasNewer={cursor !== null}
-    onLeadChannelChange={next => { setChannel(next); setCursor(null); }}
+    onLeadChannelChange={next => { setChannel(next); setCursor(null); if (next === "ui-design") uiContracts.refresh(); }}
     onOlderConversation={conversationPage?.nextCursor ? () => setCursor(conversationPage.nextCursor) : undefined}
     onLatestConversation={cursor !== null ? () => setCursor(null) : undefined}
     onRefreshConversation={leadSessions?.sessions[channel] ? async () => {
       try {
         const result = await refreshConversation({ channel });
         if (result.refreshed !== true) throw new Error("Unexpected refresh result.");
-      } finally { conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); }
+      } finally { conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); }
     } : undefined}
     onCancelLeadMessage={conversationPage?.active?.runId ? async () => {
       try { await cancelMessage({ channel }); } finally { conversation.refresh(); }
@@ -243,6 +251,7 @@ export function BuilderPage() {
       lead.refresh();
       design.refresh();
       designBaseline.refresh();
+      uiContracts.refresh();
       technology.refresh();
       workstreams.refresh();
       memory.refresh();
@@ -259,7 +268,7 @@ export function BuilderPage() {
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
     loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? documentsView.error ?? ctoQuestionsView.error ?? (baselineDocument.error ? "기준선 문서를 불러오지 못했습니다." : null) ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
+    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };

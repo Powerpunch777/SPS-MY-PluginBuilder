@@ -4,6 +4,7 @@ import { cp, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
+const leadChannels = ["main", "ui-design", "background", "cto-inbox", "decisions", "integration-review"];
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function eventually(read, check, label) {
   const deadline = Date.now() + 30_000;
@@ -221,15 +222,16 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(await request(`/api/agents/${leadAgent.id}/task-sessions`), [], "Agent selection alone must not create sessions.");
   await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.disabled === false`),
     Boolean, "explicit Lead session preparation");
-  await click(workspace, 'button[aria-label="Lead 세션 준비 및 확인"]', "Prepare three Lead sessions without executing AI");
+  await click(workspace, 'button[aria-label="Lead 세션 준비 및 확인"]', "Prepare six Lead sessions without executing AI");
   const preparedSessions = await eventually(() => leadSessions(company.id),
-    value => Object.values(value.sessions).every(id => typeof id === "string"), "three persisted Lead session IDs");
-  assert.equal(new Set(Object.values(preparedSessions.sessions)).size, 3);
+    value => leadChannels.every(channel => typeof value.sessions[channel] === "string"), "six persisted Lead session IDs");
+  assert.deepEqual(Object.keys(preparedSessions.sessions).sort(), [...leadChannels].sort());
+  assert.equal(new Set(Object.values(preparedSessions.sessions)).size, leadChannels.length);
   const storedSessions = await request(`/api/agents/${leadAgent.id}/task-sessions`);
-  assert.equal(storedSessions.length, 3);
+  assert.equal(storedSessions.length, leadChannels.length);
   assert.deepEqual(storedSessions.map(row => row.id).sort(), Object.values(preparedSessions.sessions).sort());
   assert.ok(storedSessions.every(row => row.lastRunId === null), "Preparing sessions must not start Agent runs.");
-  assert.deepEqual((await leadSessions(secondCompany.id)).sessions, { main: null, "cto-inbox": null, decisions: null });
+  assert.deepEqual((await leadSessions(secondCompany.id)).sessions, Object.fromEntries(leadChannels.map(channel => [channel, null])));
   await eventually(() => workspace.evaluate(`({disabled:document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.disabled,
     text:document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.textContent})`),
     value => value.disabled === false && value.text === "Lead 세션 확인", "prepared session check button");
@@ -237,7 +239,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   await eventually(() => workspace.evaluate(`document.querySelector('button[aria-label="Lead 세션 준비 및 확인"]')?.disabled === false`),
     Boolean, "session recheck complete");
   assert.deepEqual(await leadSessions(company.id), preparedSessions);
-  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
+  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, leadChannels.length);
   const registeredTools = await request(`/api/plugins/tools?pluginId=${encodeURIComponent(plugin.pluginKey)}`);
   assert.ok(Array.isArray(registeredTools) && registeredTools.some(tool => tool.pluginId === plugin.id
     && tool.name === "com.sonparkserver.my-plugin-builder:builder.read-solution"),
@@ -249,7 +251,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions.main)},role:'lead'}
     })}).then(async r=>({status:r.status,body:await r.json()}))`, true);
   assert.equal(forgedTool.status, 403, "A user UI request cannot impersonate the prepared Lead Agent run.");
-  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
+  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, leadChannels.length);
   const proposedTool = await workspace.evaluate(`fetch('/api/plugins/tools/execute', {
     method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
       tool:'com.sonparkserver.my-plugin-builder:builder.propose-design',parameters:{projectId:${JSON.stringify(company.id)}},
@@ -257,6 +259,25 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions.main)}}
     })}).then(r=>({status:r.status}))`, true);
   assert.equal(proposedTool.status, 403, "User UI cannot call the Lead draft-writing tool.");
+  const uiRecords = companyId => request(`/api/plugins/${plugin.id}/data/builder.ui-contracts`, {
+    method: "POST", body: { companyId, params: {} },
+  }).then(value => value.data);
+  for (const companyId of [company.id, secondCompany.id]) {
+    const view = await uiRecords(companyId);
+    assert.equal(view.workspaceId, companyId);
+    assert.equal(view.proposal, null);
+    assert.equal(view.approval, null);
+    assert.equal(view.formal, null);
+  }
+  const noProposal = await workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.approve-ui-proposal`)}, {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      companyId:${JSON.stringify(company.id)},params:{revisionId:${JSON.stringify(randomUUID())},expectedBaseRevisionId:null,
+        proposalRevisionId:'not-published',htmlSha256:'a'.repeat(64),approvedInteractionIds:['save']}
+    })}).then(async r=>({status:r.status,body:await r.text()}))`, true);
+  assert.ok(noProposal.status >= 400, "A nonexistent proposal cannot be approved through the actual Host action.");
+  assert.match(noProposal.body, /immutable published UI proposal/);
+  assert.equal((await uiRecords(company.id)).approval, null);
+  assert.ok((await request(`/api/agents/${leadAgent.id}/task-sessions`)).every(row => row.lastRunId === null));
 
   // Presentation fixtures only. They exercise the compiled UI with intercepted
   // DTOs, not Host persistence, AI output or approval.
@@ -525,7 +546,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(await leadSessions(company.id), preparedSessions, "Host restart lost Lead sessions.");
   assert.deepEqual(await conversation(), beforeRejectedSend, "Host restart changed rejected-send history.");
   assert.equal((await runsForLead()).length, 0);
-  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, 3);
+  assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, leadChannels.length);
   assert.deepEqual((await request(`/api/agents/${leadAgent.id}`)).adapterConfig, leadAgent.adapterConfig,
     "Host restart or Lead binding changed the original Agent configuration.");
   await eventually(() => workspace.evaluate(`document.querySelector('.builder-transcript')?.innerText.includes(${JSON.stringify(text)})`), Boolean, "restarted Builder UI");
@@ -579,7 +600,8 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     actualNonAiFailedDispatch: false, unsupportedPolicyRejectedBeforeDispatch: true, rejectedSendPreservedDraft: true,
     repeatedRejectedRequestScheduledNoRun: true, conversationRestart: true,
     leadAgentSelection: true, leadBindingRestart: true, originalAgentConfigPreserved: true,
-    leadThreeSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
+    leadSixSessionPreparation: true, leadSessionRecheckNoDuplicates: true, leadSessionsRestart: true,
+    uiContractEmptyScopedRead: true, uiApprovalMissingProposalDenied: true, liveUiApprovalTested: false,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,

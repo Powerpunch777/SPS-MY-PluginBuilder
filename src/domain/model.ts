@@ -130,6 +130,7 @@ export interface BuilderShellProps {
   conversationHasNewer?: boolean;
   onImportConsultation?(text: string): Promise<void>;
   consultationAnalysis?: import("react").ReactNode;
+  uiReview?: import("react").ReactNode;
   onOpenCoreSettings?(): void;
   onOpenHtmlPreview?(): void;
   leadAgents?: BuilderLeadAgentOptions | null;

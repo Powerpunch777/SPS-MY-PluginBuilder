@@ -75,6 +75,35 @@ test("writes bounded per-turn records, then reads persisted answers without grow
   assert.equal((await createLeadConversationStore(f.platform, sessions(B), f.check).page("main")).totalTurns, 0);
 });
 
+test("keyed request inspection distinguishes a saved turn from Core acceptance without waking it", async () => {
+  const f = fixture();
+  assert.deepEqual(await f.store.inspectRequest("main", uuid(601)), { turn: null, coreReceiptRunId: null });
+  f.rejectAdmission();
+  await f.store.send("main", uuid(601), "Review the stored approval", undefined, "ui-approval-request");
+  const pending = await f.store.inspectRequest("main", uuid(601));
+  assert.equal(pending.turn?.state, "uncertain");
+  assert.equal(pending.coreReceiptRunId, null);
+  assert.equal(f.sends.length, 1);
+  f.receipts.set(`${A}:${uuid(601)}`, { requestId: uuid(601), state: "submitted", runId: uuid(1601) });
+  assert.equal((await f.store.inspectRequest("main", uuid(601))).coreReceiptRunId, uuid(1601));
+  assert.equal(f.sends.length, 1);
+  assert.equal((await f.store.inspectRequest("main", uuid(601))).turn?.state, "uncertain");
+});
+
+test("keyed request inspection rejects receipt mismatches and retired scope", async () => {
+  const f = fixture();
+  await f.store.send("main", uuid(602), "Review the stored approval", undefined, "ui-approval-request");
+  const original = f.platform.agents.sessions.getRequest;
+  f.platform.agents.sessions.getRequest = async () => ({ requestId: uuid(602), state: "submitted", runId: uuid(1900) });
+  await assert.rejects(f.store.inspectRequest("main", uuid(602)), /unavailable or changed/);
+  f.platform.agents.sessions.getRequest = async () => ({ requestId: uuid(603), state: "submitted", runId: uuid(1001) });
+  await assert.rejects(f.store.inspectRequest("main", uuid(602)), /unavailable or changed/);
+  f.platform.agents.sessions.getRequest = original;
+  f.retire();
+  await assert.rejects(f.store.inspectRequest("main", uuid(602)), /selection retired/);
+  assert.equal(f.sends.length, 1);
+});
+
 test("unsupported policy discovery prevents writes and never falls back to an unrestricted send", async () => {
   for (const support of [undefined, async () => ({ schemaVersion: 1, modes: [], enforcement: "dispatch-and-run",
     readiness: "unknown", osIsolation: "not-certified" })]) {

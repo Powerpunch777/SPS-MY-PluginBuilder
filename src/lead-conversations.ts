@@ -14,7 +14,7 @@ export type LeadTurn = Scope & {
   cancellationRequested: boolean; termination: "not_applicable" | "pending" | "confirmed";
   questionContext?: QuestionContext;
   executionPolicy?: SessionExecutionPolicy;
-  inputKind?: "user" | "analysis-request";
+  inputKind?: "user" | "analysis-request" | "ui-approval-request";
 };
 type Head = Scope & { schemaVersion: 1; totalTurns: number; lastRequestId: string | null; activeRequestId: string | null };
 export type LeadConversationActivity = Pick<LeadTurn, "requestId" | "state" | "runId" | "cancellationRequested" | "termination">;
@@ -83,8 +83,8 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
   const questionContext = Object.hasOwn(row, "questionContext") ? parseQuestionContext(row.questionContext) : undefined;
   const executionPolicy = Object.hasOwn(row, "executionPolicy") ? parseStoredPolicy(row.executionPolicy) : undefined;
   if (questionContext && scope.channel !== "decisions") throw error();
-  if (Object.hasOwn(row, "inputKind") && row.inputKind !== "user" && row.inputKind !== "analysis-request") throw error();
-  if (row.inputKind === "analysis-request" && (scope.channel !== "main" || questionContext)) throw error();
+  if (Object.hasOwn(row, "inputKind") && !["user", "analysis-request", "ui-approval-request"].includes(row.inputKind as string)) throw error();
+  if (row.inputKind !== undefined && row.inputKind !== "user" && (scope.channel !== "main" || questionContext)) throw error();
   const requestId = id(row.requestId), previousRequestId = nullableId(row.previousRequestId), runId = nullableId(row.runId);
   if (requestId === previousRequestId || !Number.isSafeInteger(row.sequence) || (row.sequence as number) < 0
     || (row.sequence as number) >= MAX_TURNS || (row.sequence === 0) !== (previousRequestId === null)
@@ -146,7 +146,7 @@ export async function readLeadUserTurn(requestId: string, sessions: BuilderLeadS
   if (row.channel !== "main" && row.channel !== "decisions") throw error();
   const scope = scopeFor(sessions, row.channel);
   const turn = parseTurn(raw, scope);
-  if (turn.inputKind === "analysis-request") throw new Error("A system analysis request is not user-provided source or approval evidence.");
+  if (turn.inputKind !== undefined && turn.inputKind !== "user") throw new Error("A system request is not user-provided source or approval evidence.");
   if (turn.requestId !== requestId) throw error();
   return Object.freeze(turn);
 }
@@ -241,6 +241,29 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
     return updated;
   }
   return {
+    async inspectRequest(channel: LeadChannel, requestId: string) {
+      const scope = scopeFor(sessions, channel);
+      id(requestId);
+      await check();
+      const head = parseHead(await platform.state.get(headKey(scope)), scope);
+      const raw = await platform.state.get(turnKey(scope, requestId));
+      const turn = raw === null ? null : parseTurn(raw, scope);
+      if (turn) {
+        if (turn.requestId !== requestId || turn.sequence > head.totalTurns) throw error();
+        if (turn.sequence === head.totalTurns) {
+          if (turn.state !== "prepared" || turn.previousRequestId !== head.lastRequestId || head.activeRequestId !== null) throw error();
+        } else {
+          const indexed = record(await platform.state.get(indexKey(scope, turn.sequence)), ["requestId"]);
+          if (indexed.requestId !== requestId || turn.sequence === head.totalTurns - 1 && head.lastRequestId !== requestId) throw error();
+        }
+      }
+      const receipt = await platform.agents.sessions.getRequest(scope.sessionId, scope.workspaceId, requestId);
+      await check();
+      if (receipt !== null && receipt.requestId !== requestId) throw error();
+      const coreReceiptRunId = receipt?.state === "submitted" && receipt.runId !== null ? id(receipt.runId) : null;
+      if (turn?.runId && coreReceiptRunId && turn.runId !== coreReceiptRunId) throw error();
+      return { turn, coreReceiptRunId };
+    },
     async page(channel: LeadChannel, cursor: string | null = null): Promise<LeadConversationPage> {
       const scope = scopeFor(sessions, channel);
       await check();
@@ -278,9 +301,9 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       return { refreshed: true };
     },
     async send(channel: LeadChannel, requestId: string, value: string, questionValue?: QuestionContext,
-      inputKind: "user" | "analysis-request" = "user") {
+      inputKind: "user" | "analysis-request" | "ui-approval-request" = "user") {
       const scope = scopeFor(sessions, channel);
-      if (inputKind !== "user" && inputKind !== "analysis-request" || inputKind === "analysis-request" && channel !== "main") throw error();
+      if (!["user", "analysis-request", "ui-approval-request"].includes(inputKind) || inputKind !== "user" && channel !== "main") throw error();
       if (channel === "cto-inbox" || channel === "integration-review") {
         throw new Error("This Lead context is internal and cannot be started by a user chat message.");
       }

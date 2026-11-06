@@ -194,8 +194,9 @@ function conversationMessages(props: BuilderShellProps, channel: LeadChannel): B
   const page = props.conversation;
   if (!page || page.channel !== channel) return [];
   return [...page.turns].reverse().flatMap(turn => [
-    { id: `${turn.requestId}:user`, channel, actorId: null, role: turn.inputKind === "analysis-request" ? "system" as const : "user" as const,
-      text: turn.inputKind === "analysis-request" ? "상담 분석 요청" : turn.text, createdAt: turn.createdAt, runId: turn.runId },
+    { id: `${turn.requestId}:user`, channel, actorId: null, role: turn.inputKind && turn.inputKind !== "user" ? "system" as const : "user" as const,
+      text: turn.inputKind === "analysis-request" ? "상담 분석 요청" : turn.inputKind === "ui-approval-request" ? "UI 승인 기록 검토 요청" : turn.text,
+      createdAt: turn.createdAt, runId: turn.runId },
     ...(turn.answer === null ? [] : [{ id: `${turn.requestId}:assistant`, channel, actorId: null, role: "assistant" as const,
       text: turn.answer, createdAt: turn.createdAt, runId: turn.runId }]),
     ...(turn.state === "succeeded" && turn.answer === null ? [{ id: `${turn.requestId}:unavailable`, channel, actorId: null,
@@ -304,6 +305,7 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
       {props.error && <div className="builder-status-strip is-error" role="alert"><AlertCircle /> Workspace 상태를 불러오지 못했습니다.</div>}
       {!readOnly && <ConversationControls channel={channel} props={props} />}
       {!readOnly && channel === "main" && props.consultationAnalysis}
+      {!readOnly && channel === "ui-design" && props.uiReview && <div className="builder-ui-review-surface">{props.uiReview}</div>}
       <MessageList actor={actor} messages={messages} followLatest={Boolean(actor) || !props.conversationHasNewer} />
       {readOnly ? <div className="builder-composer-note" style={{ padding: 13 }}>이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.</div> : <>
         {importOpen && channel === "main" && props.onImportConsultation && <ConsultationImport onImport={props.onImportConsultation} />}

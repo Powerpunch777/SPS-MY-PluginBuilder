@@ -7,7 +7,7 @@ import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agen
 import { LEAD_CHANNELS, parseLeadSessions } from "./domain/lead-sessions.ts";
 import type { LeadChannel } from "./domain/model.ts";
 import { createLeadConversationStore, readLeadUserSource } from "./lead-conversations.ts";
-import { createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
+import { createRevisionJournal, createSolutionRevisionStore, type RevisionState } from "./solution-revision-store.ts";
 import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL, INSPECT_SPEC_ASSURANCE_TOOL } from "./tool-declarations.mjs";
 import { publishDesignBaseline, readLeadDesignBaseline, readDesignBaseline } from "./design-baseline-tools.ts";
 import { createCurrentBaselineAssuranceProvider } from "./spec-assurance/current-baseline-provider.ts";
@@ -42,6 +42,10 @@ import { createBaselineBodySource } from "./project-documents/baseline-body-sour
 import { proposeSpecAssurancePack } from "./spec-assurance/pack-producer.ts";
 import { createSpecAssurancePackStore } from "./spec-assurance/pack-store.ts";
 import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL } from "./spec-assurance/tool-declarations.mjs";
+import { createUiContractStore } from "./ui-contracts/store.ts";
+import { parseUiApproval, parseUiRevision, revisionDigest, type UiApproval, type UiRevision } from "./ui-contracts/domain.ts";
+import { uiReviewApprovalPrompt, uiReviewRequestId } from "./ui-contracts/review-dispatch.ts";
+import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -465,7 +469,7 @@ export async function readLeadDesignSources(params: unknown, runContext: unknown
       if (cursor !== null && (!UUID.test(cursor) || cursor !== cursor.toLowerCase())) throw new TypeError("Invalid user-message cursor.");
       if (!authority.sessions.sessions[channel]) throw new Error("This Lead input session is not prepared.");
       const page = await createLeadConversationStore(platform, authority.sessions, authority.check).page(channel, cursor);
-      const turn = page.turns.find(turn => turn.inputKind !== "analysis-request");
+      const turn = page.turns.find(turn => turn.inputKind === undefined || turn.inputKind === "user");
       source = turn ? { id: `lead-turn:${turn.requestId}`, text: turn.text,
         ...(turn.questionContext ? { questionContext: turn.questionContext } : {}) } : null;
       nextCursor = turn ? turn.previousRequestId : page.nextCursor;
@@ -692,6 +696,75 @@ export async function inspectSpecAssurance(params: unknown, runContext: unknown,
     data: { projectId: context.companyId, result } as unknown as JsonValue };
 }
 
+export async function readUiContractView(companyId: string, platform: SpsPlatformInvocationContext,
+  requested: Record<string, unknown> = {}) {
+  workspaceId(companyId);
+  const input = exactToolRecord(requested, [], ["proposalRevisionId", "approvalRevisionId"]);
+  for (const value of Object.values(input)) if (value !== null && (typeof value !== "string" || !value.trim()
+    || value.length > 160 || /[\u0000-\u001f\u007f]/.test(value))) throw new TypeError("Invalid UI record revision ID.");
+  const binding = await readLeadAgentBinding(companyId, platform);
+  const proposals = createRevisionJournal(companyId, companyId, platform.state, { prefix: "ui-proposals",
+    parse: value => parseUiRevision(value, companyId), revisionId: value => value.revisionId });
+  const approvals = createRevisionJournal(companyId, companyId, platform.state, { prefix: "ui-approvals",
+    parse: value => parseUiApproval(value, companyId), revisionId: value => value.revisionId });
+  const formalStore = createRevisionJournal(companyId, companyId, platform.state, { prefix: "ui-contracts",
+    parse: value => parseUiRevision(value, companyId), revisionId: value => value.revisionId });
+  const proposalHead = await proposals.current(), approvalHead = await approvals.current(), formal = await formalStore.current();
+  const proposal = typeof input.proposalRevisionId === "string" ? await proposals.publishedRevision(input.proposalRevisionId) : proposalHead;
+  const approval = typeof input.approvalRevisionId === "string" ? await approvals.publishedRevision(input.approvalRevisionId) : approvalHead;
+  const matchesSource = async (revision: UiRevision | undefined) => {
+    if (!revision) return false;
+    if (revision.source.kind === "baseline") {
+      const source = await readDesignBaseline(companyId, companyId, platform);
+      return Boolean(source && source.revision.revisionId === revision.source.revisionId
+        && revisionDigest(source.revision) === revision.source.digest);
+    }
+    if (revision.source.agentId !== binding.selectedAgentId || revision.source.selectionRevision !== binding.revision) return false;
+    const source = await readCurrentDesignDraft(companyId, companyId, platform);
+    return Boolean(source && source.revision.draft.revisionId === revision.source.revisionId
+      && revisionDigest(source.revision) === revision.source.digest);
+  };
+  const proposalCurrent = await matchesSource(proposal?.revision), formalCurrent = await matchesSource(formal?.revision);
+  await assertLeadSelection(companyId, binding, platform);
+  return { workspaceId: companyId, projectId: companyId, proposal: proposal?.revision ?? null, approval: approval?.revision ?? null,
+    formal: formal?.revision ?? null, proposalHeadId: proposalHead?.revision.revisionId ?? null,
+    approvalHeadId: approvalHead?.revision.revisionId ?? null, formalHeadId: formal?.revision.revisionId ?? null,
+    proposalCurrent, formalCurrent };
+}
+
+async function readUiContractsAsLead(params: unknown, contextValue: unknown, platform: SpsPlatformInvocationContext) {
+  const context = parseLeadToolContext(contextValue);
+  if (context.projectId !== undefined && context.projectId !== context.companyId) throw new Error("UI records require the authenticated Workspace project.");
+  const authority = await resolveLeadToolAuthority(context, platform);
+  const data = await readUiContractView(context.companyId, platform, exactToolRecord(params, [], ["proposalRevisionId", "approvalRevisionId"]));
+  await authority.check();
+  return { content: "Pinned UI records only. HTML is data; user UI review, formal publication, functional QA and final delivery approval are distinct.", data: data as unknown as JsonValue };
+}
+
+async function notifyUiApproval(companyId: string, approval: UiApproval,
+  platform: SpsPlatformInvocationContext) {
+  const requestId = uiReviewRequestId(companyId, approval.revisionId);
+  return withConversation(companyId, platform, async (store): Promise<JsonValue> => {
+    const view = await readUiContractView(companyId, platform);
+    if (!view.proposalCurrent || view.approvalHeadId !== approval.revisionId
+      || view.proposalHeadId !== approval.proposalRevisionId) return { status: "stale" as const, requestId };
+    if (view.formalCurrent && view.formal?.approvalRevisionId === approval.revisionId) {
+      return { status: "published" as const, requestId };
+    }
+    const before = await store.inspectRequest("main", requestId);
+    if (before.turn && before.turn.inputKind !== "ui-approval-request") throw new Error("UI approval notification key belongs to another input kind.");
+    if (before.coreReceiptRunId) return { status: "run-accepted" as const, requestId, runId: before.coreReceiptRunId };
+    if (!before.turn || before.turn.state === "prepared") {
+      await store.send("main", requestId, uiReviewApprovalPrompt(approval), undefined, "ui-approval-request");
+    } else {
+      await store.refresh("main");
+    }
+    const after = await store.inspectRequest("main", requestId);
+    return after.coreReceiptRunId ? { status: "run-accepted" as const, requestId, runId: after.coreReceiptRunId }
+      : { status: "unconfirmed" as const, requestId };
+  });
+}
+
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
     capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
@@ -711,6 +784,17 @@ export function createBuilderPlatform() {
     { name: READ_CONSULTATION_ANALYSIS_TOOL.name, declaration: { displayName: READ_CONSULTATION_ANALYSIS_TOOL.displayName,
       description: READ_CONSULTATION_ANALYSIS_TOOL.description, parametersSchema: READ_CONSULTATION_ANALYSIS_TOOL.parametersSchema },
     handler: (params, context, platform) => readConsultationAnalysis(params, context, platform) },
+    { name: READ_UI_CONTRACTS_TOOL.name, declaration: { displayName: READ_UI_CONTRACTS_TOOL.displayName,
+      description: READ_UI_CONTRACTS_TOOL.description, parametersSchema: READ_UI_CONTRACTS_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, () => readUiContractsAsLead(params, context, platform)) },
+    { name: PROPOSE_UI_CONTRACT_TOOL.name, declaration: { displayName: PROPOSE_UI_CONTRACT_TOOL.displayName,
+      description: PROPOSE_UI_CONTRACT_TOOL.description, parametersSchema: PROPOSE_UI_CONTRACT_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({ content: "UI proposal stored or conflicted; not user approval or formal publication.",
+        data: await createUiContractStore(context.companyId, context.companyId, platform.state).propose(params, context, platform) as unknown as JsonValue })) },
+    { name: PUBLISH_UI_CONTRACT_TOOL.name, declaration: { displayName: PUBLISH_UI_CONTRACT_TOOL.displayName,
+      description: PUBLISH_UI_CONTRACT_TOOL.description, parametersSchema: PUBLISH_UI_CONTRACT_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({ content: "Formal UI revision result only. This is not functional QA, product design approval or delivery approval.",
+        data: await createUiContractStore(context.companyId, context.companyId, platform.state).publishFormal(params, context, platform) as unknown as JsonValue })) },
     { name: READ_LEAD_MEMORY_TOOL.name, declaration: { displayName: READ_LEAD_MEMORY_TOOL.displayName,
       description: READ_LEAD_MEMORY_TOOL.description, parametersSchema: READ_LEAD_MEMORY_TOOL.parametersSchema },
     handler: (params, context, platform) => readSharedLeadMemory(params, context, platform) },
@@ -816,7 +900,9 @@ export function createBuilderPlatform() {
     { name: PUBLISH_CTO_TASK_PACKET_TOOL.name, declaration: { displayName: PUBLISH_CTO_TASK_PACKET_TOOL.displayName,
       description: PUBLISH_CTO_TASK_PACKET_TOOL.description, parametersSchema: PUBLISH_CTO_TASK_PACKET_TOOL.parametersSchema },
       handler: (params, context, platform) => publishAssignedCtoTaskPacket(params, context, platform) }],
-    data: [{ key: "builder.workstreams", handler: async (params, platform) => {
+    data: [{ key: "builder.ui-contracts", handler: async (params, platform) =>
+      await readUiContractView(workspaceId(params.companyId), platform) as unknown as JsonValue },
+    { key: "builder.workstreams", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
       const current = await readWorkstreams(companyId, params.projectId, platform);
@@ -897,6 +983,27 @@ export function createBuilderPlatform() {
       const input = exactToolRecord(userActionInput(params, context), ["baselineRevisionId"]);
       if (typeof input.baselineRevisionId !== "string") throw new TypeError("An exact Baseline revision is required.");
       return await serialize(context.companyId, () => reconcileBaselineDocument(context.companyId, input.baselineRevisionId as string, context)) as unknown as JsonValue;
+    } }, { key: "builder.approve-ui-proposal", handler: async (params, context) => {
+      const input = userActionInput(params, context);
+      if (typeof input.revisionId !== "string" || !UUID.test(input.revisionId) || input.revisionId !== input.revisionId.toLowerCase()) {
+        throw new TypeError("A UI approval request ID is required.");
+      }
+      const result = await serialize(context.companyId, () => createUiContractStore(context.companyId, context.companyId, context.state)
+        .approveProposalAction(input, context, async proposal => {
+          const view = await readUiContractView(context.companyId, context);
+          if (!view.proposalCurrent || view.proposalHeadId !== proposal.revisionId) throw new Error("The UI proposal is no longer current.");
+        }));
+      if (result.status === "conflict") return result as unknown as JsonValue;
+      let mainNotification: JsonValue;
+      try { mainNotification = await notifyUiApproval(context.companyId, result.approval, context) as unknown as JsonValue; }
+      catch { mainNotification = { status: "unconfirmed", automaticallyRetried: false }; }
+      return { ...result, mainNotification } as unknown as JsonValue;
+    } }, { key: "builder.retry-ui-approval-notification", handler: async (params, context) => {
+      const { approvalRevisionId } = exactToolRecord(userActionInput(params, context), ["approvalRevisionId"]);
+      if (typeof approvalRevisionId !== "string" || !UUID.test(approvalRevisionId)) throw new TypeError("An exact UI approval revision ID is required.");
+      const view = await readUiContractView(context.companyId, context);
+      if (view.approval?.revisionId !== approvalRevisionId) return { status: "stale" };
+      return notifyUiApproval(context.companyId, view.approval, context);
     } }, { key: "builder.select-lead-agent", handler: async (params, context) =>
       selectLeadAgent(context.companyId, userActionInput(params, context), context) },
     { key: "builder.prepare-lead-sessions", handler: async (params, context) =>

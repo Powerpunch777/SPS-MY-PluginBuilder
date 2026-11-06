@@ -17,6 +17,14 @@ type Entry<T> = Readonly<{
   revision: T;
   digest: string;
 }>;
+type HistoryCursor = Readonly<{
+  schemaVersion: 1;
+  workspaceId: string;
+  projectId: string;
+  prefix: string;
+  head: Pointer;
+  afterSequence: number;
+}>;
 export type PublishedSolutionRevision = Readonly<{ sequence: number; revision: SolutionRevision }>;
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -116,6 +124,39 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
     return { raw, ref, entry: await entryAt(ref) };
   }
 
+  function encodeHistoryCursor(cursor: HistoryCursor): string {
+    const body = { schemaVersion: cursor.schemaVersion, workspaceId: cursor.workspaceId, projectId: cursor.projectId,
+      prefix: cursor.prefix, head: cursor.head, afterSequence: cursor.afterSequence };
+    return Buffer.from(json({ ...body, digest: hash(json(body)) }), "utf8").toString("base64url");
+  }
+
+  function decodeHistoryCursor(value: string): HistoryCursor {
+    if (typeof value !== "string" || !value || value.length > 4_096) throw new TypeError("Invalid published history cursor.");
+    let row: Record<string, unknown>;
+    try {
+      const decoded = Buffer.from(value, "base64url");
+      if (decoded.toString("base64url") !== value) throw new Error("Noncanonical cursor encoding.");
+      row = fields(JSON.parse(decoded.toString("utf8")),
+        ["schemaVersion", "workspaceId", "projectId", "prefix", "head", "afterSequence", "digest"], "published history cursor");
+    } catch {
+      throw new TypeError("Invalid published history cursor.");
+    }
+    if (row.schemaVersion !== 1 || row.workspaceId !== workspaceId || row.projectId !== projectId || row.prefix !== codec.prefix
+      || !Number.isSafeInteger(row.afterSequence) || (row.afterSequence as number) < 0) {
+      throw new TypeError("Published history cursor scope or sequence is invalid.");
+    }
+    const ref = pointer(row.head);
+    if ((row.afterSequence as number) >= ref.sequence) throw new TypeError("Published history cursor does not advance within its snapshot.");
+    const body = { schemaVersion: 1 as const, workspaceId, projectId, prefix: codec.prefix, head: ref,
+      afterSequence: row.afterSequence as number };
+    if (row.digest !== hash(json(body))) throw new TypeError("Published history cursor digest mismatch.");
+    return Object.freeze(body);
+  }
+
+  function samePointer(entry: Entry<T>, ref: Pointer): boolean {
+    return entry.sequence === ref.sequence && entry.digest === ref.digest && codec.revisionId(entry.revision) === ref.revisionId;
+  }
+
   async function cas(input: SpsStateKey, expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue) {
     if (typeof state.compareAndSet !== "function") throw new Error("Unsupported Host: atomic state.compareAndSet is required.");
     const receipt = fields(await state.compareAndSet(input, expected, value), ["swapped"], "conditional state receipt");
@@ -144,6 +185,48 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       return null;
     },
 
+    /** Snapshot-pinned published history, oldest first. New head writes do not change a cursor's result set. */
+    async publishedPage(cursor: string | null = null, limit = 50) {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError("Published history page size must be 1 through 50.");
+      let snapshot: Entry<T> | null;
+      let afterSequence = 0;
+      if (cursor === null) {
+        snapshot = (await head()).entry;
+        if (snapshot === null) return Object.freeze({ revisions: Object.freeze([] as Readonly<{ sequence: number; revision: T }>[]), nextCursor: null });
+      } else {
+        const decoded = decodeHistoryCursor(cursor);
+        afterSequence = decoded.afterSequence;
+        const live = await head();
+        snapshot = live.entry;
+        while (snapshot && snapshot.sequence > decoded.head.sequence) {
+          if (!snapshot.parent) { snapshot = null; break; }
+          snapshot = await entryAt(snapshot.parent);
+        }
+        if (!snapshot || !samePointer(snapshot, decoded.head)) throw new Error("Published history cursor is not an ancestor of the current journal head.");
+      }
+
+      const snapshotPointer = Object.freeze({ revisionId: codec.revisionId(snapshot.revision),
+        sequence: snapshot.sequence, digest: snapshot.digest });
+      const endSequence = Math.min(snapshot.sequence, afterSequence + limit);
+      const revisions: Readonly<{ sequence: number; revision: T }>[] = [];
+      let entry: Entry<T> | null = snapshot;
+      while (entry && entry.sequence > afterSequence) {
+        if (entry.sequence <= endSequence) revisions.push(Object.freeze({ sequence: entry.sequence, revision: entry.revision }));
+        if (!entry.parent) { entry = null; break; }
+        entry = await entryAt(entry.parent);
+      }
+      if (afterSequence === 0 ? entry !== null : entry?.sequence !== afterSequence) {
+        throw new Error("Published history chain does not reach the cursor sequence.");
+      }
+      revisions.reverse();
+      if (revisions.length !== endSequence - afterSequence) throw new Error("Published history page is incomplete.");
+      const nextCursor = endSequence < snapshot.sequence
+        ? encodeHistoryCursor({ schemaVersion: 1, workspaceId, projectId, prefix: codec.prefix,
+          head: snapshotPointer, afterSequence: endSequence })
+        : null;
+      return Object.freeze({ revisions: Object.freeze(revisions), nextCursor });
+    },
+
     async recent(limit = 20) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError("History limit must be 1 through 50.");
       const current = await head();
@@ -156,6 +239,29 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
         entry = await entryAt(entry.parent);
       }
       return Object.freeze({ revisions: Object.freeze(revisions), hasMore: Boolean(entry?.parent) });
+    },
+
+    /** Inspect one unpublished immutable entry without advancing its journal head. */
+    async stagedRevision(revisionId: string, expectedBaseRevisionId: string | null) {
+      const wantedId = identifier(revisionId);
+      const expectedId = expectedBaseRevisionId === null ? null : identifier(expectedBaseRevisionId);
+      const current = await head();
+      const actualId = current.ref?.revisionId ?? null;
+      if (expectedId !== actualId) return Object.freeze({ status: "conflict" as const, actualBaseRevisionId: actualId });
+      if (actualId === wantedId) return Object.freeze({ status: "not-staged" as const, actualBaseRevisionId: actualId });
+      const raw = await state.get(entryKey(wantedId));
+      if (raw === null) return Object.freeze({ status: "missing" as const, actualBaseRevisionId: actualId });
+      const row = fields(raw, ["schemaVersion", "workspaceId", "projectId", "sequence", "parent", "revision", "digest"], "staged solution entry");
+      const revision = codec.parse(row.revision);
+      const ref = pointer({ revisionId: codec.revisionId(revision), sequence: row.sequence, digest: row.digest });
+      if (ref.revisionId !== wantedId) throw new Error("Staged solution revision ID does not match its requested key.");
+      const entry = parseEntry(raw, ref);
+      const expectedSequence = (current.ref?.sequence ?? 0) + 1;
+      if (entry.sequence !== expectedSequence || json(entry.parent) !== json(current.ref)) {
+        return Object.freeze({ status: "conflict" as const, actualBaseRevisionId: actualId });
+      }
+      return Object.freeze({ status: "staged" as const, sequence: entry.sequence,
+        expectedBaseRevisionId: actualId, revision: entry.revision });
     },
 
     async publish(patchValue: unknown) {

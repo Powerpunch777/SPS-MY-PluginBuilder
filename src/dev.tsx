@@ -1,13 +1,29 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BuilderShell } from "./ui/BuilderShell.tsx";
 import { ProductSelectionPanel } from "./ui/ProductSelectionPanel.tsx";
 import { ConsultationAnalysisControl } from "./ui/ConsultationAnalysisControl.tsx";
+import { UiContractPanel } from "./ui/UiContractPanel.tsx";
 import { parseProductSelectionDraft } from "./product-selection/index.ts";
 import { createEmptyBuilderSnapshot } from "./domain/snapshot.ts";
 
 function DevelopmentPreview() {
   const [catalogDraft, setCatalogDraft] = useState<unknown>(null);
+  const [uiPreview, setUiPreview] = useState<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("fixture") !== "ui-review") return;
+    const html = "<main><h1>검토할 화면</h1><button>저장</button><p>미리보기 시안</p></main>";
+    void crypto.subtle.digest("SHA-256", new TextEncoder().encode(html)).then(bytes => {
+      const htmlSha256 = [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+      const workspaceId = "11111111-1111-4111-8111-111111111111";
+      setUiPreview({ workspaceId, projectId: workspaceId, proposalCurrent: true, approvalHeadId: null, formal: null, approval: null,
+        proposal: { projectId: workspaceId, revisionId: "preview-ui-proposal", source: { kind: "draft", revisionId: "preview-draft" },
+          artifact: { artifactId: "preview-html", html, htmlSha256 }, contract: { projectId: workspaceId, revisionId: "preview-contract",
+            interactions: [{ id: "save", screenId: "home", requirementRefs: ["REQ-1"], behaviorRefs: ["save"], stateRefs: [], apiRefs: [],
+              preconditions: [], outcomes: ["saved"], prohibited: [], validationCriteria: ["explicit action"], status: "specified" }] } },
+      });
+    });
+  }, []);
   const [snapshot, setSnapshot] = useState(() => {
     const initial = createEmptyBuilderSnapshot("11111111-1111-4111-8111-111111111111");
     const fixture = new URLSearchParams(window.location.search).get("fixture");
@@ -67,6 +83,15 @@ function DevelopmentPreview() {
       UI Preview · Core/AI 미연결 · 입력은 이 창의 메모리에만 보관됩니다.
     </div>
     <div style={{ minHeight: 0, flex: 1 }}><BuilderShell snapshot={snapshot} workspaceLabel="Builder Development"
+      uiReview={new URLSearchParams(window.location.search).get("fixture") === "ui-review"
+        ? <UiContractPanel workspaceId={snapshot.workspaceId} value={uiPreview} loading={uiPreview === null} unavailable={false}
+          approve={async input => {
+            setUiPreview(previous => previous && ({ ...previous, approvalHeadId: input.revisionId, approval: {
+              projectId: snapshot.workspaceId, revisionId: input.revisionId, proposalRevisionId: input.proposalRevisionId,
+              htmlSha256: input.htmlSha256, approvedInteractionIds: input.approvedInteractionIds,
+            } }));
+            return { status: "published" };
+          }} refresh={() => {}} /> : undefined}
       consultationAnalysis={<ConsultationAnalysisControl enabled={snapshot.messages.some(message => message.id.startsWith("consultation-"))}
         start={async () => { setSnapshot(previous => ({ ...previous, activity: [...previous.activity,
           { id: crypto.randomUUID(), actorId: null, label: "미리보기 분석 요청 (AI 미연결)", createdAt: new Date().toISOString(), evidenceRef: null }] })); }} />}

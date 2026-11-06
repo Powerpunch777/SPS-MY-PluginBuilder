@@ -191,6 +191,108 @@ test("empty state, publish, restart, and immutable newest-first history", async 
   await assert.rejects(restarted.recent(51), /1 through 50/);
 });
 
+test("publishedPage returns complete oldest-first history in advancing pages of at most 50", async () => {
+  const state = new FakeState();
+  const store = makeStore(state);
+  for (let sequence = 1; sequence <= 53; sequence += 1) {
+    const id = `graph-page-${String(sequence).padStart(3, "0")}`;
+    const current = await store.current();
+    await store.publish(patch(current?.revision.graphRevisionId ?? null, revision(id)));
+  }
+
+  const first = await store.publishedPage();
+  assert.equal(first.revisions.length, 50);
+  assert.deepEqual(first.revisions.map(entry => entry.sequence), Array.from({ length: 50 }, (_, index) => index + 1));
+  assert.ok(first.nextCursor);
+  assert(Object.isFrozen(first.revisions));
+  assert(Object.isFrozen(first.revisions[0]));
+
+  const second = await store.publishedPage(first.nextCursor, 50);
+  assert.deepEqual(second.revisions.map(entry => entry.sequence), [51, 52, 53]);
+  assert.equal(second.nextCursor, null);
+  assert.notEqual(first.nextCursor, second.nextCursor);
+  assert.deepEqual([...first.revisions, ...second.revisions].map(entry => entry.revision.graphRevisionId),
+    Array.from({ length: 53 }, (_, index) => `graph-page-${String(index + 1).padStart(3, "0")}`));
+  await assert.rejects(store.publishedPage(null, 0), /1 through 50/);
+  await assert.rejects(store.publishedPage(null, 51), /1 through 50/);
+});
+
+test("publishedPage cursor pins its published head while newer revisions are added", async () => {
+  const state = new FakeState();
+  const store = makeStore(state);
+  await store.publish(patch(null, revision("graph-snapshot-1")));
+  await store.publish(patch("graph-snapshot-1", revision("graph-snapshot-2")));
+  const first = await store.publishedPage(null, 1);
+  assert.equal(first.revisions[0]?.revision.graphRevisionId, "graph-snapshot-1");
+  assert.ok(first.nextCursor);
+
+  await store.publish(patch("graph-snapshot-2", revision("graph-snapshot-3")));
+  const second = await store.publishedPage(first.nextCursor, 1);
+  assert.deepEqual(second.revisions.map(entry => entry.revision.graphRevisionId), ["graph-snapshot-2"]);
+  assert.equal(second.nextCursor, null);
+  assert.deepEqual((await store.publishedPage(null, 50)).revisions.map(entry => entry.revision.graphRevisionId),
+    ["graph-snapshot-1", "graph-snapshot-2", "graph-snapshot-3"]);
+});
+
+test("publishedPage remains pinned when a new head is published during its first read", async () => {
+  const state = new FakeState();
+  const store = makeStore(state);
+  await store.publish(patch(null, revision("graph-race-1")));
+  await store.publish(patch("graph-race-1", revision("graph-race-2")));
+  let publishedDuringRead = false;
+  state.beforeGet = async key => {
+    if (!publishedDuringRead && key.stateKey === revisionKey("graph-race-2").stateKey) {
+      publishedDuringRead = true;
+      await store.publish(patch("graph-race-2", revision("graph-race-3")));
+    }
+  };
+
+  const first = await store.publishedPage(null, 1);
+  assert.equal(publishedDuringRead, true);
+  assert.equal(first.revisions[0]?.revision.graphRevisionId, "graph-race-1");
+  assert.ok(first.nextCursor);
+  const second = await store.publishedPage(first.nextCursor, 1);
+  assert.deepEqual(second.revisions.map(entry => entry.revision.graphRevisionId), ["graph-race-2"]);
+  assert.equal(second.nextCursor, null);
+});
+
+test("publishedPage rejects tampered, wrong-scope, and non-advancing cursors", async () => {
+  const state = new FakeState();
+  const store = makeStore(state);
+  await store.publish(patch(null, revision("graph-cursor-1")));
+  await store.publish(patch("graph-cursor-1", revision("graph-cursor-2")));
+  const page = await store.publishedPage(null, 1);
+  assert.ok(page.nextCursor);
+
+  const body = JSON.parse(Buffer.from(page.nextCursor, "base64url").toString("utf8")) as Record<string, unknown>;
+  body.afterSequence = 0;
+  await assert.rejects(store.publishedPage(Buffer.from(JSON.stringify(body)).toString("base64url"), 1), /digest mismatch/);
+  await assert.rejects(makeStore(state, WORKSPACE_B).publishedPage(page.nextCursor, 1), /scope or sequence/u);
+  body.afterSequence = 2;
+  delete body.digest;
+  body.digest = createHash("sha256").update(JSON.stringify(body), "utf8").digest("hex");
+  await assert.rejects(store.publishedPage(Buffer.from(JSON.stringify(body)).toString("base64url"), 1), /does not advance/u);
+
+  const replay = await store.publishedPage(page.nextCursor, 1);
+  assert.deepEqual(replay.revisions.map(entry => entry.revision.graphRevisionId), ["graph-cursor-2"]);
+  assert.equal(replay.nextCursor, null);
+});
+
+test("publishedPage excludes staged entries and rejects broken published chain entries", async () => {
+  const state = new FakeState();
+  const store = makeStore(state);
+  await store.publish(patch(null, revision("graph-visible-1")));
+  state.swapOverride = call => call.key.stateKey.startsWith("solution-head") ? false : undefined;
+  await store.publish(patch("graph-visible-1", revision("graph-staged-only")));
+  state.swapOverride = undefined;
+  assert.deepEqual((await store.publishedPage()).revisions.map(entry => entry.revision.graphRevisionId), ["graph-visible-1"]);
+
+  await store.publish(patch("graph-visible-1", revision("graph-visible-2")));
+  const corrupt = state.values.get(fullKey(revisionKey("graph-visible-1"))) as Record<string, unknown>;
+  state.values.set(fullKey(revisionKey("graph-visible-1")), { ...corrupt, digest: "f".repeat(64) });
+  await assert.rejects(store.publishedPage(), /identity mismatch|digest mismatch/u);
+});
+
 test("stale expected base returns conflict without staging a record", async () => {
   const state = new FakeState();
   const store = makeStore(state);

@@ -340,8 +340,19 @@ try {
       const catalogFits = await page.locator(".builder-product-selection").evaluate(el => el.scrollWidth <= el.clientWidth + 1);
       assert.equal(catalogFits, true, "Catalog controls must fit the product selection view.");
       await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-catalog-${name}.png`) });
+      await page.goto(new URL("?fixture=ui-review", origin).href);
+      await page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "UI 설계", exact: true }).click();
+      const uiReview = page.getByRole("region", { name: "제품 HTML 승인 뷰어", exact: true });
+      await uiReview.frameLocator("iframe").getByRole("heading", { name: "검토할 화면", exact: true }).waitFor();
+      await uiReview.getByRole("checkbox", { name: "save 동작 검토 승인", exact: true }).check();
+      await uiReview.getByRole("button", { name: "사용자 승인", exact: true }).click();
+      await page.getByRole("status").filter({ hasText: "동작 1/1개 승인 기록" }).waitFor();
+      assert.equal(await page.locator(".builder-ui-review-surface").evaluate(element => element.scrollWidth > element.clientWidth + 1), false);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      await page.locator(".builder-ui-review-surface").evaluate(element => { element.scrollTop = 0; });
+      await page.screenshot({ path: path.resolve(`artifacts/screenshots/builder-ui-review-${name}.png`) });
       assert.deepEqual(errors, []);
-      console.log(JSON.stringify({ builderUi: name, views: 11, leadContextsVisible: 6, explicitAnalysisPreview: true,
+      console.log(JSON.stringify({ builderUi: name, views: 11, leadContextsVisible: 6, explicitAnalysisPreview: true, uiApprovalPreviewSaved: true,
         pastedTextImport: true, localTxtPreview: true, explicitFileSave: true,
         selectedGraphDetails: true, graphKeyboardSelection: true, graphMissingOwnerAndRelations: true, graphOwnerReadOnly: true,
         organizationParentChildLayout: true, organizationLeadNotListedAsWorker: true, organizationActorReadOnly: true,

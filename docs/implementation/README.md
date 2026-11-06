@@ -10,18 +10,22 @@
 | --- | --- |
 | 상품 선택 | 공식 16개 상품·5개 부가 서비스, 독립 분류 축, 사용자 CAS 초안 저장과 화면 연결. 로컬 독립 QA·데스크톱/모바일 검사 완료. 승인 명세·실제 빌드·납품 완료는 아님. |
 | 상담 분석 | 수집은 AI를 실행하지 않음. 명시 분석 action이 원문 경계·해시를 고정하고 Main에 한 번 전달. 시스템 분석 요청은 사용자 원문·승인 근거에서 제외. 응답 유실·재시작·중복 요청의 로컬 회귀와 독립 QA 완료. |
-| Lead 6세션 | 여섯 독립 Session ID와 채널별 도구 정책, Main 공식 발행 제한, Lead 영역 탐색 연결. 준비·화면 이동만으로 AI 호출하지 않음. 실제 Host 계정 전환 검증은 미완료. |
+| Lead 6세션 | 여섯 독립 Session ID와 채널별 도구 정책, Main 공식 발행 제한, Lead 영역 탐색 연결. 격리된 소스 Desktop/Host에서 준비·재확인·재시작 뒤 동일 6개 ID와 Run 미생성을 확인. 실제 AI·계정 전환 검증은 미완료. |
 | 기준선 문서 | Main 발행 후 결정적 본문·해시·source pin을 기존 Revision journal에 저장하고 문서센터에서 조회. stale/unavailable, 별도 journal 실패와 명시 재생을 구분. 전체 납품 inventory와 독립 승인 증거는 아님. |
 | D3 | 실제 Main 원문·현재 Baseline 조회와 Main 전용 팩 제안/조회 연결. 팩 제안은 승인된 규칙·Coverage가 아니며 미등록 권위는 `UNKNOWN` 유지. |
-| Reuse·Gate·Manager | 범위별 backend 후보와 테스트를 통합 중. 실제 권리·전체 소스·기술 실행 증거 및 Host 자동 통합은 아직 미검증. |
+| UI Contract | 정확한 HTML과 시안·사용자 승인·Main 공식 발행을 연결. 접수 미확인 시 같은 요청 ID를 조회하고 이미 시도한 실행을 재전송하지 않음. 데스크톱/모바일 미리보기 통과. 자동 알림 복구에는 동일 Workspace Worker 경로가 필요하며 실제 AI 승인 흐름은 미검증. |
+| Gate producer/consumer | G4/G6 평가기·CAS 소비 helper와 fixture 테스트가 있음. 현재 Source Inventory·완료 Run/QA 권위 reader 및 등록된 VERIFIED 생산·이벤트 경로는 없음. D3 미등록 Coverage authority와 부분 Baseline inventory는 `UNKNOWN`; VERIFIED/자동 통합 근거가 아님. |
+| Manager / Final Packet | Manager 기본 프로필 helper와 Packet 검증·요청 helper는 있으나 platform/event 실행 등록이 없음. Packet의 authoritative current-evidence reader와 atomic approval writer도 미연결. pinned SDK에서 필요한 owned-agent lifecycle도 확인되지 않아 실행·사용자 승인 미인수. |
+| Reuse | 분류·권리 후보 구현은 별도 범위에 있음. 실제 자산별 권리 증거·외부 연결·비SPS 산출물은 미검증. |
 
 빌드·타입·테스트는 선언된 SDK commit `c69915a518f0eb600f0ace8238144059911f8d04`와
 일치하는 고정 사본에서 검증한다. 기존 설치 의존성과 작업 데이터를 덮어쓰지 않는다.
 로컬 fixture·브라우저 미리보기 결과는 실제 Host·AI·실기기 인수나 원문 AC 전체 합격이 아니다.
-다음 연결 대상은 HTML/UI 승인, 권위 있는 source/runtime reader, 자동 통합과 최종 패킷·사용자 승인이다.
+다음 상위 연결은 실권위 Coverage·현재 Source Inventory·완료 Run/QA 증거를 가진 Gate producer, 이를 소비하는 VERIFIED 이벤트/Manager 실행, 그리고 같은 현재 핀·완전 inventory를 읽는 Final Packet·원자적 사용자 승인이다. Core/Host 증거가 없으면 해당 기능은 계속 `UNKNOWN`/blocked이며 helper·fixture만으로 승격하지 않는다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
+- [UI Contract와 사용자 승인 연결](ui-contracts/README.md)
 - [Reuse 후보의 미검증 권리 경계](reuse-first/platform-contract.md)
 
 - [Codex 네이티브 Worker 후속 검증 상태](CODEX-NATIVE-WORKERS-2026-11-02.md): App Server 조사 결과, 현재 미입증 범위와 실행 전 검증 게이트.
