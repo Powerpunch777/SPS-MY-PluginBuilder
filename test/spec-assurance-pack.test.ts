@@ -4,8 +4,10 @@ import test from "node:test";
 import { createBuilderPlatform } from "../src/platform.ts";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createDesignBaselineStore } from "../src/design-baseline-tools.ts";
+import { createDesignDraftStore, type AuthoredDesignDraft } from "../src/design-draft-store.ts";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { proposeSpecAssurancePack } from "../src/spec-assurance/pack-producer.ts";
+import { approveFirstDesignReview, proposeFirstDesignReview } from "../src/spec-assurance/review-first-design.ts";
 import { createSpecAssurancePackStore, discoverSpecAssurancePackGaps, specAssurancePackRevisionId } from "../src/spec-assurance/pack-store.ts";
 import type { CoverageRulesManifest } from "../src/spec-coverage/evaluator.ts";
 import type { ApprovedSpecRevision } from "../src/domain/specification-revisions.ts";
@@ -84,6 +86,38 @@ async function publishFixture() {
   return { ...f, proposal: result.data.proposal, gaps: result.data.gaps };
 }
 
+async function publishFirstReviewBaseline(options: { wrongApprovalDigest?: boolean } = {}) {
+  const f = fixture();
+  const draft = { projectId: WORKSPACE, revisionId: "draft-initial-r1", sourceIds: [SOURCE_ID],
+    specification: { revisionId: f.spec.revisionId, productTier: f.spec.productTier,
+      requirements: f.spec.requirements, targets: f.spec.targets, dataPolicyRef: f.spec.dataPolicyRef },
+    graph: { graphRevisionId: "graph-1", entities: [], relations: [], viewLayoutRef: "layout-1" }, questions: [] };
+  const authored: AuthoredDesignDraft = { status: "draft", selectionRevision: 1,
+    author: { agentId: AGENT, sessionId: SESSION, runId: RUN },
+    sourceDigests: [{ id: SOURCE_ID, sha256: sha256(SOURCE_TEXT) }], createdAt: "2026-11-04T00:00:00.000Z", draft };
+  const draftStore = createDesignDraftStore(WORKSPACE, WORKSPACE, { selectionRevision: 1, agentId: AGENT }, f.state);
+  assert.equal((await draftStore.publish({ expectedBaseRevisionId: null, revision: authored })).status, "published");
+  const review = await proposeFirstDesignReview({ projectId: WORKSPACE, expectedDraftRevisionId: draft.revisionId,
+    expectedReviewHeadRevisionId: null,
+    pack: { packId: "onboarding-review", version: "1.0.0", applicability: { all: ["onboarding"] },
+      rules: [{ id: "review-rule", requirementIds: ["REQ-ONBOARD"], appliesWhen: { all: [] }, requiresCheck: true,
+        modelCases: [{ when: { all: [] }, state: "started", event: "complete", allowedNextStates: ["done"] }] }],
+      transitions: [{ from: "started", event: "complete", to: "done" }], exceptions: [], excludedCombinations: [] },
+    sourcePins: [{ requirementId: "REQ-ONBOARD", acId: "AC-COMPLETE", sourceId: SOURCE_ID }] }, f.context, f.platform);
+  assert.equal(review.status, "published");
+  const approved = await approveFirstDesignReview({ projectId: WORKSPACE, expectedBundleRevisionId: review.revision.revisionId },
+    { ...f.platform, companyId: WORKSPACE, actor: { type: "user", companyId: WORKSPACE, userId: "test-user" } } as never);
+  assert.equal(approved.status, "published");
+  const approvalRef = `first-design-review:${approved.revision.revisionId}`;
+  const spec = { ...f.spec, approvalEvidenceRef: approvalRef };
+  const baseline = { ...f.baseline, sourceDraftRevisionId: draft.revisionId, draftDigest: sha256(JSON.stringify(authored)),
+    userDecision: { sourceId: approvalRef, sourceSha256: options.wrongApprovalDigest ? "f".repeat(64)
+      : sha256(JSON.stringify(approved.revision)), interpretation: "Initial design approved." },
+    specification: spec };
+  assert.equal((await f.baselines.publish({ expectedBaseRevisionId: null, revision: baseline })).status, "published");
+  return { ...f, baseline, approvedBundle: approved.revision, approvalRef };
+}
+
 test("Main proposal stores a current-baseline-pinned, raw-source-digested version without asserting coverage", async () => {
   const f = await publishFixture();
   assert.equal(f.proposal.status, "published");
@@ -109,6 +143,32 @@ test("source tampering, non-Main authority, foreign project, and caller approval
   f.values.set(turnKey, { ...original, text: "tampered source" });
   await assert.rejects(proposeSpecAssurancePack(f.proposalInput, f.context, f.platform), /source bytes|author binding/);
   assert.equal(await createSpecAssurancePackStore(WORKSPACE, WORKSPACE, f.state).current("onboarding"), null);
+});
+
+test("first-review Baseline proposals reuse exact approved requirement-to-original-source pins", async () => {
+  const f = await publishFirstReviewBaseline();
+  const proposalInput = { ...f.proposalInput, sourceRefs: [f.proposalInput.sourceRefs[1]] };
+  const result = await proposeSpecAssurancePack(proposalInput, f.context, f.platform) as unknown as {
+    data: { proposal: { revision: { sourceRefs: readonly { requirementId: string; acId: string | null;
+      sourceId: string; sourceDigest: string; revisionId: string }[] } } } };
+  assert.deepEqual(result.data.proposal.revision.sourceRefs, [{ requirementId: "REQ-ONBOARD", acId: "AC-COMPLETE",
+    sourceId: SOURCE_ID, sourceDigest: sha256(SOURCE_TEXT), revisionId: f.spec.revisionId }]);
+  await assert.rejects(proposeSpecAssurancePack({ ...proposalInput, packId: "forged-bundle-source",
+    sourceRefs: [{ requirementId: "REQ-ONBOARD", acId: "AC-COMPLETE", sourceId: f.approvalRef }] }, f.context, f.platform),
+  /exact approved requirement\/AC-to-original-source pin/u);
+  await assert.rejects(proposeSpecAssurancePack({ ...proposalInput, packId: "forged-id-remap",
+    sourceRefs: [{ requirementId: "REQ-ONBOARD", acId: "unapproved-ac", sourceId: SOURCE_ID }] }, f.context, f.platform),
+  /exact approved requirement\/AC-to-original-source pin/u);
+});
+
+test("first-review pack proposal rejects changed original source bytes and stale approval digest", async () => {
+  const f = await publishFirstReviewBaseline();
+  const turnKey = [...f.values.keys()].find(key => key.includes(`lead-chat.turn.v1.${TURN}`))!;
+  const original = f.values.get(turnKey) as Record<string, JsonValue>;
+  f.values.set(turnKey, { ...original, text: "changed original source" });
+  await assert.rejects(proposeSpecAssurancePack(f.proposalInput, f.context, f.platform), /source bytes do not match/u);
+  const badDigest = await publishFirstReviewBaseline({ wrongApprovalDigest: true });
+  await assert.rejects(proposeSpecAssurancePack(badDigest.proposalInput, badDigest.context, badDigest.platform), /exact approved first-design bundle/u);
 });
 
 test("journal publication is CAS-bound and exact revision replays are idempotent", async () => {

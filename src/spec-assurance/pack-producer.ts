@@ -6,6 +6,8 @@ import { readLeadUserSource, readLeadUserTurn } from "../lead-conversations.ts";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
 import { createSpecAssurancePackStore, discoverSpecAssurancePackGaps, type SpecAssurancePackProposal,
   specAssurancePackRevisionId, type SpecAssurancePackSourceRef } from "./pack-store.ts";
+import { firstDesignReviewApprovalRevision } from "../domain/design-baseline.ts";
+import { createCurrentBaselineAssuranceProvider } from "./current-baseline-provider.ts";
 import type { CoverageRulesManifest } from "../spec-coverage/evaluator.ts";
 import { coverageRulesManifestDigest, SPEC_COVERAGE_LIMITS } from "../spec-coverage/evaluator.ts";
 import type { DomainPack } from "./evaluator.ts";
@@ -96,7 +98,14 @@ export async function proposeSpecAssurancePack(params: unknown, runContext: unkn
   const revisionId = specAssurancePackRevisionId(packId, version, identity);
   if (spec.approvalEvidenceRef !== baseline.revision.userDecision.sourceId) throw new Error("Current specification source binding is inconsistent.");
   const sourceId = baseline.revision.userDecision.sourceId;
-  const sourceRequestId = sourceId.slice("lead-turn:".length);
+  const firstReviewRevisionId = firstDesignReviewApprovalRevision(sourceId);
+  if (firstReviewRevisionId === null && !sourceId.startsWith("lead-turn:")) {
+    throw new Error("Current baseline source reference is unsupported.");
+  }
+  const currentProvider = firstReviewRevisionId === null ? null : createCurrentBaselineAssuranceProvider({
+    workspaceId: context.companyId, projectId, sessions: authority.sessions, platform,
+  });
+  let verifiedFirstReviewRefs: readonly SpecAssurancePackSourceRef[] | null = null;
   const verifyCurrentBoundary = async () => {
     await authority.check();
     const currentBaseline = await baselineStore.current();
@@ -104,6 +113,26 @@ export async function proposeSpecAssurancePack(params: unknown, runContext: unkn
       || JSON.stringify(currentBaseline.revision) !== JSON.stringify(baseline.revision)) {
       throw new Error("The current baseline changed during pack proposal. Refresh without automatically retrying.");
     }
+    if (currentProvider) {
+      const snapshot = await currentProvider({ identity, requirementIds: spec.requirements.map(requirement => requirement.id) });
+      if (!snapshot || JSON.stringify(snapshot.coverageInput.identity) !== JSON.stringify(identity)
+        || snapshot.coverageInput.sourceRefs.length === 0) {
+        throw new Error("The exact approved first-review bundle and its original requirement source pins could not be verified.");
+      }
+      const refs = snapshot.coverageInput.sourceRefs.map(ref => {
+        if (ref.revisionId !== spec.revisionId || ref.sourceId === sourceId) {
+          throw new Error("First-review approval references are not original customer-source pins.");
+        }
+        return Object.freeze({ requirementId: ref.requirementId, acId: ref.acId, sourceId: ref.sourceId,
+          sourceDigest: ref.sourceDigest, revisionId: ref.revisionId });
+      });
+      if (verifiedFirstReviewRefs && JSON.stringify(refs) !== JSON.stringify(verifiedFirstReviewRefs)) {
+        throw new Error("Approved first-review source pins changed during pack proposal.");
+      }
+      verifiedFirstReviewRefs ??= Object.freeze(refs);
+      return baseline.revision.userDecision.sourceSha256;
+    }
+    const sourceRequestId = sourceId.slice("lead-turn:".length);
     const sourceTurn = await readLeadUserTurn(sourceRequestId, authority.sessions, platform);
     const source = await readLeadUserSource(sourceRequestId, authority.sessions, platform);
     const sourceDigest = hash(source.text);
@@ -118,6 +147,12 @@ export async function proposeSpecAssurancePack(params: unknown, runContext: unkn
   if (!Array.isArray(snapshot.sourceRefs)) throw new TypeError("Pack source references are required.");
   const sourceRefs = snapshot.sourceRefs.map(value => {
     const ref = exactToolRecord(value, ["requirementId", "acId", "sourceId"]);
+    if (currentProvider) {
+      const pinned = verifiedFirstReviewRefs?.find(candidate => candidate.requirementId === ref.requirementId
+        && candidate.acId === ref.acId && candidate.sourceId === ref.sourceId);
+      if (!pinned) throw new TypeError("First-review pack source references must match an exact approved requirement/AC-to-original-source pin.");
+      return pinned;
+    }
     if (ref.sourceId !== sourceId) throw new TypeError("Pack source references must point to the current baseline's actual Main user source.");
     return { requirementId: ref.requirementId, acId: ref.acId, sourceId, sourceDigest, revisionId: spec.revisionId };
   }) as readonly SpecAssurancePackSourceRef[];
