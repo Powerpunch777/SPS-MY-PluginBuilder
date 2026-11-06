@@ -6,6 +6,7 @@ import { ConsultationAnalysisControl } from "./ConsultationAnalysisControl.tsx";
 import { UiContractPanel } from "./UiContractPanel.tsx";
 import { IntegrationReviewPanel, parseIntegrationReviewDTO, type IntegrationReviewDTO } from "./IntegrationReviewPanel.tsx";
 import { FirstDesignReviewPanel, type FirstDesignReviewApprovalInput, type FirstDesignReviewPanelView } from "./FirstDesignReviewPanel.tsx";
+import { ChangeImpactPanel, type G5ChangeImpactRequest, type G5ChangeImpactReadDTO } from "./ChangeImpactPanel.tsx";
 import type { ApproveUiProposalInput } from "./UiHtmlReview.tsx";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
@@ -37,6 +38,7 @@ export function BuilderPage() {
   const retryUiNotification = usePluginAction<{ approvalRevisionId: string }, unknown>("builder.retry-ui-approval-notification");
   const finalReview = usePluginData<unknown>("builder.final-review");
   const firstReview = usePluginData<unknown>("builder.first-design-review");
+  const compareChangeImpact = usePluginAction<G5ChangeImpactRequest, G5ChangeImpactReadDTO>("builder.read-change-impact");
   const approveFirstReview = usePluginAction<FirstDesignReviewApprovalInput, { status: string }>("builder.approve-first-design-review");
   const decideFinalReview = usePluginAction<{ eventId: string; requestId: string; expectedBaseRevisionId: string;
     action: "approve" | "request-changes" | "hold"; reason?: string }, { status: string }>("builder.final-review-decision");
@@ -201,6 +203,7 @@ export function BuilderPage() {
   }
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
+    changeImpact={<ChangeImpactPanel projectId={workspaceId} onQueryImpact={compareChangeImpact} />}
     firstDesignReview={draftView.view || firstDesign.status === "ready" || firstDesign.status === "stale"
       ? <FirstDesignReviewPanel key={"expectedHead" in firstDesign ? firstDesign.expectedHead : workspaceId} view={firstDesign}
         onApprove={async input => {

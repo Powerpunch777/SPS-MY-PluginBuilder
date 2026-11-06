@@ -50,6 +50,7 @@ import { createFinalPacketStore } from "./delivery-evidence/final-packet.ts";
 import { readFinalReview } from "./delivery-evidence/final-review.ts";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
+import { readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -1038,7 +1039,9 @@ export function createBuilderPlatform() {
       const { companyId, renderEnvironment: _renderEnvironment, ...input } = params;
       return await readLeadConversation(workspaceId(companyId), input, platform) as unknown as JsonValue;
     } }],
-    actions: [{ key: "builder.approve-first-design-review", handler: async (params, context) => {
+    actions: [{ key: "builder.read-change-impact", handler: async (params, context) => {
+      return readUserG5ChangeImpact(userActionInput(params, context), context);
+    } }, { key: "builder.approve-first-design-review", handler: async (params, context) => {
       const input = exactToolRecord(userActionInput(params, context), ["proposalRevisionId", "expectedHead"]);
       const companyId = workspaceId(context.companyId);
       if (typeof input.proposalRevisionId !== "string" || input.proposalRevisionId !== input.expectedHead) {

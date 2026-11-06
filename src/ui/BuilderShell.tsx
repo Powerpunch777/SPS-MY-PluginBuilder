@@ -352,7 +352,7 @@ const GRAPH_ARIA_LABELS = {
   "node.a11yDescription.keyboardDisabled": "Enter 또는 Space 키를 눌러 노드를 선택하세요. 그래프는 조회 전용입니다.",
 };
 
-function ArchitectureView({ props, onActor }: { props: BuilderShellProps; onActor(id: string): void }) {
+function ArchitectureView({ props, onActor, changeImpact }: { props: BuilderShellProps; onActor(id: string): void; changeImpact?: ReactNode }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const entities = props.snapshot.graph.entities;
   const selectedEntity = resolveSelectedGraphEntity(entities, selectedId);
@@ -386,7 +386,8 @@ function ArchitectureView({ props, onActor }: { props: BuilderShellProps; onActo
     return { nodes: graphNodes, edges: graphEdges };
   }, [entities, props.snapshot.graph.relations, selectedEntity?.id]);
   if (!nodes.length) return <div className="builder-page builder-architecture-page"><div className="builder-page-intro"><h2>Workspace 설계 Graph</h2><p>기록된 요구사항, 기능, 구성 요소와 관계를 조회합니다.</p></div>
-    <div className="builder-card builder-empty-card"><GitBranch /><strong>설계 Graph가 없습니다</strong><p>이 Workspace에 저장된 Graph 노드가 없습니다.</p></div></div>;
+    <div className="builder-card builder-empty-card"><GitBranch /><strong>설계 Graph가 없습니다</strong><p>이 Workspace에 저장된 Graph 노드가 없습니다.</p></div>
+    {changeImpact}</div>;
   return <div className="builder-page builder-architecture-page"><div className="builder-page-intro"><h2>Workspace 설계 Graph</h2><p>노드는 조회 전용입니다. 담당 Actor를 선택하면 기록된 세션을 열 수 있습니다.</p></div>
     <div className="builder-architecture-layout"><div className="builder-graph-card"><ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.18 }} minZoom={0.1} nodesDraggable={false} nodesFocusable
       edgesFocusable={false} nodesConnectable={false} elementsSelectable deleteKeyCode={null} ariaLabelConfig={GRAPH_ARIA_LABELS}
@@ -419,7 +420,7 @@ function ArchitectureView({ props, onActor }: { props: BuilderShellProps; onActo
         </> : <p>선택한 노드가 현재 Workspace Graph에 없습니다.</p>}
       </section>
       <div className="builder-graph-callout"><strong>설계 변경은 Lead가 담당합니다</strong><p>이 화면에서는 저장된 설계를 조회합니다. 노드와 관계는 직접 편집할 수 없습니다.</p></div>
-    </aside></div></div>;
+    </aside></div>{changeImpact}</div>;
 }
 
 function OrganizationView({ props, onActor }: { props: BuilderShellProps; onActor(id: string): void }) {
@@ -572,7 +573,7 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
 }
 
 export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode; finalReview?: ReactNode;
-  documentsLoading?: boolean; documentsError?: string | null; firstDesignReview?: ReactNode }) {
+  documentsLoading?: boolean; documentsError?: string | null; firstDesignReview?: ReactNode; changeImpact?: ReactNode }) {
   const [view, setView] = useState<BuilderView>("lead");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -610,7 +611,7 @@ export function BuilderShell(props: BuilderShellProps & { productSelection?: Rea
   else if (view === "integration-review") content = <div className="builder-page">{props.finalReview ?? <p role="status">최종 검토 자료를 확인할 수 없습니다.</p>}</div>;
   else if (LEAD_VIEW_CHANNELS[view] && view !== "decisions") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={{ ...props, conversationChannel: shownChannel }} firstDesignReview={props.firstDesignReview} />;
   else if (view === "product-selection") content = props.productSelection;
-  else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
+  else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} changeImpact={props.changeImpact} />;
   else if (view === "organization") content = <OrganizationView onActor={openActor} props={props} />;
   else if (view === "documents") content = <div className="builder-page builder-document-center-page">
     {props.documentsError && documents.length > 0 && <p role="status">일부 문서를 불러오지 못했습니다.</p>}

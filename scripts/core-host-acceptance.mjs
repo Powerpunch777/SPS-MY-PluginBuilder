@@ -307,6 +307,21 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.deepEqual(await readFirstReview(company.id), { status: "empty" });
   assert.ok((await request(`/api/agents/${leadAgent.id}/task-sessions`)).every(row => row.lastRunId === null));
 
+  const compareImpact = projectId => workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.read-change-impact`)}, {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      companyId:${JSON.stringify(company.id)},params:{projectId:${JSON.stringify(projectId)},oldBaselineRevisionId:'base-old',
+        newBaselineRevisionId:'base-new',oldUiRevisionId:'ui-old',newUiRevisionId:'ui-new'}
+    })}).then(async r=>({status:r.status,body:await r.text()}))`, true);
+  const wrongImpactScope = await compareImpact(secondCompany.id);
+  assert.ok(wrongImpactScope.status >= 400);
+  assert.match(wrongImpactScope.body, /does not match the authenticated Workspace/);
+  const missingImpactSources = await compareImpact(company.id);
+  assert.ok(missingImpactSources.status >= 400);
+  assert.match(missingImpactSources.body, /Both exact Baseline revisions must exist/);
+  await click(workspace, '.builder-nav [aria-label="설계 시각화"]', "Open the actual Architecture page");
+  await eventually(() => workspace.evaluate(`document.querySelector('.sps-g5-impact h2')?.textContent`),
+    value => value?.includes("변경 영향 비교"), "read-only G5 panel");
+
   // Presentation fixtures only. They exercise the compiled UI with intercepted
   // DTOs, not Host persistence, AI output or approval.
   const draftFixture = { workspaceId: company.id, projectId: company.id, selectionRevision: 1, agentId: leadAgent.id,
@@ -635,6 +650,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     finalReviewHostPage: true, finalApprovalMissingPacketDenied: true, actualFinalPacketApproval: false,
     documentCenterEmptyHost: true, documentCenterActualConsultationSource: true,
     firstReviewEmptyScopedRead: true, firstReviewMissingDraftDenied: true, actualFirstDesignApproval: false,
+    changeImpactPanel: true, changeImpactMissingSourceDenied: true, changeImpactCrossProjectDenied: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,
