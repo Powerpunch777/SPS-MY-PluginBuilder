@@ -293,6 +293,18 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
   assert.match(noPacket.body, /authenticated run receipts could not be verified/);
   assert.deepEqual(await readFinal(company.id), { status: "unknown" });
   await click(workspace, '.builder-nav [aria-label="시스템"]', "Return to the system page after the final review check");
+  const readFirstReview = companyId => request(`/api/plugins/${plugin.id}/data/builder.first-design-review`, {
+    method: "POST", body: { companyId, params: {} },
+  }).then(value => value.data);
+  assert.deepEqual(await readFirstReview(company.id), { status: "empty" });
+  assert.deepEqual(await readFirstReview(secondCompany.id), { status: "empty" });
+  const noInitialReview = await workspace.evaluate(`fetch(${JSON.stringify(`/api/plugins/${plugin.id}/actions/builder.approve-first-design-review`)}, {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      companyId:${JSON.stringify(company.id)},params:{proposalRevisionId:'missing-review',expectedHead:'missing-review'}
+    })}).then(async r=>({status:r.status,body:await r.json()}))`, true);
+  assert.equal(noInitialReview.status, 200);
+  assert.deepEqual(noInitialReview.body.data, { status: "conflict" }, "No initial-design approval may be recorded without a current draft and exact review.");
+  assert.deepEqual(await readFirstReview(company.id), { status: "empty" });
   assert.ok((await request(`/api/agents/${leadAgent.id}/task-sessions`)).every(row => row.lastRunId === null));
 
   // Presentation fixtures only. They exercise the compiled UI with intercepted
@@ -622,6 +634,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     uiContractEmptyScopedRead: true, uiApprovalMissingProposalDenied: true, liveUiApprovalTested: false,
     finalReviewHostPage: true, finalApprovalMissingPacketDenied: true, actualFinalPacketApproval: false,
     documentCenterEmptyHost: true, documentCenterActualConsultationSource: true,
+    firstReviewEmptyScopedRead: true, firstReviewMissingDraftDenied: true, actualFirstDesignApproval: false,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,

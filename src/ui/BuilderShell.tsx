@@ -273,7 +273,7 @@ function MessageComposer({
   </div>;
 }
 
-function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerToggle, actions, onOpenArchitecture }: {
+function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerToggle, actions, onOpenArchitecture, firstDesignReview }: {
   props: BuilderShellProps;
   messages: BuilderMessage[];
   actor?: BuilderActor | null;
@@ -282,6 +282,7 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
   onDrawerToggle(): void;
   actions: ReactNode;
   onOpenArchitecture(): void;
+  firstDesignReview?: ReactNode;
 }) {
   const [importOpen, setImportOpen] = useState(false);
   const channel: LeadChannel = actor ? "cto-inbox" : props.conversationChannel ?? "main";
@@ -307,6 +308,9 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
       {props.error && <div className="builder-status-strip is-error" role="alert"><AlertCircle /> Workspace 상태를 불러오지 못했습니다.</div>}
       {!readOnly && <ConversationControls channel={channel} props={props} />}
       {!readOnly && channel === "main" && props.consultationAnalysis}
+      {!readOnly && channel === "main" && firstDesignReview && <details className="builder-first-design-review">
+        <summary>최초 설계 검토</summary>{firstDesignReview}
+      </details>}
       {!readOnly && channel === "ui-design" && props.uiReview && <div className="builder-ui-review-surface">{props.uiReview}</div>}
       <MessageList actor={actor} messages={messages} followLatest={Boolean(actor) || !props.conversationHasNewer} />
       {readOnly ? <div className="builder-composer-note" style={{ padding: 13 }}>이 세션은 조회 전용입니다. 사용자 메시지는 보낼 수 없습니다.</div> : <>
@@ -568,7 +572,7 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
 }
 
 export function BuilderShell(props: BuilderShellProps & { productSelection?: ReactNode; finalReview?: ReactNode;
-  documentsLoading?: boolean; documentsError?: string | null }) {
+  documentsLoading?: boolean; documentsError?: string | null; firstDesignReview?: ReactNode }) {
   const [view, setView] = useState<BuilderView>("lead");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -604,7 +608,7 @@ export function BuilderShell(props: BuilderShellProps & { productSelection?: Rea
   let content: ReactNode;
   if (activeActor) content = <ActorTranscriptView actions={headerActions} actor={activeActor} drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={props} />;
   else if (view === "integration-review") content = <div className="builder-page">{props.finalReview ?? <p role="status">최종 검토 자료를 확인할 수 없습니다.</p>}</div>;
-  else if (LEAD_VIEW_CHANNELS[view] && view !== "decisions") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={{ ...props, conversationChannel: shownChannel }} />;
+  else if (LEAD_VIEW_CHANNELS[view] && view !== "decisions") content = <LeadView actions={headerActions} drawerOpen={drawerOpen} messages={mainMessages} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} onOpenArchitecture={() => selectView("architecture")} props={{ ...props, conversationChannel: shownChannel }} firstDesignReview={props.firstDesignReview} />;
   else if (view === "product-selection") content = props.productSelection;
   else if (view === "architecture") content = <ArchitectureView onActor={openActor} props={props} />;
   else if (view === "organization") content = <OrganizationView onActor={openActor} props={props} />;

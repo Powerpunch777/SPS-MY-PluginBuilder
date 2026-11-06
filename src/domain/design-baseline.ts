@@ -27,6 +27,12 @@ const MAX_ID_LENGTH = 160;
 const MAX_TOTAL_BYTES = 160 * 1024;
 const HEX_256 = /^[0-9a-f]{64}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const LEAD_TURN = /^lead-turn:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const FIRST_REVIEW_APPROVAL = /^first-design-review:(first-review-approval-[a-f0-9]{64})$/u;
+
+export function firstDesignReviewApprovalRevision(sourceId: string): string | null {
+  return FIRST_REVIEW_APPROVAL.exec(sourceId)?.[1] ?? null;
+}
 
 function record(value: unknown, fields: readonly string[], label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -110,8 +116,8 @@ export function parseDesignBaseline(value: unknown, projectId: string): DesignBa
 
   const decisionRow = record(row.userDecision, ["sourceId", "sourceSha256", "interpretation"], "userDecision");
   const sourceId = decisionRow.sourceId;
-  if (typeof sourceId !== "string" || !/^lead-turn:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(sourceId)) {
-    throw new TypeError("userDecision.sourceId must be a lead-turn ID with a canonical UUID.");
+  if (typeof sourceId !== "string" || !LEAD_TURN.test(sourceId) && !firstDesignReviewApprovalRevision(sourceId)) {
+    throw new TypeError("userDecision.sourceId must be a lead-turn ID with a canonical UUID or an exact first-design approval revision reference.");
   }
   if (typeof decisionRow.sourceSha256 !== "string" || !HEX_256.test(decisionRow.sourceSha256)) {
     throw new TypeError("userDecision.sourceSha256 must be 64 lowercase hexadecimal characters.");

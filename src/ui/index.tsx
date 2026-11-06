@@ -5,6 +5,7 @@ import { ProductSelectionPanel, type ProductSelectionSave } from "./ProductSelec
 import { ConsultationAnalysisControl } from "./ConsultationAnalysisControl.tsx";
 import { UiContractPanel } from "./UiContractPanel.tsx";
 import { IntegrationReviewPanel, parseIntegrationReviewDTO, type IntegrationReviewDTO } from "./IntegrationReviewPanel.tsx";
+import { FirstDesignReviewPanel, type FirstDesignReviewApprovalInput, type FirstDesignReviewPanelView } from "./FirstDesignReviewPanel.tsx";
 import type { ApproveUiProposalInput } from "./UiHtmlReview.tsx";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
@@ -35,6 +36,8 @@ export function BuilderPage() {
   const approveUiProposal = usePluginAction<ApproveUiProposalInput, unknown>("builder.approve-ui-proposal");
   const retryUiNotification = usePluginAction<{ approvalRevisionId: string }, unknown>("builder.retry-ui-approval-notification");
   const finalReview = usePluginData<unknown>("builder.final-review");
+  const firstReview = usePluginData<unknown>("builder.first-design-review");
+  const approveFirstReview = usePluginAction<FirstDesignReviewApprovalInput, { status: string }>("builder.approve-first-design-review");
   const decideFinalReview = usePluginAction<{ eventId: string; requestId: string; expectedBaseRevisionId: string;
     action: "approve" | "request-changes" | "hold"; reason?: string }, { status: string }>("builder.final-review-decision");
   const technology = usePluginData<unknown>("builder.technology-decisions", { projectId: context.companyId ?? "" });
@@ -151,7 +154,7 @@ export function BuilderPage() {
       if (document.visibilityState === "hidden") { timer = setTimeout(() => void poll(), 2_000); return; }
       try {
         await refreshConversation({ channel });
-        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
+        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); firstReview.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
       } catch {
         // Polling only observes the exact saved request. Stop on error; the
         // explicit button remains available and no send is retried here.
@@ -162,9 +165,20 @@ export function BuilderPage() {
     timer = setTimeout(() => void poll(), 2_000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [conversationPage?.active?.requestId, conversationPage?.active?.runId, conversationPage?.active?.state,
-    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, baselineDocument.refresh, uiContracts.refresh, technology.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
+    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, baselineDocument.refresh, uiContracts.refresh, firstReview.refresh, technology.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
+  let firstDesign: FirstDesignReviewPanelView = { status: firstReview.loading ? "loading" : "error" };
+  if (!firstReview.loading && !firstReview.error && firstReview.data && typeof firstReview.data === "object") {
+    const row = firstReview.data as Record<string, unknown>;
+    if (row.status === "empty") firstDesign = { status: "empty" };
+    else if ((row.status === "ready" || row.status === "stale") && typeof row.proposalRevisionId === "string"
+      && row.proposalRevisionId === row.expectedHead && row.bundle && typeof row.bundle === "object"
+      && "workspaceId" in row.bundle && row.bundle.workspaceId === workspaceId
+      && "projectId" in row.bundle && row.bundle.projectId === workspaceId) {
+      firstDesign = { status: row.status, bundle: row.bundle, proposalRevisionId: row.proposalRevisionId, expectedHead: row.proposalRevisionId };
+    }
+  }
   let review: IntegrationReviewDTO = { status: "unknown" };
   let reviewError = Boolean(finalReview.error);
   if (finalReview.loading) review = { status: "loading" };
@@ -187,6 +201,15 @@ export function BuilderPage() {
   }
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
+    firstDesignReview={draftView.view || firstDesign.status === "ready" || firstDesign.status === "stale"
+      ? <FirstDesignReviewPanel key={"expectedHead" in firstDesign ? firstDesign.expectedHead : workspaceId} view={firstDesign}
+        onApprove={async input => {
+          try {
+            const result = await approveFirstReview(input);
+            if (result?.status !== "published" && result?.status !== "conflict") throw new Error("First-design approval was not confirmed.");
+            return result;
+          } finally { firstReview.refresh(); designBaseline.refresh(); }
+        }} /> : undefined}
     documentsLoading={state.loading || design.loading || baselineDocument.loading || designBaseline.loading || technology.loading || workstreams.loading || memory.loading}
     documentsError={documentsView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? draftView.error
       ?? (state.error || baselineDocument.error || design.error || memory.error ? "문서를 불러오지 못했습니다." : null)}
@@ -300,7 +323,7 @@ export function BuilderPage() {
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
     loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? documentsView.error ?? ctoQuestionsView.error ?? (baselineDocument.error ? "기준선 문서를 불러오지 못했습니다." : null) ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); finalReview.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
+    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); finalReview.refresh(); firstReview.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };

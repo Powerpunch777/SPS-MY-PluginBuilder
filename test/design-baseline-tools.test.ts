@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
+import type { JsonValue, SpsActionContext, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createEmptyBuilderSnapshot } from "../src/domain/snapshot.ts";
 import { publishDesignBaseline, readDesignBaseline, readLeadDesignBaseline } from "../src/design-baseline-tools.ts";
 import { proposeLeadDesign, readLeadSolution } from "../src/platform.ts";
+import { approveFirstDesignReview, proposeFirstDesignReview } from "../src/spec-assurance/review-first-design.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
-const PROJECT = "33333333-3333-4333-8333-333333333333";
+const PROJECT = WORKSPACE;
 const LEAD = "44444444-4444-4444-8444-444444444444";
 const WORKER = "55555555-5555-4555-8555-555555555555";
 const RUN = "66666666-6666-4666-8666-666666666666";
@@ -158,7 +159,20 @@ async function prepared() {
   const result = await proposeLeadDesign({ projectId: PROJECT, expectedBaseRevisionId: null, draft: sourceDraft }, f.context, f.platform);
   assert.equal((result.data as { status: string }).status, "published");
   const turn = persistMainUserTurn(f);
-  return { ...f, f, sourceDraft, turn, consultationText };
+  const review = await proposeFirstDesignReview({ projectId: PROJECT, expectedDraftRevisionId: sourceDraft.revisionId,
+    expectedReviewHeadRevisionId: null, pack: { packId: "fixture", version: "1", applicability: {},
+      rules: [{ id: "REQ-1-test", requirementIds: ["REQ-1"], appliesWhen: {}, requiresCheck: true }],
+      transitions: [], exceptions: [], excludedCombinations: [] },
+    sourcePins: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: CONSULTATION_ID }] }, f.context, f.platform);
+  assert.equal(review.status, "published");
+  if (review.status !== "published") throw new Error("Fixture proposal not published.");
+  const approved = await approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: review.revision.revisionId },
+    { ...f.platform, companyId: WORKSPACE, actor: { type: "user", companyId: WORKSPACE, userId: "test-user" } } as SpsActionContext);
+  assert.equal(approved.status, "published");
+  if (approved.status !== "published") throw new Error("Fixture approval not published.");
+  const sourceId = `first-design-review:${approved.revision.revisionId}`;
+  const initial = (sourceDraftRevisionId = "draft-r01") => ({ ...publishParams(sourceDraftRevisionId), userSourceId: sourceId });
+  return { ...f, f, sourceDraft, turn, consultationText, initial, approved: approved.revision, sourceId };
 }
 
 function publishParams(sourceDraftRevisionId = "draft-r01", expectedBaseRevisionId: string | null = null) {
@@ -172,20 +186,21 @@ function publishParams(sourceDraftRevisionId = "draft-r01", expectedBaseRevision
   };
 }
 
-test("publishes one detached baseline from the current Lead draft and actual submitted user turn; reads survive restart", async () => {
-  const { f, sourceDraft, turn, consultationText } = await prepared();
+test("publishes one detached baseline from the exact authenticated draft review; reads survive restart", async () => {
+  const { f, sourceDraft, approved, initial, sourceId } = await prepared();
   const draftStorePrefix = [...f.values.keys()].find(value => value.includes("design-draft-lead-1-revision.v1."));
   assert.ok(draftStorePrefix);
   const rawDraftEntry = f.values.get(draftStorePrefix);
   assert.ok(rawDraftEntry);
   const persistedDraft = structuredClone((rawDraftEntry as { revision: { draft: unknown } }).revision.draft);
   const writesBefore = f.successfulWrites;
+  const casBefore = f.casCalls.length;
 
-  const result = await publishDesignBaseline(publishParams(), f.context, f.platform);
+  const result = await publishDesignBaseline(initial(), f.context, f.platform);
   assert.equal((result.data as { status: string }).status, "published");
   assert.match(result.content, /not independently verified legal approval/);
   assert.equal(f.successfulWrites - writesBefore, 2, "one immutable revision and one head CAS are written");
-  assert.equal(f.casCalls.length, 4, "draft and baseline each use a revision CAS plus a head CAS");
+  assert.equal(f.casCalls.length - casBefore, 2, "the approval reference and official Baseline publish together through one head CAS");
   assert.equal(f.setCalls, 0);
 
   const stored = await readDesignBaseline(WORKSPACE, PROJECT, f.platform);
@@ -196,17 +211,15 @@ test("publishes one detached baseline from the current Lead draft and actual sub
   assert.equal(stored.revision.draftDigest, sha256(JSON.stringify((rawDraftEntry as { revision: unknown }).revision)));
   assert.deepEqual(stored.revision.author, { agentId: LEAD, sessionId: SESSIONS.main, runId: RUN, selectionRevision: 1 });
   assert.deepEqual(stored.revision.userDecision, {
-    sourceId: `lead-turn:${TURN_ID}`,
-    sourceSha256: sha256(turn.text),
+    sourceId,
+    sourceSha256: sha256(JSON.stringify(approved)),
     interpretation: "The user chose a quiet layout with obvious onboarding steps.",
   });
-  assert.equal(stored.revision.userDecision.sourceSha256, sha256("Use a quiet layout, and keep the onboarding steps obvious."));
-  assert.notEqual(stored.revision.userDecision.sourceSha256, sha256(consultationText));
   assert.deepEqual(stored.revision.specification, {
     ...sourceDraft.specification,
     projectId: PROJECT,
     revisionId: `baseline-spec-${sha256(`${PROJECT}\0baseline-r01`)}`,
-    approvalEvidenceRef: `lead-turn:${TURN_ID}`,
+    approvalEvidenceRef: sourceId,
   });
   assert.deepEqual(stored.revision.graph, {
     ...sourceDraft.graph,
@@ -228,6 +241,24 @@ test("publishes one detached baseline from the current Lead draft and actual sub
   assert.equal(f.setCalls, 0);
 });
 
+test("chat input cannot substitute for the first authenticated design review", async () => {
+  const { f } = await prepared();
+  const before = f.successfulWrites;
+  await assert.rejects(publishDesignBaseline(publishParams(), f.context, f.platform), /first Baseline requires an authenticated first-design review approval/);
+  assert.equal(f.successfulWrites, before);
+  assert.equal(await readDesignBaseline(WORKSPACE, PROJECT, f.platform), null);
+});
+
+test("a change to the captured source after the user approves stops first Baseline publication", async () => {
+  const { f, initial } = await prepared();
+  const key = f.scopedKey("snapshot.v1");
+  const snapshot = f.values.get(key) as unknown as ReturnType<typeof createEmptyBuilderSnapshot>;
+  f.values.set(key, { ...snapshot, messages: snapshot.messages.map(message => message.id === CONSULTATION_ID
+    ? { ...message, text: "Changed original after the user reviewed it." } : message) } as unknown as JsonValue);
+  await assert.rejects(publishDesignBaseline(initial(), f.context, f.platform), /source bytes/);
+  assert.equal(await readDesignBaseline(WORKSPACE, PROJECT, f.platform), null);
+});
+
 test("all five non-Main Lead sessions are denied official baseline publication before writes", async () => {
   const { f } = await prepared();
   const writes = f.successfulWrites;
@@ -240,8 +271,8 @@ test("all five non-Main Lead sessions are denied official baseline publication b
 });
 
 test("baseline revision history uses compare-and-set and stale expected revisions conflict without writes", async () => {
-  const { f } = await prepared();
-  assert.equal(((await publishDesignBaseline(publishParams(), f.context, f.platform)).data as { status: string }).status, "published");
+  const { f, initial } = await prepared();
+  assert.equal(((await publishDesignBaseline(initial(), f.context, f.platform)).data as { status: string }).status, "published");
   const second = { ...publishParams("draft-r01", "baseline-r01"), revisionId: "baseline-r02" };
   assert.equal(((await publishDesignBaseline(second, f.context, f.platform)).data as { status: string }).status, "published");
   const beforeStale = f.successfulWrites;
@@ -257,7 +288,8 @@ test("baseline revision history uses compare-and-set and stale expected revision
 test("publication rejects a Worker, mismatched decisions session, CTO intake and wrong source run/session", async () => {
   const variations = ["worker", "decisions", "cto", "source-run", "source-session"] as const;
   for (const variation of variations) {
-    const { f, turn } = await prepared();
+    const { f, turn, initial } = await prepared();
+    await publishDesignBaseline(initial(), f.context, f.platform);
     let context = { ...f.context };
     if (variation === "worker") context = { ...context, agentId: WORKER };
     if (variation === "decisions") context = { ...context, sessionId: SESSIONS.decisions };
@@ -267,7 +299,7 @@ test("publication rejects a Worker, mismatched decisions session, CTO intake and
     if (variation === "source-session") f.values.set(f.scopedKey(`lead-chat.turn.v1.${TURN_ID}`),
       { ...turn, sessionId: SESSIONS.decisions } as unknown as JsonValue);
     const writes = f.successfulWrites;
-    await assert.rejects(publishDesignBaseline(publishParams(), context, f.platform));
+    await assert.rejects(publishDesignBaseline({ ...publishParams("draft-r01", "baseline-r01"), revisionId: "baseline-r02" }, context, f.platform));
     assert.equal(f.successfulWrites, writes, variation);
   }
 });
@@ -288,8 +320,8 @@ test("wrong source draft and caller mutation cannot redirect publication after i
   assert.equal((wrong.data as { status: string }).status, "conflict");
   assert.equal(wrongDraft.f.successfulWrites, beforeWrong);
 
-  const { f } = await prepared();
-  const params = publishParams();
+  const { f, initial, sourceId } = await prepared();
+  const params = initial();
   let mutated = false;
   const originalGet = f.state.get.bind(f.state);
   f.state.get = async (key: SpsStateKey) => {
@@ -306,11 +338,11 @@ test("wrong source draft and caller mutation cannot redirect publication after i
   const stored = await readDesignBaseline(WORKSPACE, PROJECT, f.platform);
   assert.equal(stored?.revision.revisionId, "baseline-r01");
   assert.equal(stored?.revision.projectId, PROJECT);
-  assert.equal(stored?.revision.userDecision.sourceId, `lead-turn:${TURN_ID}`);
+  assert.equal(stored?.revision.userDecision.sourceId, sourceId);
 });
 
 test("a lost successful head-CAS response is recovered by reading, without automatic retry", async () => {
-  const { f } = await prepared();
+  const { f, initial } = await prepared();
   const originalCas = f.state.compareAndSet.bind(f.state);
   let responseLost = false;
   f.state.compareAndSet = async (key: SpsStateKey, expected: Expected, value: JsonValue) => {
@@ -321,12 +353,12 @@ test("a lost successful head-CAS response is recovered by reading, without autom
     }
     return receipt;
   };
-  await assert.rejects(publishDesignBaseline(publishParams(), f.context, f.platform), /response was lost/);
+  await assert.rejects(publishDesignBaseline(initial(), f.context, f.platform), /response was lost/);
   assert.equal(responseLost, true);
   const visible = await readDesignBaseline(WORKSPACE, PROJECT, f.platform);
   assert.equal(visible?.revision.revisionId, "baseline-r01");
   const writes = f.successfulWrites;
-  const retry = await publishDesignBaseline(publishParams(), f.context, f.platform);
+  const retry = await publishDesignBaseline(initial(), f.context, f.platform);
   assert.equal((retry.data as { status: string }).status, "conflict");
   assert.equal(f.successfulWrites, writes);
   assert.equal(f.setCalls, 0);
@@ -344,8 +376,8 @@ test("unknown and approval-shaped fields are denied before any baseline write", 
 });
 
 test("canonical solution reads the paired graph and baseline history survives Lead selection changes", async () => {
-  const { f } = await prepared();
-  await publishDesignBaseline(publishParams(), f.context, f.platform);
+  const { f, initial } = await prepared();
+  await publishDesignBaseline(initial(), f.context, f.platform);
   const stored = await readDesignBaseline(WORKSPACE, PROJECT, f.platform);
   const solution = await readLeadSolution({ projectId: PROJECT }, f.context, f.platform);
   assert.deepEqual((solution.data as { solution: unknown }).solution, { sequence: 1, revision: stored!.revision.graph });
@@ -355,9 +387,9 @@ test("canonical solution reads the paired graph and baseline history survives Le
 });
 
 test("independent baseline writers publish one head; exact new baseline IDs derive different paired revision IDs", async () => {
-  const { f } = await prepared();
+  const { f, initial } = await prepared();
   const results = await Promise.all(["concurrent-a", "concurrent-b"].map(revisionId =>
-    publishDesignBaseline({ ...publishParams(), revisionId }, f.context, f.platform)));
+    publishDesignBaseline({ ...initial(), revisionId }, f.context, f.platform)));
   assert.equal(results.filter(result => (result.data as { status: string }).status === "published").length, 1);
   assert.equal(results.filter(result => (result.data as { status: string }).status === "conflict").length, 1);
   const first = (await readDesignBaseline(WORKSPACE, PROJECT, f.platform))!;
@@ -370,7 +402,7 @@ test("independent baseline writers publish one head; exact new baseline IDs deri
 });
 
 test("an observed retired Lead before a baseline CAS rejects without automatic retry", async () => {
-  const { f } = await prepared();
+  const { f, initial } = await prepared();
   const original = f.state.get;
   let changed = false;
   f.state.get = async key => {
@@ -379,16 +411,16 @@ test("an observed retired Lead before a baseline CAS rejects without automatic r
     return result;
   };
   const writes = f.successfulWrites;
-  await assert.rejects(publishDesignBaseline(publishParams(), f.context, f.platform), /selection changed|current Builder Lead/);
+  await assert.rejects(publishDesignBaseline(initial(), f.context, f.platform), /selection changed|current Builder Lead/);
   assert.equal(f.successfulWrites, writes);
 });
 
 test("selection change inside head CAS leaves readable uncertain history rather than successful authorization", async () => {
-  const { f } = await prepared();
+  const { f, initial } = await prepared();
   f.setBeforeCas(key => {
     if (key.stateKey.startsWith("design-baseline-head")) f.selectWorker();
   });
-  await assert.rejects(publishDesignBaseline(publishParams(), f.context, f.platform), /selection changed|current Builder Lead/);
+  await assert.rejects(publishDesignBaseline(initial(), f.context, f.platform), /selection changed|current Builder Lead/);
   const stored = await readDesignBaseline(WORKSPACE, PROJECT, f.platform);
   assert.equal(stored?.revision.revisionId, "baseline-r01");
   assert.equal(stored?.revision.author.selectionRevision, 1);

@@ -76,7 +76,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
 test("Lead channel policies preserve shared reads and keep formal writes Main-only", () => {
   const policies = Object.fromEntries(LEAD_CHANNELS.map(channel => [channel, policyForLeadChannel(channel)]));
   const formalWrites = ["builder.publish-design-baseline", "builder.publish-technology-decisions",
-    "builder.create-cto", "builder.publish-workstream", "builder.dispatch-workstream", "builder.attest-final-packet"];
+    "builder.create-cto", "builder.publish-workstream", "builder.dispatch-workstream", "builder.attest-final-packet", "builder.propose-first-design-review"];
   for (const channel of LEAD_CHANNELS) {
     const allowed = new Set(policies[channel]!.toolNames);
     for (const read of ["builder.read-solution", "builder.read-design-draft", "builder.read-design-sources",
@@ -84,6 +84,7 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
       "builder.read-technology-decisions", "builder.read-workstreams"]) assert.ok(allowed.has(read), `${channel}: ${read}`);
     assert.deepEqual(policies[channel]!.toolNames, [...policies[channel]!.toolNames].sort());
     assert.equal(Object.isFrozen(policies[channel]!.toolNames), true);
+    assert.ok(policies[channel]!.toolNames.length <= 32, `${channel} must fit the pinned Host session policy limit`);
     if (channel === "main") for (const write of formalWrites) assert.ok(allowed.has(write), write);
     else for (const write of formalWrites) assert.ok(!allowed.has(write), `${channel} must not have ${write}`);
   }
@@ -102,6 +103,7 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
   assert.ok(policyForLeadChannel("integration-review").toolNames.includes("builder.request-final-review"));
   assert.ok(!policyForLeadChannel("main").toolNames.includes("builder.request-final-review"));
   assert.ok(LEAD_CHANNELS.every(channel => !policyForLeadChannel(channel).toolNames.includes("builder.final-review-decision")));
+  assert.ok(LEAD_CHANNELS.every(channel => !policyForLeadChannel(channel).toolNames.includes("builder.approve-first-design-review")));
   assert.deepEqual(LEAD_SESSION_EXECUTION_POLICY, policyForLeadChannel("main"));
 });
 

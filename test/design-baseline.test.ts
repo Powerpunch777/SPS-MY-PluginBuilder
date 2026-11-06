@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseDesignBaseline } from "../src/domain/design-baseline.ts";
+import { firstDesignReviewApprovalRevision, parseDesignBaseline } from "../src/domain/design-baseline.ts";
 
 const agentId = "11111111-1111-4111-8111-111111111111";
 const sessionId = "22222222-2222-4222-8222-222222222222";
@@ -75,6 +75,19 @@ test("rejects mismatched project scope, approval source, graph spec, and unknown
     ...validBaseline(),
     graph: { ...validBaseline().graph, entities: [{ id: "feature-a", kind: "feature", specRef: "REQ-404" }] },
   }, "project-1"), /undeclared requirement/);
+});
+
+test("can pin an exact approved review revision without changing historical lead-turn records", () => {
+  const revisionId = `first-review-approval-${digest}`;
+  const sourceId = `first-design-review:${revisionId}`;
+  const baseline = validBaseline();
+  assert.equal(firstDesignReviewApprovalRevision(sourceId), revisionId);
+  assert.equal(firstDesignReviewApprovalRevision(leadTurnId), null);
+  assert.equal(parseDesignBaseline({ ...baseline, userDecision: { ...baseline.userDecision, sourceId },
+    specification: { ...baseline.specification, approvalEvidenceRef: sourceId } }, baseline.projectId).userDecision.sourceId, sourceId);
+  const proposal = `first-design-review:first-review-${digest}`;
+  assert.throws(() => parseDesignBaseline({ ...baseline, userDecision: { ...baseline.userDecision, sourceId: proposal },
+    specification: { ...baseline.specification, approvalEvidenceRef: proposal } }, baseline.projectId), /exact first-design approval/);
 });
 
 test("requires distinct bounded revision IDs and rejects ASCII controls", () => {

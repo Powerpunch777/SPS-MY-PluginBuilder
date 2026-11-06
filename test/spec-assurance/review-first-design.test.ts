@@ -1,0 +1,216 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import test from "node:test";
+import type { JsonValue, SpsActionContext, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
+import { createDesignDraftStore, type AuthoredDesignDraft } from "../../src/design-draft-store.ts";
+import { createDesignBaselineStore } from "../../src/design-baseline-tools.ts";
+import { createEmptyBuilderSnapshot } from "../../src/domain/snapshot.ts";
+import type { RevisionState } from "../../src/solution-revision-store.ts";
+import { approveFirstDesignReview, assertCurrentFirstDesignApproval, proposeFirstDesignReview,
+  readFirstDesignApprovalBinding, readFirstDesignApprovalRevision, readFirstDesignReviewBundle,
+  readFirstDesignReviewRevision } from "../../src/spec-assurance/review-first-design.ts";
+
+const WORKSPACE = "11111111-1111-4111-8111-111111111111";
+const PROJECT = WORKSPACE;
+const AGENT = "33333333-3333-4333-8333-333333333333";
+const SESSION = "44444444-4444-4444-8444-444444444444";
+const TURN = "55555555-5555-4555-8555-555555555555";
+const RUN = "66666666-6666-4666-8666-666666666666";
+const SOURCE_ID = `lead-turn:${TURN}`;
+const SOURCE_TEXT = "Original user request for the initial design.";
+const digest = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+const keyOf = (key: SpsStateKey) => JSON.stringify([key.scopeKind, key.scopeId, key.namespace, key.stateKey]);
+
+function fixture(actor: { type: "user" | "agent" | "system"; companyId: string; userId?: string | null } = { type: "user", companyId: WORKSPACE, userId: "user-17" },
+  source = { id: SOURCE_ID, text: SOURCE_TEXT }) {
+  const values = new Map<string, JsonValue>();
+  const state: RevisionState = {
+    async get(key) { return structuredClone(values.get(keyOf(key)) ?? null); },
+    async compareAndSet(key, expected, value) {
+      const id = keyOf(key), exists = values.has(id), old = values.get(id);
+      const match = expected.exists ? exists && JSON.stringify(old) === JSON.stringify(expected.value) : !exists;
+      if (match) values.set(id, structuredClone(value));
+      return { swapped: match };
+    },
+  };
+  const put = (stateKey: string, value: JsonValue) => values.set(keyOf({ scopeKind: "company", scopeId: WORKSPACE,
+    namespace: "sonpark.my-builder", stateKey }), structuredClone(value));
+  put("lead-agent.v1", { workspaceId: WORKSPACE, revision: 1, selectedAgentId: AGENT });
+  put("lead-sessions.v1.1", { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT,
+    sessions: { main: SESSION, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null } });
+  if (source.id.startsWith("lead-turn:")) put(`lead-chat.turn.v1.${TURN}`, { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT, sessionId: SESSION,
+    channel: "main", schemaVersion: 1, requestId: TURN, previousRequestId: null, sequence: 0, text: source.text,
+    createdAt: "2026-11-06T00:00:00.000Z", state: "submitted", runId: RUN, answer: null, outputState: "not_ready",
+    cancellationRequested: false, termination: "not_applicable", inputKind: "user" });
+  else {
+    const snapshot = createEmptyBuilderSnapshot(WORKSPACE);
+    snapshot.messages.push({ id: source.id, channel: "main", actorId: null, role: "user", text: source.text,
+      createdAt: "2026-11-06T00:00:00.000Z", runId: null });
+    put("snapshot.v1", snapshot as unknown as JsonValue);
+  }
+  const draft = { projectId: PROJECT, revisionId: "draft-v1", sourceIds: [source.id],
+    specification: { revisionId: "spec-v1", productTier: "M" as const, requirements: [{ id: "REQ-1", description: "Keep onboarding clear.", acceptanceCriteriaIds: ["AC-1"] }],
+      targets: ["sps-plugin" as const], dataPolicyRef: "policy-v1" },
+    graph: { graphRevisionId: "graph-v1", entities: [], relations: [], viewLayoutRef: "layout-v1" }, questions: [] };
+  const authored: AuthoredDesignDraft = { status: "draft", selectionRevision: 1,
+    author: { agentId: AGENT, sessionId: SESSION, runId: RUN }, sourceDigests: [{ id: source.id, sha256: digest(source.text) }],
+    createdAt: "2026-11-06T00:00:01.000Z", draft };
+  const drafts = createDesignDraftStore(WORKSPACE, PROJECT, { selectionRevision: 1, agentId: AGENT }, state);
+  const published = drafts.publish({ expectedBaseRevisionId: null, revision: authored });
+  const platform = { state, agents: {} } as unknown as SpsPlatformInvocationContext;
+  const runContext = { companyId: WORKSPACE, agentId: AGENT, sessionId: SESSION, runId: RUN };
+  const context = { ...platform, companyId: WORKSPACE, actor } as unknown as SpsActionContext;
+  const pack = { packId: "onboarding", version: "1.0.0",
+    applicability: {}, rules: [{ id: "onboarding-clear", requirementIds: ["REQ-1"], appliesWhen: {}, requiresCheck: true }],
+    transitions: [], exceptions: [], excludedCombinations: [] };
+  const params = { projectId: PROJECT, expectedDraftRevisionId: "draft-v1", expectedReviewHeadRevisionId: null,
+    pack, sourcePins: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: source.id }] };
+  return { values, state, put, drafts, published, context, platform, runContext, params, pack, source };
+}
+
+test("authenticated first-design flow stores proposal and exact-user attestation before any Baseline", async () => {
+  const f = fixture();
+  await f.published;
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (!("revision" in proposal) || !proposal.revision) throw new Error("Proposal revision was not published.");
+  assert.equal(proposal.status, "published");
+  assert.equal(proposal.revision.status, "PROPOSED");
+  assert.equal(proposal.revision.author.agentId, AGENT);
+  assert.equal(proposal.revision.author.sessionId, SESSION);
+  assert.equal(proposal.revision.author.runId, RUN);
+  assert.equal(proposal.revision.author.selectionRevision, 1);
+  assert.equal(proposal.revision.priorBaseline, null);
+  assert.equal(proposal.revision.draftDigest, digest(JSON.stringify(proposal.revision.draft)));
+  assert.deepEqual(proposal.revision.sourcePins, [{ requirementId: "REQ-1", acId: "AC-1", sourceId: SOURCE_ID, sourceDigest: digest(SOURCE_TEXT) }]);
+  assert.equal(proposal.revision.pack.version, "1.0.0");
+  assert.deepEqual(proposal.revision.pack.identity, { workspaceId: WORKSPACE, projectId: PROJECT,
+    specRevisionId: "spec-v1", specDigest: digest(JSON.stringify(proposal.revision.draft.specification)) });
+
+  const approved = await approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: proposal.revision.revisionId }, f.context);
+  assert.equal(approved.status, "published");
+  assert.equal(approved.revision.status, "APPROVED");
+  assert.deepEqual(approved.revision.approval, { userId: "user-17", approvedAt: approved.revision.approval?.approvedAt,
+    attestedBundleRevisionId: proposal.revision.revisionId });
+  const binding = await readFirstDesignApprovalBinding(WORKSPACE, PROJECT, f.state);
+  assert.equal(binding?.draftRevisionId, "draft-v1");
+  assert.equal(binding?.packVersion, "1.0.0");
+  assert.equal(binding?.attestedBundleRevisionId, proposal.revision.revisionId);
+  const currentBinding = await assertCurrentFirstDesignApproval({ projectId: PROJECT, approvedRevisionId: approved.revision.revisionId },
+    f.runContext, f.platform);
+  assert.equal(currentBinding?.reviewReference, "first-design-review:" + approved.revision.revisionId);
+  assert.equal(currentBinding?.bundleDigest, digest(JSON.stringify(approved.revision)));
+  assert.equal((await readFirstDesignApprovalRevision(WORKSPACE, PROJECT, approved.revision.revisionId, f.state))?.status, "APPROVED");
+  assert.equal((await readFirstDesignReviewRevision(WORKSPACE, PROJECT, proposal.revision.revisionId, f.state))?.status, "PROPOSED");
+  assert.equal(await readFirstDesignApprovalRevision(WORKSPACE, PROJECT, proposal.revision.revisionId, f.state), null);
+});
+
+test("Main proposal derives pack identity, pins the exact Draft, and requires an observed review-head CAS", async () => {
+  const f = fixture();
+  await f.published;
+  const staleDraft = await proposeFirstDesignReview({ ...f.params, expectedDraftRevisionId: "draft-old" }, f.runContext, f.platform);
+  assert.deepEqual(staleDraft, { status: "conflict", actualDraftRevisionId: "draft-v1", content: "DesignDraft changed; refresh before proposing." });
+
+  const first = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (!("revision" in first) || !first.revision) throw new Error("Initial review proposal was not published.");
+  assert.equal(first.status, "published");
+  const replay = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  assert.equal(replay.status, "replayed");
+  const corrected = await proposeFirstDesignReview({ ...f.params, expectedReviewHeadRevisionId: first.revision.revisionId,
+    pack: { ...f.pack, version: "1.0.1" } }, f.runContext, f.platform);
+  if (!("revision" in corrected) || !corrected.revision) throw new Error("Corrected review proposal was not published.");
+  assert.equal(corrected.status, "published");
+  assert.notEqual(corrected.revision.revisionId, first.revision.revisionId);
+  assert.equal((await readFirstDesignReviewRevision(WORKSPACE, PROJECT, first.revision.revisionId, f.state))?.revisionId,
+    first.revision.revisionId);
+  const staleHead = await proposeFirstDesignReview({ ...f.params, expectedReviewHeadRevisionId: first.revision.revisionId,
+    pack: { ...f.pack, version: "1.0.2" } }, f.runContext, f.platform);
+  assert.deepEqual(staleHead, { status: "conflict", actualReviewHeadRevisionId: corrected.revision.revisionId,
+    actualDraftRevisionId: "draft-v1", content: "Review head changed; refresh before proposing. No revision was overwritten." });
+});
+
+test("proposal requires the active Main run and user claims cannot enter the AI proposal", async () => {
+  const activeMain = fixture({ type: "agent", companyId: WORKSPACE, userId: null });
+  activeMain.put("lead-sessions.v1.1", { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT,
+    sessions: { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null,
+      "integration-review": SESSION } });
+  await assert.rejects(proposeFirstDesignReview(activeMain.params, activeMain.runContext, activeMain.platform), /Only the Main Lead context/);
+  const noMain = fixture();
+  await assert.rejects(proposeFirstDesignReview(noMain.params, { ...noMain.runContext,
+    sessionId: "77777777-7777-4777-8777-777777777777" }, noMain.platform), /prepared current Lead session/);
+  const agentAction = fixture({ type: "agent", companyId: WORKSPACE, userId: "forged" });
+  await assert.rejects(approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: "anything", userId: "forged" }, agentAction.context), /authenticated Builder user/);
+  const f = fixture();
+  await assert.rejects(proposeFirstDesignReview({ ...f.params, userId: "attacker" }, f.runContext, f.platform), /Invalid Builder tool fields/);
+  await assert.rejects(proposeFirstDesignReview(f.params, { ...f.runContext, projectId: "77777777-7777-4777-8777-777777777777" }, f.platform), /single-project Workspace/);
+});
+
+test("AI proposal reader verifies captured consultation user text through the Workspace snapshot", async () => {
+  const source = { id: "consultation-55555555-5555-4555-8555-555555555555", text: "Captured consultation text from the user." };
+  const f = fixture(undefined, source);
+  await f.published;
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (!("revision" in proposal) || !proposal.revision) throw new Error("Proposal revision was not published.");
+  assert.equal(proposal.revision.sourcePins[0]?.sourceId, source.id);
+  assert.equal(proposal.revision.sourcePins[0]?.sourceDigest, digest(source.text));
+});
+
+test("approval rejects stale Draft revisions and changed source bytes", async () => {
+  const f = fixture();
+  await f.published;
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (!("revision" in proposal) || !proposal.revision) throw new Error("Proposal revision was not published.");
+  f.put(`lead-chat.turn.v1.${TURN}`, { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT, sessionId: SESSION,
+    channel: "main", schemaVersion: 1, requestId: TURN, previousRequestId: null, sequence: 0, text: "changed source",
+    createdAt: "2026-11-06T00:00:00.000Z", state: "submitted", runId: RUN, answer: null, outputState: "not_ready",
+    cancellationRequested: false, termination: "not_applicable", inputKind: "user" });
+  await assert.rejects(approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: proposal.revision.revisionId }, f.context), /source bytes/);
+});
+
+test("approval re-reads captured consultation text instead of trusting its stored Draft digest", async () => {
+  const source = { id: "consultation-55555555-5555-4555-8555-555555555555", text: "Captured consultation text from the user." };
+  const f = fixture(undefined, source);
+  await f.published;
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (!("revision" in proposal) || !proposal.revision) throw new Error("Proposal revision was not published.");
+  const snapshot = f.values.get(keyOf({ scopeKind: "company", scopeId: WORKSPACE, namespace: "sonpark.my-builder", stateKey: "snapshot.v1" })) as unknown as ReturnType<typeof createEmptyBuilderSnapshot>;
+  snapshot.messages[0]!.text = "Changed consultation text.";
+  f.put("snapshot.v1", snapshot as unknown as JsonValue);
+  await assert.rejects(approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: proposal.revision.revisionId }, f.context), /source bytes/);
+});
+
+test("review action rejects incomplete pins and unbound pack versions", async () => {
+  const f = fixture();
+  await f.published;
+  const bad = { ...f.params, pack: { ...f.pack, version: "2.0.0", requirementIdentity: "caller-claim" } };
+  await assert.rejects(proposeFirstDesignReview(bad, f.runContext, f.platform), /Invalid Builder tool fields/);
+  const noPins = { ...f.params, sourcePins: [] };
+  await assert.rejects(proposeFirstDesignReview(noPins, f.runContext, f.platform), /Requirement-to-original-source pins are required/);
+  const sparse = { ...f.params, sourcePins: new Array(1) };
+  await assert.rejects(proposeFirstDesignReview(sparse, f.runContext, f.platform), /dense list/);
+});
+
+test("approval requires the current exact proposal revision and never auto-retries stale IDs", async () => {
+  const f = fixture();
+  await f.published;
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  const stale = await approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: "first-review-stale" }, f.context);
+  assert.deepEqual(stale, { status: "conflict" });
+  assert.equal((await readFirstDesignReviewBundle(WORKSPACE, PROJECT, f.state))?.status, "PROPOSED");
+  assert.equal(proposal.status, "published");
+});
+
+test("first-design review proposal is unavailable once an approved Baseline exists", async () => {
+  const f = fixture();
+  await f.published;
+  const baseline = createDesignBaselineStore(WORKSPACE, PROJECT, f.state);
+  await baseline.publish({ expectedBaseRevisionId: null, revision: {
+    projectId: PROJECT, revisionId: "baseline-v1", sourceDraftRevisionId: "draft-v1", draftDigest: "a".repeat(64),
+    createdAt: "2026-11-06T00:00:02.000Z", author: { agentId: AGENT, sessionId: SESSION, runId: RUN, selectionRevision: 1 },
+    userDecision: { sourceId: SOURCE_ID, sourceSha256: digest(SOURCE_TEXT), interpretation: "Keep onboarding clear." },
+    specification: { projectId: PROJECT, revisionId: "spec-v1", productTier: "M",
+      requirements: [{ id: "REQ-1", description: "Keep onboarding clear.", acceptanceCriteriaIds: ["AC-1"] }],
+      targets: ["sps-plugin"], dataPolicyRef: "policy-v1", approvalEvidenceRef: SOURCE_ID },
+    graph: { approvedSpecRevisionId: "spec-v1", graphRevisionId: "graph-v1", entities: [], relations: [], viewLayoutRef: "layout-v1" },
+  } });
+  await assert.rejects(proposeFirstDesignReview(f.params, f.runContext, f.platform), /only available before the first Baseline/);
+});

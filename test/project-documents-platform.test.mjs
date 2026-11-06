@@ -46,12 +46,28 @@ async function fixture() {
 
 test("Main Baseline publication produces a pinned body and the registered read path exposes actual stored bytes", async () => {
   const f = await fixture();
+  const contract = createBuilderPlatform();
+  const propose = contract.tools.find(row => row.name === "builder.propose-first-design-review").handler;
+  const proposal = await propose({ projectId: workspace, expectedDraftRevisionId: "draft-1", expectedReviewHeadRevisionId: null,
+    pack: { packId: "doc-check", version: "1", applicability: {}, rules: [{ id: "doc-rule", requirementIds: ["REQ-1"],
+      appliesWhen: {}, requiresCheck: true }], transitions: [], exceptions: [], excludedCombinations: [] },
+    sourcePins: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: `consultation-${uuid(5)}` }] }, f.context, f.platform);
+  const review = contract.data.find(row => row.key === "builder.first-design-review").handler;
+  const shown = await review({ companyId: workspace }, f.platform);
+  assert.equal(shown.status, "ready");
+  assert.equal(shown.bundle.revisionId, proposal.data.revision.revisionId);
+  const approve = contract.actions.find(row => row.key === "builder.approve-first-design-review").handler;
+  const input = { proposalRevisionId: shown.proposalRevisionId, expectedHead: shown.expectedHead };
+  await assert.rejects(() => approve(input, { ...f.platform, companyId: workspace,
+    actor: { type: "agent", companyId: workspace } }), /authenticated user/);
+  const approved = await approve(input, { ...f.platform, companyId: workspace,
+    actor: { type: "user", companyId: workspace, userId: "fixture-user" } });
+  assert.equal(approved.status, "published");
   const result = await publishLeadDesignBaseline({ projectId: workspace, expectedBaseRevisionId: null,
-    sourceDraftRevisionId: "draft-1", revisionId: "baseline-1", userSourceId: `lead-turn:${requestId}`,
+    sourceDraftRevisionId: "draft-1", revisionId: "baseline-1", userSourceId: `first-design-review:${approved.revision.revisionId}`,
     interpretation: "The user confirmed this design." }, f.context, f.platform);
   assert.equal(result.data.status, "published");
   assert.equal(result.data.documentProduction.status, "published");
-  const contract = createBuilderPlatform();
   const read = contract.data.find(row => row.key === "builder.baseline-document").handler;
   const body = await read({ companyId: workspace }, f.platform);
   assert.equal(body.read.status, "available");

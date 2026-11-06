@@ -294,16 +294,35 @@ test("built Worker routes design sources to an unapproved draft and back without
     invoke(15, "builder.publish-design-baseline", baselineInput, decisionsRunContext);
     const rejectedNonMainBaseline = await serviceUntil(15);
     assert.match(rejectedNonMainBaseline.error.message, /Only the Main Lead context/);
-    invoke(18, "builder.publish-design-baseline", baselineInput, runContext);
+    invoke(901, "builder.publish-design-baseline", baselineInput, runContext);
+    assert.match((await serviceUntil(901)).error.message, /first Baseline requires an authenticated/);
+    invoke(902, "builder.propose-first-design-review", { projectId: workspaceA,
+      expectedDraftRevisionId: resolvedDraft.revisionId, expectedReviewHeadRevisionId: null,
+      pack: { packId: "project-tracker-fixture", version: "1", applicability: {},
+        rules: [{ id: "req-tracker", requirementIds: ["req-1"], appliesWhen: {}, requiresCheck: true }],
+        transitions: [], exceptions: [], excludedCombinations: [] },
+      sourcePins: [{ requirementId: "req-1", acId: null, sourceId: resolvedDraft.sourceIds[0] }] }, runContext);
+    const review = await serviceUntil(902);
+    assert.equal(review.error, undefined, JSON.stringify(review.error));
+    assert.equal(review.result.data.status, "published");
+    const proposalId = review.result.data.revision.revisionId;
+    send({ jsonrpc: "2.0", id: 903, method: "performAction", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
+      params: { key: "builder.approve-first-design-review", params: { proposalRevisionId: proposalId, expectedHead: proposalId },
+        actorContext: { type: "user", companyId: workspaceA, userId: "test-user" } } });
+    const approved = await serviceUntil(903);
+    assert.equal(approved.error, undefined, JSON.stringify(approved.error));
+    assert.equal(approved.result.status, "published");
+    const approvalSourceId = `first-design-review:${approved.result.revision.revisionId}`;
+    invoke(18, "builder.publish-design-baseline", { ...baselineInput, userSourceId: approvalSourceId }, runContext);
     const baselineReply = await serviceUntil(18);
     assert.equal(baselineReply.error, undefined, JSON.stringify(baselineReply.error));
     assert.equal(baselineReply.result.data.status, "published");
     const baseline = baselineReply.result.data.revision;
     assert.deepEqual(baseline.specification.requirements, resolvedDraft.specification.requirements);
     assert.deepEqual(baseline.graph.entities, resolvedDraft.graph.entities);
-    assert.equal(baseline.specification.approvalEvidenceRef, `lead-turn:${mainBaselineTurnId}`);
+    assert.equal(baseline.specification.approvalEvidenceRef, approvalSourceId);
     assert.equal(baseline.graph.approvedSpecRevisionId, baseline.specification.revisionId);
-    assert.equal(baseline.userDecision.sourceSha256, sha256(mainBaselineText));
+    assert.equal(baseline.userDecision.sourceSha256, sha256(JSON.stringify(approved.result.revision)));
     assert.match(baselineReply.result.content, /not independently verified legal approval/);
     send({ jsonrpc: "2.0", id: 16, method: "getData", paperclipInvocation: { id: invocationId, scope: { companyId: workspaceA } },
       params: { key: "builder.design-baseline", companyId: workspaceA, params: { projectId: workspaceA } } });

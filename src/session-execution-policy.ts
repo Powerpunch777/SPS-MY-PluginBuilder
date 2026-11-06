@@ -21,7 +21,7 @@ import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-
 import { SUBMIT_CTO_QUESTION_TOOL, READ_OWN_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL } from "./task-packet-tool-declarations.mjs";
 import type { LeadChannel } from "./domain/model.ts";
-import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL } from "./spec-assurance/tool-declarations.mjs";
+import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL } from "./spec-assurance/tool-declarations.mjs";
 import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 
@@ -33,6 +33,8 @@ export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
   READ_CONSULTATION_ANALYSIS_TOOL.name,
   SPEC_ASSURANCE_PACK_PROPOSAL_TOOL.name,
   READ_SPEC_ASSURANCE_PACK_TOOL.name,
+  READ_FIRST_DESIGN_REVIEW_TOOL.name,
+  PROPOSE_FIRST_DESIGN_REVIEW_TOOL.name,
   READ_UI_CONTRACTS_TOOL.name,
   PUBLISH_UI_CONTRACT_TOOL.name,
   READ_FINAL_REVIEW_TOOL.name,

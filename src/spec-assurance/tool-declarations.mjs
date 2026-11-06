@@ -25,3 +25,25 @@ export const READ_SPEC_ASSURANCE_PACK_TOOL = Object.freeze({
   parametersSchema: Object.freeze({ type: "object", additionalProperties: false, required: ["projectId", "packId"],
     properties: { projectId: { type: "string", minLength: 1, maxLength: 160 }, packId: { type: "string", minLength: 1, maxLength: 160 } } }),
 });
+
+const firstId = { type: "string", minLength: 1, maxLength: 160 };
+export const READ_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
+  name: "builder.read-first-design-review", displayName: "Read the initial design review",
+  description: "Main reads the latest initial design review, its exact head and any recorded user approval. Does not publish a Baseline.",
+  parametersSchema: { type: "object", additionalProperties: false, properties: {} },
+});
+
+export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
+  name: "builder.propose-first-design-review", displayName: "Propose the initial design review",
+  description: "Main proposes original-source links and a versioned rule pack for the exact current DesignDraft before the first Baseline. Read the draft and review head first. Identity and source hashes are server-derived; the proposal must be confirmed by the user in Builder.",
+  parametersSchema: { type: "object", additionalProperties: false,
+    required: ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"],
+    properties: { projectId: firstId, expectedDraftRevisionId: firstId, expectedReviewHeadRevisionId: { type: ["string", "null"], maxLength: 160 },
+      pack: { type: "object", additionalProperties: false,
+        required: ["packId", "version", "applicability", "rules", "transitions", "exceptions", "excludedCombinations"],
+        properties: { packId: firstId, version: firstId, applicability: { type: "object" }, rules: { type: "array" },
+          transitions: { type: "array" }, exceptions: { type: "array" }, excludedCombinations: { type: "array" } } },
+      sourcePins: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false,
+        required: ["requirementId", "acId", "sourceId"], properties: { requirementId: firstId, acId: { type: ["string", "null"] }, sourceId: firstId } } } },
+  },
+});

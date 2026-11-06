@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
-import { parseDesignBaseline } from "./domain/design-baseline.ts";
+import { firstDesignReviewApprovalRevision, parseDesignBaseline } from "./domain/design-baseline.ts";
 import { createDesignDraftStore } from "./design-draft-store.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { readLeadUserTurn } from "./lead-conversations.ts";
+import { assertCurrentFirstDesignApproval } from "./spec-assurance/review-first-design.ts";
 
 const hash = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 function id(value: unknown): string {
@@ -31,29 +32,47 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
   const suffix = hash(`${projectId}\0${revisionId}`);
   const specificationRevisionId = `baseline-spec-${suffix}`, graphRevisionId = `baseline-graph-${suffix}`;
   const expectedBaseRevisionId = input.expectedBaseRevisionId === null ? null : id(input.expectedBaseRevisionId);
-  if (typeof input.userSourceId !== "string" || !/^lead-turn:[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(input.userSourceId)
+  if (typeof input.userSourceId !== "string" || !input.userSourceId.trim()
     || typeof input.interpretation !== "string" || !input.interpretation.trim()
     || Buffer.byteLength(input.interpretation, "utf8") > 8192) throw new TypeError("A current user decision and bounded Lead interpretation are required.");
   const userSourceId = input.userSourceId, interpretation = input.interpretation;
   const context = parseLeadToolContext(runContext);
   const authority = await resolveLeadToolAuthority(context, platform);
   requireLeadFormalPublicationAuthority(authority);
-  const turn = await readLeadUserTurn(userSourceId.slice("lead-turn:".length), authority.sessions, platform);
-  if (turn.runId !== context.runId || turn.sessionId !== context.sessionId) {
-    throw new Error("The decision must be the actual user input for this current Lead run/session.");
-  }
+  if (context.projectId !== undefined && context.projectId !== projectId) throw new Error("Baseline project does not match the authenticated Lead context.");
   await authority.check();
   const draftStore = createDesignDraftStore(context.companyId, projectId,
     { selectionRevision: authority.selectionRevision, agentId: context.agentId }, platform.state);
   const current = await draftStore.current();
   if (!current || current.revision.draft.revisionId !== sourceDraftRevisionId) return changed("draft");
+  const existing = await readDesignBaseline(context.companyId, projectId, platform);
+  if ((existing?.revision.revisionId ?? null) !== expectedBaseRevisionId) return changed("baseline");
+  const approvalRevisionId = firstDesignReviewApprovalRevision(userSourceId);
+  const readApproval = () => assertCurrentFirstDesignApproval({ projectId, approvedRevisionId: approvalRevisionId }, context, platform);
+  let sourceSha256: string;
+  if (existing === null) {
+    if (!approvalRevisionId) throw new Error("The first Baseline requires an authenticated first-design review approval.");
+    const approved = await readApproval();
+    if (!approved || approved.bundle.draftRevisionId !== sourceDraftRevisionId
+      || JSON.stringify(approved.bundle.draft) !== JSON.stringify(current.revision.draft)) return changed("approved first-design review");
+    sourceSha256 = approved.bundleDigest;
+  } else {
+    if (!/^lead-turn:[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(userSourceId)) {
+      throw new Error("A new design decision from the current Main user turn is required for this change.");
+    }
+    const turn = await readLeadUserTurn(userSourceId.slice("lead-turn:".length), authority.sessions, platform);
+    if (turn.runId !== context.runId || turn.sessionId !== context.sessionId) {
+      throw new Error("The decision must be the actual user input for this current Lead run/session.");
+    }
+    sourceSha256 = hash(turn.text);
+  }
   const draft = current.revision.draft;
   if (revisionId === draft.revisionId || specificationRevisionId === draft.specification.revisionId
     || graphRevisionId === draft.graph.graphRevisionId) throw new TypeError("New baseline, specification and Graph revision IDs are required.");
   const baseline = parseDesignBaseline({ projectId, revisionId, sourceDraftRevisionId,
     draftDigest: hash(JSON.stringify(current.revision)), createdAt: new Date().toISOString(),
     author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId, selectionRevision: authority.selectionRevision },
-    userDecision: { sourceId: userSourceId, sourceSha256: hash(turn.text), interpretation },
+    userDecision: { sourceId: userSourceId, sourceSha256, interpretation },
     specification: { ...draft.specification, projectId, revisionId: specificationRevisionId, approvalEvidenceRef: userSourceId },
     graph: { ...draft.graph, graphRevisionId, approvedSpecRevisionId: specificationRevisionId },
   }, projectId);
@@ -68,12 +87,23 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
   };
   const guarded: RevisionState = { get: async key => { await check(); const value = await state.get(key); await check(); return value; },
     compareAndSet: state.compareAndSet ? async (...args) => {
-      await check(); const receipt = await state.compareAndSet!(...args); await check(); return receipt;
+      await check();
+      if (approvalRevisionId && args[0].stateKey.startsWith("design-baseline-head.v1.")) {
+        const approved = await readApproval().catch(async error => {
+          if (await readDesignBaseline(context.companyId, projectId, platform)) return null;
+          throw error;
+        });
+        if (!approved && await readDesignBaseline(context.companyId, projectId, platform)) return { swapped: false };
+        if (!approved || approved.bundleDigest !== sourceSha256) throw new Error("First-design approval changed before Baseline publication.");
+      }
+      const receipt = await state.compareAndSet!(...args);
+      await check();
+      return receipt;
     } : undefined };
   const result = await createDesignBaselineStore(context.companyId, projectId, guarded).publish({ expectedBaseRevisionId, revision: baseline });
   await check();
   return { content: result.status === "published"
-    ? "Design baseline stored with the actual current user input and the Lead's interpretation. This is an internal planning record, not independently verified legal approval, a signature, code execution, deployment, data deletion or delivery authority. Technical decisions and workstream permissions remain separate."
+    ? "Design baseline stored with its exact user decision reference and the Lead's interpretation. This is an internal planning record, not independently verified legal approval, a signature, code execution, deployment, data deletion or delivery authority. Technical decisions and workstream permissions remain separate."
     : "The baseline changed. Read the current record; do not automatically retry.", data: result as unknown as JsonValue };
 }
 function changed(kind: string) {
