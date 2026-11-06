@@ -7,6 +7,13 @@ export const READ_SOLUTION_TOOL: Readonly<{
   parametersSchema: JsonObject;
 }>;
 
+export const READ_CHANGE_IMPACT_TOOL: Readonly<{
+  name: "builder.read-change-impact";
+  displayName: string;
+  description: string;
+  parametersSchema: JsonObject;
+}>;
+
 export const PROPOSE_DESIGN_TOOL: Readonly<{
   name: "builder.propose-design";
   displayName: string;

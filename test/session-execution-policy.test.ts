@@ -85,6 +85,7 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
     assert.deepEqual(policies[channel]!.toolNames, [...policies[channel]!.toolNames].sort());
     assert.equal(Object.isFrozen(policies[channel]!.toolNames), true);
     assert.ok(policies[channel]!.toolNames.length <= 32, `${channel} must fit the pinned Host session policy limit`);
+    assert.equal(allowed.has("builder.read-change-impact"), channel === "main" || channel === "integration-review");
     if (channel === "main") for (const write of formalWrites) assert.ok(allowed.has(write), write);
     else for (const write of formalWrites) assert.ok(!allowed.has(write), `${channel} must not have ${write}`);
   }

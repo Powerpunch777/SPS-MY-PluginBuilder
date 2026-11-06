@@ -50,7 +50,8 @@ import { createFinalPacketStore } from "./delivery-evidence/final-packet.ts";
 import { readFinalReview } from "./delivery-evidence/final-review.ts";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
-import { readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
+import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
+import { READ_CHANGE_IMPACT_TOOL } from "./tool-declarations.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
@@ -799,6 +800,8 @@ export function createBuilderPlatform() {
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
     handler: (params, context, platform) => readLeadSolution(params, context, platform) },
+    { name: READ_CHANGE_IMPACT_TOOL.name, declaration: READ_CHANGE_IMPACT_TOOL,
+      handler: readG5ChangeImpactCandidates },
     { name: READ_FIRST_DESIGN_REVIEW_TOOL.name, declaration: READ_FIRST_DESIGN_REVIEW_TOOL,
       handler: (params, context, platform) => serialize(context.companyId, async () => {
         exactToolRecord(params, []);

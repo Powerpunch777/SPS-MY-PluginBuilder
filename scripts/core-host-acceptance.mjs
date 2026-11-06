@@ -249,6 +249,16 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
         runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions.main)},role:'lead'}
     })}).then(async r=>({status:r.status,body:await r.json()}))`, true);
   assert.equal(forgedTool.status, 403, "A user UI request cannot impersonate the prepared Lead Agent run.");
+  const impactToolName = "com.sonparkserver.my-plugin-builder:builder.read-change-impact";
+  assert.ok(registeredTools.some(tool => tool.pluginId === plugin.id && tool.name === impactToolName),
+    "The exact revision comparison must be in the actual Host tool inventory.");
+  const forgedImpact = await workspace.evaluate(`fetch('/api/plugins/tools/execute', {
+    method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
+      tool:${JSON.stringify(impactToolName)},parameters:{projectId:${JSON.stringify(company.id)}},
+      runContext:{companyId:${JSON.stringify(company.id)},agentId:${JSON.stringify(leadAgent.id)},
+        runId:'11111111-1111-4111-8111-111111111111',sessionId:${JSON.stringify(preparedSessions.sessions["integration-review"])}}
+    })}).then(r=>r.status)`, true);
+  assert.equal(forgedImpact, 403, "UI users have their own comparison action, not a way to impersonate Integration Review.");
   assert.equal((await request(`/api/agents/${leadAgent.id}/task-sessions`)).length, leadChannels.length);
   const proposedTool = await workspace.evaluate(`fetch('/api/plugins/tools/execute', {
     method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({
@@ -651,6 +661,7 @@ export async function runAcceptance({ cdp, company, secondCompany, api, click, r
     documentCenterEmptyHost: true, documentCenterActualConsultationSource: true,
     firstReviewEmptyScopedRead: true, firstReviewMissingDraftDenied: true, actualFirstDesignApproval: false,
     changeImpactPanel: true, changeImpactMissingSourceDenied: true, changeImpactCrossProjectDenied: true,
+    changeImpactToolRegistered: true, changeImpactRunImpersonationDenied: true,
     leadReadToolRegistered: true, userToolImpersonationDenied: true, liveLeadToolInvoked: false,
     userDraftWriteImpersonationDenied: true, draftUiPresentationFixture: true, realHostDraftWritten: false,
     questionAnswerAssociationPresentationFixture: false, sendReceiptDoesNotResolveQuestion: false, storedAnswerPresentationFixture: false,

@@ -18,7 +18,9 @@ const REVIEW = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const PROJECT = COMPANY;
 const OTHER_PROJECT = "77777777-7777-4777-8777-777777777777";
 const USER = "99999999-9999-4999-8999-999999999999";
-const userAction = createBuilderPlatform().actions!.find(action => action.key === "builder.read-change-impact")!.handler;
+const contract = createBuilderPlatform();
+const userAction = contract.actions.find(action => action.key === "builder.read-change-impact")!.handler;
+const leadTool = contract.tools.find(tool => tool.name === "builder.read-change-impact")!.handler;
 const userContext = (state: SpsActionContext["state"]) => ({
   companyId: COMPANY, actor: { type: "user", companyId: COMPANY, userId: USER }, state,
 }) as SpsActionContext;
@@ -52,6 +54,8 @@ test("only Main and Integration Review can request the authenticated source comp
   const f = fixture("00000000-0000-4000-8000-000000000009");
   await assert.rejects(() => readG5ChangeImpactCandidates(f.params, f.runContext, f.platform), /prepared current Lead session/);
   assert.equal(f.reads, 2);
+  const background = fixture("00000000-0000-4000-8000-000000000003");
+  await assert.rejects(async () => leadTool(background.params, background.runContext, background.platform), /limited to Main or Integration Review/);
 });
 
 test("Main reader resolves the exact pinned published Baseline from its Workspace journal", async () => {
@@ -70,6 +74,7 @@ test("project mismatch in authenticated Lead context is rejected before source r
   const f = fixture();
   const context = { ...f.runContext, projectId: "88888888-8888-4888-8888-888888888888" };
   await assert.rejects(() => readG5ChangeImpactCandidates(f.params, context, f.platform), /does not match the authenticated Lead context/);
+  await assert.rejects(async () => leadTool({ ...f.params, projectId: OTHER_PROJECT }, f.runContext, f.platform), /does not match the authenticated Lead context/);
   assert.equal(f.reads, 0);
 });
 
@@ -147,7 +152,8 @@ test("reads paired Baselines and user-approved formal UI from their exact publis
   const request = { ...f.params, oldBaselineRevisionId: "baseline-old",
     newBaselineRevisionId: "baseline-new", oldUiRevisionId: "ui-old", newUiRevisionId: "ui-new" };
   const beforeCompare = structuredClone(f.values);
-  const result = await readG5ChangeImpactCandidates(request, f.runContext, platform);
+  const result = await leadTool(request, f.runContext, platform);
+  assert.deepEqual(await leadTool(request, { ...f.runContext, sessionId: REVIEW }, platform), result);
   const fromUser = await userAction(request, userContext(platform.state));
   assert.deepEqual(fromUser, result.data);
   assert.deepEqual(f.values, beforeCompare, "comparison must not publish or modify any record");

@@ -78,7 +78,9 @@ export async function readG5ChangeImpactCandidates(params: unknown, runContext: 
   const input = impactInput(params);
   const projectId = id(input.projectId, "projectId");
   const context = parseLeadToolContext(runContext);
-  if (context.projectId !== undefined && context.projectId !== projectId) throw new Error("G5 project does not match the authenticated Lead context.");
+  if (projectId !== context.companyId || context.projectId !== undefined && context.projectId !== projectId) {
+    throw new Error("G5 project does not match the authenticated Lead context.");
+  }
   const authority = await resolveLeadToolAuthority(context, platform);
   if (authority.channel !== "main" && authority.channel !== "integration-review") {
     throw new Error("G5 source comparison is limited to Main or Integration Review Lead sessions.");
