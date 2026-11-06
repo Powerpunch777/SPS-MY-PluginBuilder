@@ -27,7 +27,8 @@ export async function readProjectCtos(workspaceId: string, projectId: string, pl
 
 type OwnedProfileClient = Readonly<{
   get(input: { companyId: string; pluginAgentKey: string }): Promise<unknown>;
-  ensure(input: { companyId: string; pluginAgentKey: string; config: { name: string; role: "engineer"; title: "Builder CTO"; instructions: string } }): Promise<unknown>;
+  ensure(input: { companyId: string; pluginAgentKey: string; config: { name: string; role: "engineer"; title: "Builder CTO"; instructions: string };
+    adapterPreference?: readonly string[] }): Promise<unknown>;
 }>;
 const ownedProfileClient = (platform: SpsPlatformInvocationContext) =>
   (platform.agents as typeof platform.agents & { owned?: OwnedProfileClient }).owned;
@@ -109,9 +110,26 @@ export async function createProjectCto(params: unknown, runContext: unknown, pla
     const before = await owned.get({ companyId: context.companyId, pluginAgentKey });
     await authority.check();
     const row = exactToolRecord(before, ["status"], ["revision", "agent"]);
-    const receipt = row.status === "missing" && !cto ? await owned.ensure({ companyId: context.companyId, pluginAgentKey,
-      config: { name: displayName, role: "engineer", title: "Builder CTO",
-        instructions: "Work only on the assigned Builder workstream under its current Task, Revision and Host permissions. Registration does not authorize execution or changes outside scope." } }) : before;
+    let receipt = before;
+    if (row.status === "missing" && !cto) {
+      let adapterPreference: readonly string[];
+      try {
+        await authority.check();
+        const descriptor = exactToolRecord(await platform.agents.describeExecution(context.agentId, context.companyId),
+          ["agentId", "adapterType", "state", "adapterRegistration", "executionOwner", "authorization", "readiness", "node"]);
+        if (descriptor.agentId !== context.agentId || typeof descriptor.adapterType !== "string"
+          || !descriptor.adapterType.trim() || descriptor.adapterType.length > 80
+          || descriptor.state !== "configured" || descriptor.adapterRegistration !== "registered"
+          || descriptor.executionOwner !== "adapter") return profilePending("current-lead-adapter-not-confirmed");
+        adapterPreference = [descriptor.adapterType];
+      } catch {
+        return profilePending("current-lead-adapter-observation-unavailable");
+      }
+      await authority.check();
+      receipt = await owned.ensure({ companyId: context.companyId, pluginAgentKey, adapterPreference,
+        config: { name: displayName, role: "engineer", title: "Builder CTO",
+          instructions: "Work only on the assigned Builder workstream under its current Task, Revision and Host permissions. Registration does not authorize execution or changes outside scope." } });
+    }
     await authority.check();
     const profile = readOwnedProfile(receipt);
     if (!profile) return profilePending("host-owned-profile-unavailable");

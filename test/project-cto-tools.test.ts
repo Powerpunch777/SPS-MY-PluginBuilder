@@ -22,6 +22,8 @@ function fixture() {
   const sessions = new Map<string, string>();
   const casCalls: Array<{ key: SpsStateKey; expected: Expected; value: JsonValue }> = [];
   const ensureCalls: Array<{ agentId: string; companyId: string; taskKey: string; expectedSessionId?: string }> = [];
+  const profileEnsureCalls: Array<{ pluginAgentKey: string; adapterPreference?: readonly string[] }> = [];
+  let describeExecutionCalls = 0;
   let setCalls = 0;
   let createdSessions = 0;
   let nextSession = 0;
@@ -55,6 +57,13 @@ function fixture() {
   const platform = {
     state,
     agents: {
+      async describeExecution(agentId: string, companyId: string) {
+        describeExecutionCalls += 1;
+        assert.equal(agentId, LEAD);
+        assert.equal(companyId, WORKSPACE);
+        return { agentId, adapterType: "codex_local", state: "configured", adapterRegistration: "registered",
+          executionOwner: "adapter", authorization: "recheck_on_dispatch", readiness: "unknown", node: null };
+      },
       async list({ companyId }: { companyId: string }) {
         return [{ id: LEAD, companyId, name: "Lead", status: "idle", config: { unchanged: true } }];
       },
@@ -83,7 +92,8 @@ function fixture() {
     companyId: workspaceId, agentId, runId: RUN, sessionId,
   });
   return {
-    values, sessions, casCalls, ensureCalls, platform, state, key, context, seedLead,
+    values, sessions, casCalls, ensureCalls, profileEnsureCalls, platform, state, key, context, seedLead,
+    get describeExecutionCalls() { return describeExecutionCalls; },
     get setCalls() { return setCalls; },
     get createdSessions() { return createdSessions; },
   };
@@ -132,6 +142,8 @@ test("owned profile provisioning separates two CTOs and preserves paused session
         assert.deepEqual(Object.keys(input.config).sort(), ["instructions", "name", "role", "title"]);
         assert.equal(input.config.role, "engineer");
         assert.match(input.pluginAgentKey, /^builder-cto:[a-f0-9]{64}$/u);
+        f.profileEnsureCalls.push({ pluginAgentKey: input.pluginAgentKey,
+          adapterPreference: (input as typeof input & { adapterPreference?: readonly string[] }).adapterPreference });
         ensureKeys.push(input.pluginAgentKey);
         const profile = { agentId: agentIds[profiles.size]!, status: "paused" };
         profiles.set(input.pluginAgentKey, profile);
@@ -151,6 +163,8 @@ test("owned profile provisioning separates two CTOs and preserves paused session
   const prepared = (await readProjectCtos(WORKSPACE, WORKSPACE, f.platform)).ctos;
   assert.deepEqual(prepared.map(record => record.agentId), agentIds);
   assert.equal(f.ensureCalls.length, 2);
+  assert.deepEqual(f.profileEnsureCalls.map(call => call.adapterPreference), [["codex_local"], ["codex_local"]]);
+  assert.equal(f.describeExecutionCalls, 2);
   await assert.rejects(assertCtoProfileCanBeDispatched(WORKSPACE, WORKSPACE, prepared[0]!, f.platform), /inactive/);
   for (const profile of profiles.values()) profile.status = "idle";
   await assertCtoProfileCanBeDispatched(WORKSPACE, WORKSPACE, prepared[0]!, f.platform);
@@ -186,6 +200,50 @@ test("owned profile errors never fall back to the Lead identity or a foreign pro
   const denied = await createProjectCto(ctoParams("denied", "Denied", WORKSPACE), f.context(), f.platform);
   assert.deepEqual(denied.data, { status: "profile-pending", reason: "host-owned-profile-unavailable", agentId: null, executionStarted: false });
   assert.equal(ownerReads, 1);
+  assert.equal(f.casCalls.length, 0);
+  assert.equal(f.ensureCalls.length, 0);
+});
+
+test("new owned CTO profile requires the current Lead's confirmed adapter and receives only that preference", async () => {
+  for (const descriptor of [
+    { adapterType: "codex_local", state: "disabled", adapterRegistration: "registered", executionOwner: "adapter" },
+    { adapterType: "codex_local", state: "configured", adapterRegistration: "unavailable", executionOwner: "adapter" },
+    { adapterType: "codex_local", state: "configured", adapterRegistration: "registered", executionOwner: "node" },
+    { adapterType: "", state: "configured", adapterRegistration: "registered", executionOwner: "adapter" },
+  ]) {
+    const f = fixture();
+    let ensures = 0;
+    Object.assign(f.platform.agents, {
+      owned: {
+        async get() { return { status: "missing" }; },
+        async ensure() { ensures += 1; throw new Error("Unconfirmed adapter must prevent profile creation"); },
+      },
+      async describeExecution(agentId: string, companyId: string) {
+        assert.equal(agentId, LEAD);
+        assert.equal(companyId, WORKSPACE);
+        return { agentId, ...descriptor, authorization: "recheck_on_dispatch", readiness: "unknown", node: null };
+      },
+    });
+    const result = await createProjectCto(ctoParams("unconfirmed-adapter", "CTO", WORKSPACE), f.context(), f.platform);
+    assert.deepEqual(result.data, { status: "profile-pending", reason: "current-lead-adapter-not-confirmed",
+      agentId: null, executionStarted: false });
+    assert.equal(ensures, 0);
+    assert.equal(f.casCalls.length, 0);
+    assert.equal(f.ensureCalls.length, 0);
+  }
+});
+
+test("unavailable current Lead adapter observation remains pending and never creates a CTO profile", async () => {
+  const f = fixture();
+  let ensures = 0;
+  Object.assign(f.platform.agents, {
+    owned: { async get() { return { status: "missing" }; }, async ensure() { ensures += 1; } },
+    async describeExecution() { throw new Error("Host adapter observation unavailable"); },
+  });
+  const result = await createProjectCto(ctoParams("missing-adapter", "CTO", WORKSPACE), f.context(), f.platform);
+  assert.deepEqual(result.data, { status: "profile-pending", reason: "current-lead-adapter-observation-unavailable",
+    agentId: null, executionStarted: false });
+  assert.equal(ensures, 0);
   assert.equal(f.casCalls.length, 0);
   assert.equal(f.ensureCalls.length, 0);
 });
