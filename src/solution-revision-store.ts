@@ -273,6 +273,22 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       return entry && Object.freeze({ sequence: entry.sequence, revision: entry.revision });
     },
 
+    /** Atomic point-in-time observation, not a lease or permission for a later effect. */
+    async currentGuarded(rawGuards: readonly RevisionPublicationGuard[]) {
+      const guarded = state.guardedCompareAndSet;
+      if (typeof guarded !== "function") return Object.freeze({ status: "unsupported" as const });
+      const guards = validatePublicationGuards(rawGuards);
+      const captured = await head();
+      if (!captured.entry || captured.raw === null) return Object.freeze({ status: "absent" as const });
+      const raw = await guarded.call(state, { ...headKey, scopeKind: "company", scopeId: workspaceId, guards },
+        { exists: true, value: captured.raw }, captured.raw);
+      const receipt = fields(raw, raw?.status === "unsupported" ? ["status", "reason"] : ["status"], "guarded current receipt");
+      if (receipt.status === "unsupported" && receipt.reason === "missing-guard") return Object.freeze({ status: "unsupported" as const });
+      if (receipt.status === "conflict") return Object.freeze({ status: "stale" as const });
+      if (receipt.status !== "committed") throw new TypeError("Invalid guarded current receipt.");
+      return Object.freeze({ status: "current" as const, sequence: captured.entry.sequence, revision: captured.entry.revision });
+    },
+
     // Follow the published chain, not a raw revision key: failed head writes can
     // leave staged entries that must never be represented as published history.
     async publishedRevision(revisionId: string, maximum = 1_000): Promise<Readonly<{ sequence: number; revision: T }> | null> {

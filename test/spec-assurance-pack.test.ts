@@ -7,6 +7,7 @@ import { createDesignBaselineStore } from "../src/design-baseline-tools.ts";
 import { createDesignDraftStore, type AuthoredDesignDraft } from "../src/design-draft-store.ts";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { proposeSpecAssurancePack } from "../src/spec-assurance/pack-producer.ts";
+import { CurrentBaselineSourceError } from "../src/spec-assurance/current-baseline-provider.ts";
 import { approveFirstDesignReview, proposeFirstDesignReview } from "../src/spec-assurance/review-first-design.ts";
 import { createSpecAssurancePackStore, discoverSpecAssurancePackGaps, specAssurancePackRevisionId } from "../src/spec-assurance/pack-store.ts";
 import type { CoverageRulesManifest } from "../src/spec-coverage/evaluator.ts";
@@ -166,7 +167,8 @@ test("first-review pack proposal rejects changed original source bytes and stale
   const turnKey = [...f.values.keys()].find(key => key.includes(`lead-chat.turn.v1.${TURN}`))!;
   const original = f.values.get(turnKey) as Record<string, JsonValue>;
   f.values.set(turnKey, { ...original, text: "changed original source" });
-  await assert.rejects(proposeSpecAssurancePack(f.proposalInput, f.context, f.platform), /source bytes do not match/u);
+  await assert.rejects(proposeSpecAssurancePack(f.proposalInput, f.context, f.platform),
+    error => error instanceof CurrentBaselineSourceError && error.reason === "original-source-digest-mismatch");
   const badDigest = await publishFirstReviewBaseline({ wrongApprovalDigest: true });
   await assert.rejects(proposeSpecAssurancePack(badDigest.proposalInput, badDigest.context, badDigest.platform), /exact approved first-design bundle/u);
 });

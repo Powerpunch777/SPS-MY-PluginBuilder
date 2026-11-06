@@ -8,7 +8,7 @@ import { createDesignDraftStore, type AuthoredDesignDraft } from "../../src/desi
 import { firstDesignReviewApprovalRevision } from "../../src/domain/design-baseline.ts";
 import type { RevisionState } from "../../src/solution-revision-store.ts";
 import { createSpecAssuranceConsumer, type AssuranceInput } from "../../src/spec-assurance/evaluator.ts";
-import { createCurrentBaselineAssuranceProvider } from "../../src/spec-assurance/current-baseline-provider.ts";
+import { createCurrentBaselineAssuranceProvider, CurrentBaselineSourceError } from "../../src/spec-assurance/current-baseline-provider.ts";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewRevision } from "../../src/spec-assurance/review-first-design.ts";
 import { createBuilderPlatform } from "../../src/platform.ts";
 
@@ -199,6 +199,8 @@ test("missing or digest-mismatched cited originals fail closed", async () => {
   const turnKey = [...missing.values.keys()].find(key => key.includes(`lead-chat.turn.v1.${TURN}`));
   assert(turnKey);
   missing.values.delete(turnKey);
+  await assert.rejects(async () => { await missing.provider({ identity: missing.identity, requirementIds: ["REQ-1"] }); },
+    (error: unknown) => error instanceof CurrentBaselineSourceError && error.reason === "original-source-unavailable");
   const missingResult = await createSpecAssuranceConsumer(missing.provider)(missing.input);
   assert.equal(missingResult.status, "UNKNOWN");
   assert.equal(missingResult.coverageAuthority, "failed");
@@ -209,10 +211,31 @@ test("missing or digest-mismatched cited originals fail closed", async () => {
   assert(sourceKey);
   const turn = changed.values.get(sourceKey) as Record<string, JsonValue>;
   changed.values.set(sourceKey, { ...turn, text: "Changed after the baseline was recorded." });
+  await assert.rejects(async () => { await changed.provider({ identity: changed.identity, requirementIds: ["REQ-1"] }); },
+    (error: unknown) => error instanceof CurrentBaselineSourceError && error.reason === "original-source-digest-mismatch");
   const changedResult = await createSpecAssuranceConsumer(changed.provider)(changed.input);
   assert.equal(changedResult.status, "UNKNOWN");
   assert.equal(changedResult.coverageAuthority, "failed");
   assert.deepEqual(changedResult.sourceEvidence, []);
+});
+
+test("an original source changed between exact reads has a distinct typed reason", async () => {
+  const f = await publishInitial();
+  const key = [...f.values.keys()].find(value => value.includes(`lead-chat.turn.v1.${TURN}`));
+  assert(key);
+  const original = f.values.get(key) as Record<string, JsonValue>;
+  const state = f.platform.state as SpsPlatformInvocationContext["state"] & { get: (key: SpsStateKey) => Promise<JsonValue | null> };
+  const get = state.get.bind(state);
+  let reads = 0;
+  state.get = async requested => {
+    const value = await get(requested);
+    if (requested.stateKey === `lead-chat.turn.v1.${TURN}` && ++reads === 2) {
+      f.values.set(key, { ...original, text: "Changed during the source comparison." });
+    }
+    return value;
+  };
+  await assert.rejects(async () => { await f.provider({ identity: f.identity, requirementIds: ["REQ-1"] }); },
+    (error: unknown) => error instanceof CurrentBaselineSourceError && error.reason === "original-source-changed-during-read");
 });
 
 test("missing current baseline is unavailable and unsupported query requirements do not gain source links", async () => {
@@ -330,7 +353,8 @@ test("first Baseline consumes its exact approved review, preserving requirement 
   assert(originalKey);
   const originalTurn = f.values.get(originalKey) as Record<string, JsonValue>;
   f.values.set(originalKey, { ...originalTurn, text: "Changed initial source bytes" });
-  await assert.rejects(async () => provider({ identity: currentIdentity, requirementIds: ["draft-REQ-1"] }), /source bytes do not match/);
+  await assert.rejects(async () => { await provider({ identity: currentIdentity, requirementIds: ["draft-REQ-1"] }); },
+    (error: unknown) => error instanceof CurrentBaselineSourceError && error.reason === "original-source-digest-mismatch");
 
   f.values.set(originalKey, originalTurn);
   const changedSpec = { ...approvedSpec, revisionId: "remapped-spec", requirements: [

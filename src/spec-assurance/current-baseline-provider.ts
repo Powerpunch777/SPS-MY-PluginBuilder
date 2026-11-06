@@ -13,6 +13,25 @@ import type { AssuranceCoverageProvider, AssuranceCoverageQuery, DomainPack, Spe
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
+export type CurrentBaselineSourceFailureReason = "original-source-unavailable" | "original-source-digest-mismatch"
+  | "original-source-changed-during-read";
+
+export class CurrentBaselineSourceError extends Error {
+  readonly code = "CURRENT_BASELINE_SOURCE_UNAVAILABLE";
+  readonly reason: CurrentBaselineSourceFailureReason;
+
+  constructor(reason: CurrentBaselineSourceFailureReason, cause?: unknown) {
+    super(`Current baseline source verification failed: ${reason}`);
+    this.name = "CurrentBaselineSourceError";
+    this.reason = reason;
+    if (cause !== undefined) Object.defineProperty(this, "cause", { value: cause, configurable: true });
+  }
+}
+
+function sourceFailure(reason: CurrentBaselineSourceFailureReason, cause?: unknown): CurrentBaselineSourceError {
+  return new CurrentBaselineSourceError(reason, cause);
+}
+
 function matchesPublishedDraft(draft: DesignDraft, baseline: DesignBaseline): boolean {
   const specContent = (spec: DesignDraft["specification"]) =>
     [spec.productTier, spec.requirements, spec.targets, spec.dataPolicyRef];
@@ -24,7 +43,9 @@ function matchesPublishedDraft(draft: DesignDraft, baseline: DesignBaseline): bo
 async function readFirstReviewSource(sourceId: string, workspaceId: string, sessions: BuilderLeadSessions,
   platform: SpsPlatformInvocationContext) {
   if (sourceId.startsWith("lead-turn:")) {
-    const source = await readLeadUserSource(sourceId.slice("lead-turn:".length), sessions, platform);
+    let source;
+    try { source = await readLeadUserSource(sourceId.slice("lead-turn:".length), sessions, platform); }
+    catch (error) { throw sourceFailure("original-source-unavailable", error); }
     if (source.id !== sourceId) throw new Error("Initial review source ID does not match the authenticated original turn.");
     return source;
   }
@@ -34,7 +55,7 @@ async function readFirstReviewSource(sourceId: string, workspaceId: string, sess
     const snapshot = parseBuilderSnapshot(raw ?? createEmptyBuilderSnapshot(workspaceId), workspaceId);
     const message = snapshot.messages.find(item => item.id === sourceId && item.role === "user"
       && item.channel === "main" && item.actorId === null);
-    if (!message || !message.text.trim()) throw new Error("Original initial-design consultation source is unavailable.");
+    if (!message || !message.text.trim()) throw sourceFailure("original-source-unavailable");
     return Object.freeze({ id: message.id, text: message.text });
   }
   throw new Error("Initial review contains an unsupported original source identity.");
@@ -127,7 +148,7 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
         const source = await readFirstReviewSource(sourceId, workspaceId, sessions, platform);
         const digest = sha256(source.text);
         const pins = reviewBundle.sourcePins.filter(pin => pin.sourceId === sourceId);
-        if (pins.some(pin => pin.sourceDigest !== digest)) throw new Error("Original first-design source bytes do not match the approved source pins.");
+        if (pins.some(pin => pin.sourceDigest !== digest)) throw sourceFailure("original-source-digest-mismatch");
         sourceById.set(sourceId, Object.freeze({ id: sourceId, text: source.text, digest }));
       }
       const sourceRefs = Object.freeze(scopedRequirements.flatMap(requirement =>
@@ -143,7 +164,7 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
       for (const sourceId of sourceIds) {
         const reread = await readFirstReviewSource(sourceId, workspaceId, sessions, platform);
         if (reread.id !== sourceId || sha256(reread.text) !== sourceById.get(sourceId)?.digest) {
-          throw new Error("Original first-design source changed during assurance lookup.");
+          throw sourceFailure("original-source-changed-during-read");
         }
       }
       if (!latest || latest.sequence !== first.sequence || JSON.stringify(latest.revision) !== JSON.stringify(baseline)
@@ -170,26 +191,34 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
     }
     if (!sourceRef.startsWith("lead-turn:")) throw new Error("Current baseline source reference is unsupported.");
     const requestId = sourceRef.slice("lead-turn:".length);
-    const sourceTurn = await readLeadUserTurn(requestId, sessions, platform);
-    const source = await readLeadUserSource(requestId, sessions, platform);
+    let sourceTurn, source;
+    try {
+      sourceTurn = await readLeadUserTurn(requestId, sessions, platform);
+      source = await readLeadUserSource(requestId, sessions, platform);
+    } catch (error) { throw sourceFailure("original-source-unavailable", error); }
     const sourceDigest = sha256(source.text);
     if (sourceTurn.workspaceId !== workspaceId || sourceTurn.channel !== "main"
       || sourceTurn.sessionId !== baseline.author.sessionId || sourceTurn.runId !== baseline.author.runId
       || sourceTurn.selectionRevision !== baseline.author.selectionRevision
       || source.id !== sourceRef || sourceDigest !== baseline.userDecision.sourceSha256) {
-      throw new Error("Current baseline source bytes do not match the stored source digest.");
+      throw sourceFailure("original-source-digest-mismatch");
     }
 
     // Re-read both records after the async source lookup so a concurrent baseline/source
     // change cannot be reported as the snapshot that was just checked.
     const latest = await store.current();
-    const latestTurn = await readLeadUserTurn(requestId, sessions, platform);
-    const latestSource = await readLeadUserSource(requestId, sessions, platform);
-    if (!latest || latest.sequence !== first.sequence || JSON.stringify(latest.revision) !== JSON.stringify(baseline)
-      || latestTurn.workspaceId !== sourceTurn.workspaceId || latestTurn.sessionId !== sourceTurn.sessionId
+    let latestTurn, latestSource;
+    try {
+      latestTurn = await readLeadUserTurn(requestId, sessions, platform);
+      latestSource = await readLeadUserSource(requestId, sessions, platform);
+    } catch (error) { throw sourceFailure("original-source-unavailable", error); }
+    if (!latest || latest.sequence !== first.sequence || JSON.stringify(latest.revision) !== JSON.stringify(baseline)) {
+      throw new Error("Current baseline changed during assurance lookup.");
+    }
+    if (latestTurn.workspaceId !== sourceTurn.workspaceId || latestTurn.sessionId !== sourceTurn.sessionId
       || latestTurn.runId !== sourceTurn.runId || latestTurn.selectionRevision !== sourceTurn.selectionRevision
       || latestSource.id !== source.id || sha256(latestSource.text) !== sourceDigest) {
-      throw new Error("Current baseline or cited source changed during assurance lookup.");
+      throw sourceFailure("original-source-changed-during-read");
     }
 
     const materials: CoverageMaterial[] = [
