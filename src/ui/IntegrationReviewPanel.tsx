@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
+import { parseMainG7Review, type MainG7Review } from "../domain/main-g7-review.ts";
 
 export type IntegrationReviewPin = Readonly<{ sourceId: string; revisionId: string; sha256: string }>;
 export type IntegrationReviewPacket = Readonly<{
@@ -29,6 +30,7 @@ export type IntegrationReviewAttestation = Readonly<{
   mainLeadSelectionRevision: number;
   mainLeadRunId: string;
   mainLeadSessionId: string;
+  mainReview?: MainG7Review;
 }>;
 export type IntegrationReviewRequest = Readonly<{
   packet: IntegrationReviewPacket;
@@ -90,6 +92,7 @@ export type IntegrationReviewSnapshotDTO = Readonly<{
   currentPinsSha256: string;
   g6: "PASS" | "FAIL" | "UNKNOWN";
   g7: "PASS" | "FAIL" | "UNKNOWN";
+  g7Preparation?: "PASS" | "FAIL" | "UNKNOWN";
   qa: "PASS" | "FAIL" | "UNKNOWN";
   integrationCodeAuthority: "verified" | "unknown";
   hostRuntimeAuthority: "verified" | "unknown";
@@ -177,11 +180,12 @@ function validPacket(value: unknown): boolean {
     && documents.some(document => plain(document) && document.kind === "user-guide");
 }
 function validSnapshot(value: unknown): value is IntegrationReviewSnapshotDTO {
-  const row = exact(value, ["workspaceId", "projectId", "packet", "integrationCodeAuthority", "hostRuntimeAuthority", "g6", "g7", "qa", "currentPinsSha256"]);
+  const row = exact(value, ["workspaceId", "projectId", "packet", "integrationCodeAuthority", "hostRuntimeAuthority", "g6", "g7", "qa", "currentPinsSha256"], ["g7Preparation"]);
   return Boolean(row && isText(row.workspaceId) && isText(row.projectId) && validPacket(row.packet)
     && ["verified", "unknown"].includes(String(row.integrationCodeAuthority))
     && ["verified", "unknown"].includes(String(row.hostRuntimeAuthority))
     && ["PASS", "FAIL", "UNKNOWN"].includes(String(row.g6)) && ["PASS", "FAIL", "UNKNOWN"].includes(String(row.g7))
+    && (!Object.hasOwn(row, "g7Preparation") || ["PASS", "FAIL", "UNKNOWN"].includes(String(row.g7Preparation)))
     && ["PASS", "FAIL", "UNKNOWN"].includes(String(row.qa)) && isDigest(row.currentPinsSha256));
 }
 function validDeliveryDocuments(value: unknown, packet: IntegrationReviewPacket): value is readonly IntegrationReviewDeliveryDocument[] {
@@ -203,7 +207,11 @@ function validEvent(value: unknown): value is IntegrationReviewJournalEvent {
     || !isText(row.requestId)) return false;
   if (row.kind === "main-attestation" && row.attestation !== null && row.request === null && row.decision === null) {
     const attestation = exact(row.attestation, ["packet", "snapshotSha256", "currentPinsSha256", "attestedAt", "mainLeadAgentId",
-      "mainLeadSelectionRevision", "mainLeadRunId", "mainLeadSessionId"]);
+      "mainLeadSelectionRevision", "mainLeadRunId", "mainLeadSessionId"], ["mainReview"]);
+    if (attestation && Object.hasOwn(attestation, "mainReview")) {
+      try { parseMainG7Review(attestation.mainReview, attestation.packet as IntegrationReviewPacket, attestation.currentPinsSha256 as string); }
+      catch { return false; }
+    }
     return Boolean(attestation && validPacket(attestation.packet) && isDigest(attestation.snapshotSha256) && isDigest(attestation.currentPinsSha256)
       && isText(attestation.attestedAt) && isText(attestation.mainLeadAgentId) && Number.isSafeInteger(attestation.mainLeadSelectionRevision)
       && (attestation.mainLeadSelectionRevision as number) >= 0 && isText(attestation.mainLeadRunId) && isText(attestation.mainLeadSessionId));
@@ -335,7 +343,7 @@ function hasAuthorizedReceipt(view: Extract<IntegrationReviewDTO, { status: "rea
   const attestation = view.mainAttestation;
   const mainReceipt = view.mainReceipt;
   const reviewReceipt = view.integrationReviewReceipt;
-  return attestation?.kind === "main-attestation" && attestation.attestation !== null
+  return attestation?.kind === "main-attestation" && attestation.attestation?.mainReview !== undefined
     && attestation.eventId === payload.attestationEventId && attestation.eventId === request.expectedBaseRevisionId
     && attestation.requestId === request.requestId
     && attestation.attestation.packet.packetRevisionId === payload.packet.packetRevisionId
@@ -421,7 +429,7 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
           </div>
           <div className="sps-ir-gates" aria-label="현재 검증 게이트">
             {([ ["코드 권위", ready!.snapshot.integrationCodeAuthority], ["Host runtime 권위", ready!.snapshot.hostRuntimeAuthority],
-              ["G6", ready!.snapshot.g6], ["G7", ready!.snapshot.g7], ["QA", ready!.snapshot.qa] ] as const).map(([name, state]) =>
+              ["G6", ready!.snapshot.g6], ["G7 준비", ready!.snapshot.g7Preparation ?? "UNKNOWN"], ["G7 Main 점검", ready!.snapshot.g7], ["QA", ready!.snapshot.qa] ] as const).map(([name, state]) =>
               <span key={name} className={`sps-ir-gate ${state === "verified" || state === "PASS" ? "is-pass" : state === "FAIL" ? "is-fail" : ""}`}>{name}: {state}</span>)}
           </div>
           <div className="sps-ir-grid" style={{ marginTop: 8 }}>
@@ -494,6 +502,12 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
         </section>
         <section className="sps-ir-section" aria-label="승인 가능 상태">
           <h3>사용자 검토 결정</h3>
+          {ready!.mainAttestation?.attestation?.mainReview && <dl className="sps-ir-list">
+            {ready!.mainAttestation.attestation.mainReview.checks.map(check => <div key={check.area} className="sps-ir-item">
+              <dt>{({ "approved-design": "승인 설계 대조", deliverables: "납품 산출물", installation: "설치법", usage: "사용법", "validation-and-limits": "검증·제한사항" } as const)[check.area]}</dt>
+              <dd>{check.summary}</dd><small className="sps-ir-mono">{check.evidenceSourceIds.join(" · ")}</small>
+            </div>)}
+          </dl>}
           {!isCurrentRequest(ready!) ? <p className="sps-ir-status">현재 결정 가능한 Main attestation과 Integration Review 승인 요청이 없거나 이미 결정되었습니다.</p>
             : !receiptValid ? <p className="sps-ir-status">Main attestation 또는 Main·Integration Review의 정확한 Workspace·Agent·Session·Run receipt 연결을 확인할 수 없어 결정을 차단했습니다.</p>
             : <p className="sps-ir-status">{ready!.approvalEligibility.status === "eligible" ? "현재 고정 근거와 필수 게이트가 적격입니다."

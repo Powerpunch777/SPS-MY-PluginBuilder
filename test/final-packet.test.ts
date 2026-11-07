@@ -7,6 +7,9 @@ import { createRevisionJournal, type RevisionState } from "../src/solution-revis
 import { readFinalReview, resolveFinalReviewDeliveryDocuments } from "../src/delivery-evidence/final-review.ts";
 import type { DeliveryDocumentsRead } from "../src/project-documents/delivery-documents.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
+import { mainG7ReviewFixture } from "./fixtures/main-g7-review-fixture.ts";
+
+const review = (snapshot: FinalEvidenceSnapshot) => mainG7ReviewFixture(snapshot.packet, snapshot.currentPinsSha256);
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
 const AGENT = "33333333-3333-4333-8333-333333333333";
@@ -82,7 +85,7 @@ function fixture(packetRevisionId = "packet-rev-1", usageRevisionId = "doc-r2") 
 
 test("unregistered evidence reader and UNKNOWN gates never publish a Main attestation", async () => {
   const f = fixture();
-  const input = { eventId: "attest-packet-r1", requestId: f.snapshot.packet.packetRevisionId, expectedBaseRevisionId: null };
+  const input = { eventId: "attest-packet-r1", requestId: f.snapshot.packet.packetRevisionId, expectedBaseRevisionId: null, mainReview: review(f.snapshot) };
   const unregistered = await f.store().attestFinalPacket(input, f.runContext, f.platform);
   assert.equal(unregistered.status, "blocked");
   const unknown = await f.store(async () => ({ status: "available", value: { ...f.snapshot, g6: "UNKNOWN" } }))
@@ -105,22 +108,22 @@ test("final packet keeps bounded preparation prose and portable guide paths with
 test("missing or mismatched commit/file bytes block Main attestation even when status fields claim pass", async () => {
   const f = fixture();
   const noBytes = await f.store(async () => ({ status: "available", value: { ...f.snapshot, fileBytes: [] } }))
-    .attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+    .attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   assert.equal(noBytes.status, "blocked");
   const changedFile = await f.store(async () => ({ status: "available", value: { ...f.snapshot,
     fileBytes: [{ path: "dist/plugin.js", bytes: Buffer.from("different bytes") }] } }))
-    .attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+    .attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   assert.equal(changedFile.status, "blocked");
   const changedCommit = await f.store(async () => ({ status: "available", value: { ...f.snapshot,
     commitObjectBytes: Buffer.from("other commit object") } }))
-    .attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+    .attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   assert.equal(changedCommit.status, "blocked");
 });
 
 test("fixture: Main attests, only Integration Review posts request, authenticated user decides once", async () => {
   const f = fixture();
   const store = f.store(async () => ({ status: "available", value: f.snapshot }));
-  const attested = await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  const attested = await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   assert.equal(attested.status, "attested");
   await assert.rejects(() => store.publishApprovalRequest({ eventId: "request-packet-r1", requestId: "packet-rev-1",
     expectedBaseRevisionId: "attest-packet-r1", attestationEventId: "attest-packet-r1" }, f.runContext, f.platform), /Only the current Lead Integration Review/);
@@ -146,7 +149,7 @@ test("fixture: approve requires an operation-specific atomic writer and forwards
   const f = fixture();
   const reader = async () => ({ status: "available" as const, value: f.snapshot });
   const store = f.store(reader);
-  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   await store.publishApprovalRequest({ eventId: "request-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: "attest-packet-r1",
     attestationEventId: "attest-packet-r1" }, f.reviewContext, f.platform);
   const action = { eventId: "decision-event-1", requestId: "packet-rev-1", expectedBaseRevisionId: "request-packet-r1", action: "approve" };
@@ -162,7 +165,7 @@ test("fixture: approve requires an operation-specific atomic writer and forwards
       const result = await journal.publish({ revision: input.decision, expectedBaseRevisionId: input.expectedJournalRevisionId });
       return result.status === "published" ? { status: "published", sequence: result.sequence } : { status: "stale" };
     });
-  await atomicStore.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null },
+  await atomicStore.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(authorizedFixture.snapshot) },
     authorizedFixture.runContext, authorizedFixture.platform);
   await atomicStore.publishApprovalRequest({ eventId: "request-packet-r1", requestId: "packet-rev-1",
     expectedBaseRevisionId: "attest-packet-r1", attestationEventId: "attest-packet-r1" }, authorizedFixture.reviewContext, authorizedFixture.platform);
@@ -176,7 +179,7 @@ test("fixture: approve requires an operation-specific atomic writer and forwards
 test("a claimed atomic approval receipt is insufficient without the exact journal event", async () => {
   const f = fixture();
   const store = f.store(async () => ({ status: "available", value: f.snapshot }), async () => ({ status: "published", sequence: 3 }));
-  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   await store.publishApprovalRequest({ eventId: "request-packet-r1", requestId: "packet-rev-1",
     expectedBaseRevisionId: "attest-packet-r1", attestationEventId: "attest-packet-r1" }, f.reviewContext, f.platform);
   await assert.rejects(store.respond({ eventId: "unwritten-decision", requestId: "packet-rev-1",
@@ -198,7 +201,7 @@ test("lost approval response replays only the exact stored decision after restar
     assert.equal(result.status, "published");
     throw new Error("response lost after publication");
   });
-  await store.attestFinalPacket({ eventId: "attestation", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attestation", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   await store.publishApprovalRequest({ eventId: "request", requestId: "packet-rev-1", expectedBaseRevisionId: "attestation",
     attestationEventId: "attestation" }, f.reviewContext, f.platform);
   const input = { eventId: "decision", requestId: "packet-rev-1", expectedBaseRevisionId: "request", action: "approve" };
@@ -227,7 +230,7 @@ test("registered review exposes no bytes or approval eligibility from historical
   const f = fixture();
   const reader = async () => ({ status: "available" as const, value: f.snapshot });
   const store = f.store(reader);
-  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   await store.publishApprovalRequest({ eventId: "request-packet-r1", requestId: "packet-rev-1",
     expectedBaseRevisionId: "attest-packet-r1", attestationEventId: "attest-packet-r1" }, f.reviewContext, f.platform);
   const contract = createBuilderPlatform();
@@ -321,7 +324,7 @@ test("a changed delivery guide needs a new packet approval without erasing the p
   });
   const sessions = { workspaceId: COMPANY, selectionRevision: 1, agentId: AGENT,
     sessions: { main: MAIN_SESSION, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": REVIEW_SESSION } };
-  await store.attestFinalPacket({ eventId: "attestation", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attestation", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   await store.publishApprovalRequest({ eventId: "request", requestId: "packet-rev-1", expectedBaseRevisionId: "attestation",
     attestationEventId: "attestation" }, f.reviewContext, f.platform);
   const approved = await store.respond({ eventId: "approved", requestId: "packet-rev-1", expectedBaseRevisionId: "request", action: "approve" },
@@ -349,7 +352,7 @@ test("a changed delivery guide needs a new packet approval without erasing the p
   assert.deepEqual(next.history.find(event => event.eventId === "approved")?.decision, approved.decision);
   assert.equal((await journal.current())?.revision.eventId, "approved");
 
-  await store.attestFinalPacket({ eventId: "attestation-2", requestId: "packet-rev-2", expectedBaseRevisionId: "approved" }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attestation-2", requestId: "packet-rev-2", expectedBaseRevisionId: "approved", mainReview: review(snapshot) }, f.runContext, f.platform);
   await store.publishApprovalRequest({ eventId: "request-2", requestId: "packet-rev-2", expectedBaseRevisionId: "attestation-2",
     attestationEventId: "attestation-2" }, f.reviewContext, f.platform);
   const pending = await readFinalReview(store, sessions, f.platform);
@@ -363,7 +366,7 @@ test("a changed delivery guide needs a new packet approval without erasing the p
 test("Integration Review cannot post an attestation from a prior Lead selection", async () => {
   const f = fixture();
   const store = f.store(async () => ({ status: "available" as const, value: f.snapshot }));
-  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   f.setLeadSelectionRevision(2);
   const result = await store.publishApprovalRequest({ eventId: "request-packet-r1", requestId: "packet-rev-1",
     expectedBaseRevisionId: "attest-packet-r1", attestationEventId: "attest-packet-r1" }, f.reviewContext, f.platform);
@@ -374,7 +377,7 @@ test("stale evidence and non-user actors cannot confirm the packet", async () =>
   const f = fixture();
   let changed = false;
   const store = f.store(async () => ({ status: "available", value: changed ? { ...f.snapshot, currentPinsSha256: sha("new pins") } : f.snapshot }));
-  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.attestFinalPacket({ eventId: "attest-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: null, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   await store.publishApprovalRequest({ eventId: "request-packet-r1", requestId: "packet-rev-1", expectedBaseRevisionId: "attest-packet-r1",
     attestationEventId: "attest-packet-r1" }, f.reviewContext, f.platform);
   changed = true;
@@ -384,4 +387,44 @@ test("stale evidence and non-user actors cannot confirm the packet", async () =>
   await assert.rejects(() => store.respond({ eventId: "decision-event-2", requestId: "packet-rev-1",
     expectedBaseRevisionId: "request-packet-r1", action: "approve" },
   { companyId: COMPANY, actor: { type: "user", companyId: COMPANY, userId: "user-7" }, state: f.state }), /stale, unavailable, or UNKNOWN/);
+});
+
+test("preparation is not Main G7: exact authored assessment is required and retained separately", async () => {
+  const f = fixture();
+  const store = f.store(async () => ({ status: "available", value: f.snapshot }));
+  const prepared = await store.reviewEvidence();
+  assert.equal(prepared?.snapshot.g7Preparation, "PASS");
+  assert.equal(prepared?.snapshot.g7, "UNKNOWN");
+  const input = { eventId: "main-g7", requestId: f.snapshot.packet.packetRevisionId, expectedBaseRevisionId: null };
+  await assert.rejects(store.attestFinalPacket(input, f.runContext, f.platform), /Main G7 review/);
+  await assert.rejects(store.attestFinalPacket({ ...input, mainReview: { ...review(f.snapshot), currentPinsSha256: sha("old pins") } },
+    f.runContext, f.platform), /does not bind/);
+  assert.equal(await store.headRevisionId(), null);
+  const result = await store.attestFinalPacket({ ...input, mainReview: review(f.snapshot) }, f.runContext, f.platform);
+  assert.equal(result.status, "attested");
+  if (result.status !== "attested") throw new Error("Missing Main assessment");
+  assert.deepEqual(result.attestation.attestation?.mainReview, review(f.snapshot));
+  assert.equal((await store.reviewEvidence())?.snapshot.g7, "PASS");
+  const failedQa = f.store(async () => ({ status: "available", value: { ...f.snapshot, qa: "FAIL" } }));
+  assert.equal((await failedQa.reviewEvidence())?.snapshot.g7, "UNKNOWN");
+  assert.equal((await failedQa.reviewEvidence())?.eligible, false);
+});
+
+test("historical Main attestations without an assessment remain readable but cannot authorize a new request", async () => {
+  const f = fixture();
+  const store = f.store(async () => ({ status: "available", value: f.snapshot }));
+  const { packetSha256: _sha, ...packetContent } = f.snapshot.packet;
+  const legacy = { eventId: "legacy-main", expectedBaseRevisionId: null, kind: "main-attestation", requestId: f.snapshot.packet.packetRevisionId,
+    attestation: { packet: sealFinalPacket(packetContent), snapshotSha256: sha(JSON.stringify(f.snapshot)), currentPinsSha256: f.snapshot.currentPinsSha256,
+      attestedAt: "2026-11-07T00:00:00.000Z", mainLeadAgentId: AGENT, mainLeadSelectionRevision: 1, mainLeadRunId: RUN, mainLeadSessionId: MAIN_SESSION },
+    request: null, decision: null } as FinalPacketJournalEvent;
+  const journal = createRevisionJournal(COMPANY, COMPANY, f.state, { prefix: "final-delivery",
+    parse: value => value as FinalPacketJournalEvent, revisionId: event => event.eventId });
+  assert.equal((await journal.publish({ expectedBaseRevisionId: null, revision: legacy })).status, "published");
+  assert.deepEqual((await store.current()).revisions[0]?.revision, legacy);
+  assert.equal((await store.reviewEvidence())?.snapshot.g7, "UNKNOWN");
+  const result = await store.publishApprovalRequest({ eventId: "legacy-request", requestId: legacy.requestId,
+    expectedBaseRevisionId: legacy.eventId, attestationEventId: legacy.eventId }, f.reviewContext, f.platform);
+  assert.equal(result.status, "blocked");
+  assert.equal(await store.headRevisionId(), legacy.eventId);
 });

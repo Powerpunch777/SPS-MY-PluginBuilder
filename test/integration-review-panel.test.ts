@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { chromium } from "playwright";
 import { build } from "esbuild";
 import type { IntegrationReviewDTO, IntegrationReviewPanelProps, IntegrationReviewSnapshotDTO } from "../src/ui/IntegrationReviewPanel.tsx";
+import { mainG7ReviewFixture } from "./fixtures/main-g7-review-fixture.ts";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const sha = "a".repeat(64);
@@ -35,7 +36,8 @@ function fixture(eligible: "eligible" | "blocked" | "unknown" = "eligible"): Ext
   const mainAttestation = { eventId: "main-attestation-fixture", expectedBaseRevisionId: null,
     kind: "main-attestation" as const, requestId: "packet-rev-fixture", request: null, decision: null,
     attestation: { packet, snapshotSha256: sha, currentPinsSha256: sha, attestedAt: "2026-11-06T00:00:00.000Z",
-      mainLeadAgentId: agentId, mainLeadSelectionRevision: 4, mainLeadRunId: runId, mainLeadSessionId: sessionId } };
+      mainLeadAgentId: agentId, mainLeadSelectionRevision: 4, mainLeadRunId: runId, mainLeadSessionId: sessionId,
+      mainReview: mainG7ReviewFixture(packet, sha) } };
   const request = { eventId: "request-event-fixture", expectedBaseRevisionId: "main-attestation-fixture",
     kind: "approval-request" as const, requestId: "packet-rev-fixture", attestation: null, decision: null,
     request: { packet, snapshotSha256: sha, currentPinsSha256: sha, requestedAt: "2026-11-06T00:00:00.000Z",
@@ -44,7 +46,7 @@ function fixture(eligible: "eligible" | "blocked" | "unknown" = "eligible"): Ext
   const snapshot: IntegrationReviewSnapshotDTO = {
     workspaceId, projectId: workspaceId, packet,
     integrationCodeAuthority: "verified", hostRuntimeAuthority: "verified",
-    g6: "PASS", g7: "PASS", qa: "PASS", currentPinsSha256: sha };
+    g6: "PASS", g7: "PASS", g7Preparation: "PASS", qa: "PASS", currentPinsSha256: sha };
   return { status: "ready", snapshot, mainAttestation, approvalRequest: request, decision: null,
     mainReceipt: { verification: "verified", workspaceId, agentId, sessionId, runId },
     integrationReviewReceipt: { verification: "verified", workspaceId, agentId, sessionId: reviewSessionId, runId: reviewRunId },
@@ -223,6 +225,8 @@ test("browser keeps approve, request-changes and hold as distinct callbacks", as
       limitationStatement: "Synthetic fixture only.", limitations: [], changeNotes: ["Verified fixture revision."] } } } };
     await page.evaluate(view => (window as unknown as { mountReview: (value: unknown) => void }).mountReview(view), browserView);
     assert.match(await page.getByRole("region", { name: "지원 환경과 의존성" }).innerText(), /Windows 11 x64/u);
+    assert.match(await page.locator("body").innerText(), /승인 설계 대조/u);
+    assert.match(await page.locator("body").innerText(), /Fixture Main comparison for validation-and-limits/u);
     await page.getByRole("button", { name: "최종 검토 승인" }).click();
     await page.getByLabel("수정 요청 또는 보류 사유").fill("설치 안내를 갱신하세요");
     await page.getByRole("button", { name: "수정 요청" }).click();

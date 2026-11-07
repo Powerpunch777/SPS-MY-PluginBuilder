@@ -9,6 +9,7 @@ import { createFinalPacketStore } from "../src/delivery-evidence/final-packet.ts
 import { proposeDeliveryDocuments } from "../src/project-documents/delivery-documents.ts";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { createCurrentFinalEvidenceReader } from "../src/delivery-evidence/current-final-evidence.ts";
+import { mainG7ReviewFixture } from "./fixtures/main-g7-review-fixture.ts";
 
 const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const objectId = (type: string, bytes: Buffer) =>
@@ -255,11 +256,13 @@ test("registered Main attests only a byte-checked current package and user appro
   assert.equal(view.status, "ready", JSON.stringify(ui.data));
   if (view.status !== "ready") throw new Error("Missing final view");
   assert.equal(view.approvalEligibility.status, "blocked");
+  assert.equal(view.snapshot.g7Preparation, "PASS");
+  assert.equal(view.snapshot.g7, "UNKNOWN");
   assert.equal(view.history[0]?.kind, "manager-packet");
   assert.doesNotMatch(JSON.stringify(ui.data), /contentBase64|commitObjectBytes|fileBytes/u);
   const attest = createBuilderPlatform().tools.find(tool => tool.name === "builder.attest-final-packet")!;
   const result = (await attest.handler({ eventId: "main-fixture-attestation", requestId: snapshot.value.packet.packetRevisionId,
-    expectedBaseRevisionId: handoff.eventId }, ctx(), platform) as any).data;
+    expectedBaseRevisionId: handoff.eventId, mainReview: mainG7ReviewFixture(snapshot.value.packet, snapshot.value.currentPinsSha256) }, ctx(), platform) as any).data;
   assert.equal(result.status, "attested", JSON.stringify(result));
   assert.equal((await createFinalPacketStore(W, W, platform.state).current()).revisions[0]?.revision.kind, "main-attestation");
   f.moveCandidate();
@@ -311,7 +314,8 @@ test("Main attestation atomically queues the existing Review session, which can 
     return result;
   };
   const attest = createBuilderPlatform().tools.find(tool => tool.name === "builder.attest-final-packet")!;
-  const input = { eventId: "main-atomic-review-attestation", requestId: snapshot.value.packet.packetRevisionId, expectedBaseRevisionId: handoff.eventId };
+  const input = { eventId: "main-atomic-review-attestation", requestId: snapshot.value.packet.packetRevisionId, expectedBaseRevisionId: handoff.eventId,
+    mainReview: mainG7ReviewFixture(snapshot.value.packet, snapshot.value.currentPinsSha256) };
   assert.equal((await attest.handler(input, ctx(), platform) as any).data.status, "attested");
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0].jobKey, "builder.request-packet-user-review");
@@ -393,7 +397,7 @@ test("Main publication rejects document races and cannot silently omit the Revie
     }
     const tool = createBuilderPlatform().tools.find(tool => tool.name === "builder.attest-final-packet")!;
     const result = (await tool.handler({ eventId: `main-guard-${mode}`, requestId: snapshot.value.packet.packetRevisionId,
-      expectedBaseRevisionId: handoff.eventId }, ctx(), platform) as any).data;
+      expectedBaseRevisionId: handoff.eventId, mainReview: mainG7ReviewFixture(snapshot.value.packet, snapshot.value.currentPinsSha256) }, ctx(), platform) as any).data;
     assert.equal(result.status, mode === "unsupported-wake" ? "unsupported" : "conflict", JSON.stringify(result));
     const [head] = (await createFinalPacketStore(W, W, platform.state).current()).revisions;
     assert.equal(head?.revision.eventId, handoff.eventId);

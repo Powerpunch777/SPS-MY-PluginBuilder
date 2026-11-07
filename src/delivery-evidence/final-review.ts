@@ -63,7 +63,7 @@ export async function readFinalReview(store: Store, sessions: BuilderLeadSession
   const snapshot: ReviewEvidence["snapshot"] | null = pinnedEvidence?.snapshot ?? (historical ? {
     workspaceId: sessions.workspaceId, projectId: sessions.workspaceId, packet: historical.packet,
     currentPinsSha256: historical.currentPinsSha256, integrationCodeAuthority: "unknown", hostRuntimeAuthority: "unknown",
-    g6: "UNKNOWN", g7: "UNKNOWN", qa: "UNKNOWN",
+    g6: "UNKNOWN", g7Preparation: "UNKNOWN", g7: "UNKNOWN", qa: "UNKNOWN",
   } : null);
   if (!snapshot) return { status: "unknown" as const };
   const deliveryRead = await readCurrentDeliveryDocuments(sessions.workspaceId, platform);
@@ -77,7 +77,7 @@ export async function readFinalReview(store: Store, sessions: BuilderLeadSession
         ? { verification: "verified" as const, workspaceId: sessions.workspaceId, sessionId, runId, agentId } : null;
     } catch { return null; }
   }
-  const bound = Boolean(payload && main && payload.snapshotSha256 === main.snapshotSha256
+  const bound = Boolean(payload && main?.mainReview && payload.snapshotSha256 === main.snapshotSha256
     && payload.currentPinsSha256 === main.currentPinsSha256 && payload.packet.packetSha256 === main.packet.packetSha256
     && payload.mainLeadAgentId === main.mainLeadAgentId && payload.mainLeadSelectionRevision === main.mainLeadSelectionRevision
     && payload.mainLeadRunId === main.mainLeadRunId && payload.mainLeadSessionId === main.mainLeadSessionId

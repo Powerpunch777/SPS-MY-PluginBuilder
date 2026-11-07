@@ -5,6 +5,7 @@ import { createRevisionJournal, type RevisionJobWake, type RevisionPublicationGu
 import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB, integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
 import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
 import { parseDeliverySourcePath } from "./source-snapshot.ts";
+import { parseMainG7Review, type MainG7Review } from "../domain/main-g7-review.ts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const ID = /^[^\u0000-\u001f\u007f]{1,200}$/u;
@@ -49,6 +50,7 @@ export type FinalEvidenceSnapshot = Readonly<{
   integrationCodeAuthority: "verified" | "unknown";
   hostRuntimeAuthority: "verified" | "unknown";
   g6: "PASS" | "FAIL" | "UNKNOWN";
+  /** Server preparation verdict; only the separate Main assessment establishes G7 in the review projection. */
   g7: "PASS" | "FAIL" | "UNKNOWN";
   qa: "PASS" | "FAIL" | "UNKNOWN";
   currentPinsSha256: string;
@@ -67,7 +69,8 @@ export type FinalPacketJournalEvent = Readonly<{
   kind: "manager-packet" | "main-attestation" | "approval-request" | "user-decision";
   requestId: string;
   attestation: Readonly<{ packet: FinalPacket; snapshotSha256: string; currentPinsSha256: string; attestedAt: string;
-    mainLeadAgentId: string; mainLeadSelectionRevision: number; mainLeadRunId: string; mainLeadSessionId: string }>| null;
+    mainLeadAgentId: string; mainLeadSelectionRevision: number; mainLeadRunId: string; mainLeadSessionId: string;
+    mainReview?: MainG7Review }>| null;
   request: Readonly<{ packet: FinalPacket; snapshotSha256: string; currentPinsSha256: string; requestedAt: string;
     attestationEventId: string; mainLeadAgentId: string; mainLeadSelectionRevision: number; mainLeadRunId: string; mainLeadSessionId: string;
     integrationReviewAgentId: string; integrationReviewRunId: string; integrationReviewSessionId: string }>| null;
@@ -202,8 +205,8 @@ function parseEvent(value: unknown): FinalPacketJournalEvent {
   }
   if (Object.hasOwn(row, "managerPacket")) throw new TypeError("Unexpected Manager packet payload.");
   if (row.kind === "main-attestation" && row.attestation && row.request === null && row.decision === null) {
-    const attestation = record(row.attestation, ["packet", "snapshotSha256", "currentPinsSha256", "attestedAt", "mainLeadAgentId",
-      "mainLeadSelectionRevision", "mainLeadRunId", "mainLeadSessionId"]);
+    const attestation = exactToolRecord(row.attestation, ["packet", "snapshotSha256", "currentPinsSha256", "attestedAt", "mainLeadAgentId",
+      "mainLeadSelectionRevision", "mainLeadRunId", "mainLeadSessionId"], ["mainReview"]);
     const parsedPacket = packet(attestation.packet);
     if (parsedPacket.packetRevisionId !== requestId) throw new TypeError("Attestation must bind the exact immutable packet revision.");
     const attestedAt = id(attestation.attestedAt, "attestation timestamp");
@@ -213,7 +216,9 @@ function parseEvent(value: unknown): FinalPacketJournalEvent {
         currentPinsSha256: digest(attestation.currentPinsSha256, "current pins sha256"), attestedAt,
         mainLeadAgentId: id(attestation.mainLeadAgentId, "Main Lead Agent"),
         mainLeadSelectionRevision: selectionRevision(attestation.mainLeadSelectionRevision), mainLeadRunId: id(attestation.mainLeadRunId, "Main Lead run"),
-        mainLeadSessionId: id(attestation.mainLeadSessionId, "Main Lead session") }), request: null, decision: null });
+        mainLeadSessionId: id(attestation.mainLeadSessionId, "Main Lead session"),
+        ...(Object.hasOwn(attestation, "mainReview") ? { mainReview: parseMainG7Review(attestation.mainReview, parsedPacket,
+          digest(attestation.currentPinsSha256, "current pins sha256")) } : {}) }), request: null, decision: null });
   }
   if (row.kind === "approval-request" && row.attestation === null && row.request && row.decision === null) {
     const request = record(row.request, ["packet", "snapshotSha256", "currentPinsSha256", "requestedAt", "attestationEventId",
@@ -252,7 +257,7 @@ function managerEventId(requestId: string, parent: string | null) {
   return `integration-packet-event-v1:${hash(json([requestId, parent]))}`;
 }
 
-function eligible(snapshot: FinalEvidenceSnapshot, workspaceId: string, projectId: string): boolean {
+function preparationEligible(snapshot: FinalEvidenceSnapshot, workspaceId: string, projectId: string): boolean {
   try {
     const parsedPacket = packet(snapshot.packet);
     return snapshot.provenance?.adapter === "builder.final-packet-current-evidence.v1" && snapshot.provenance.operation === "readCurrent"
@@ -326,20 +331,24 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
       const { packet: content, integrationCodeAuthority, hostRuntimeAuthority, g6, g7, qa, currentPinsSha256 } = current;
       const parsed = packet(content);
       if (finalPacketPinsDigest(parsed) !== currentPinsSha256 || !verifyPacketBytes(current, parsed)) return null;
+      const attestation = (await currentAttestation(parsed.packetRevisionId))?.attestation;
+      const reviewed = Boolean(attestation?.mainReview && attestation.snapshotSha256 === hash(json(current))
+        && attestation.packet.packetSha256 === parsed.packetSha256 && attestation.currentPinsSha256 === currentPinsSha256);
       return { snapshot: { workspaceId, projectId, packet: parsed, integrationCodeAuthority, hostRuntimeAuthority,
-        g6, g7, qa, currentPinsSha256 }, snapshotSha256: hash(json(current)),
-        eligible: eligible(current, workspaceId, projectId) && Boolean(commitApprovalAtomically) };
+        g6, g7Preparation: g7, g7: reviewed ? g7 : "UNKNOWN" as const, qa, currentPinsSha256 }, snapshotSha256: hash(json(current)),
+        eligible: reviewed && preparationEligible(current, workspaceId, projectId) && Boolean(commitApprovalAtomically) };
     },
     async attestFinalPacket(input: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
-      const row = exactToolRecord(input, ["eventId", "requestId", "expectedBaseRevisionId"]);
+      const row = exactToolRecord(input, ["eventId", "requestId", "expectedBaseRevisionId"], ["mainReview"]);
       const eventId = id(row.eventId, "eventId"), requestId = id(row.requestId, "requestId");
       const expected = row.expectedBaseRevisionId === null ? null : id(row.expectedBaseRevisionId, "expected base revision");
       const authority = await toolAuthority(runContext, platform);
       requireLeadFormalPublicationAuthority(authority);
       await authority.check();
       const first = await evidence();
-      if (!first || !eligible(first, workspaceId, projectId)) return Object.freeze({ status: "blocked" as const, reason: "authoritative-final-packet-or-required-gates-unknown-or-ineligible" });
+      if (!first || !preparationEligible(first, workspaceId, projectId)) return Object.freeze({ status: "blocked" as const, reason: "authoritative-final-packet-or-required-gates-unknown-or-ineligible" });
       if (first.packet.packetRevisionId !== requestId) return Object.freeze({ status: "blocked" as const, reason: "attestation-must-bind-current-packet-revision" });
+      const mainReview = parseMainG7Review(row.mainReview, first.packet, first.currentPinsSha256);
       if (await journal.publishedRevision(eventId)) return Object.freeze({ status: "blocked" as const, reason: "attestation-event-id-already-published" });
       if ((await journal.recent(50)).revisions.some(item => item.revision.kind === "main-attestation" && item.revision.requestId === requestId)) {
         return Object.freeze({ status: "blocked" as const, reason: "packet-revision-already-has-an-immutable-main-attestation" });
@@ -348,10 +357,10 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
         attestation: { packet: first.packet, snapshotSha256: hash(json(first)), currentPinsSha256: first.currentPinsSha256,
           attestedAt: new Date().toISOString(), mainLeadAgentId: authority.context.agentId, mainLeadSelectionRevision: authority.selectionRevision,
           mainLeadRunId: authority.context.runId,
-          mainLeadSessionId: authority.context.sessionId }, request: null, decision: null });
+          mainLeadSessionId: authority.context.sessionId, mainReview }, request: null, decision: null });
       const beforeWrite = await evidence();
       await authority.check();
-      if (!beforeWrite || !eligible(beforeWrite, workspaceId, projectId) || hash(json(beforeWrite)) !== event.attestation!.snapshotSha256
+      if (!beforeWrite || !preparationEligible(beforeWrite, workspaceId, projectId) || hash(json(beforeWrite)) !== event.attestation!.snapshotSha256
         || beforeWrite.packet.integration.commitSha !== first.packet.integration.commitSha
         || beforeWrite.packet.files.length !== first.packet.files.length
         || beforeWrite.packet.files.some((file, index) => file.path !== first.packet.files[index]?.path
@@ -375,7 +384,7 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
       if (authority.channel !== "integration-review") throw new Error("Only the current Lead Integration Review session may post the user approval request.");
       await authority.check();
       const attestation = await currentAttestation(requestId);
-      if (!attestation?.attestation || attestation.eventId !== attestationEventId) {
+      if (!attestation?.attestation?.mainReview || attestation.eventId !== attestationEventId) {
         return Object.freeze({ status: "blocked" as const, reason: "exact-current-main-attestation-not-found" });
       }
       if (authority.context.agentId !== attestation.attestation.mainLeadAgentId
@@ -387,7 +396,7 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
         return Object.freeze({ status: "conflict" as const, actualRevisionId: head?.eventId ?? null });
       }
       const current = await evidence();
-      if (!current || !eligible(current, workspaceId, projectId) || hash(json(current)) !== attestation.attestation.snapshotSha256
+      if (!current || !preparationEligible(current, workspaceId, projectId) || hash(json(current)) !== attestation.attestation.snapshotSha256
         || current.packet.packetRevisionId !== requestId) {
         return Object.freeze({ status: "blocked" as const, reason: "attested-packet-or-required-gates-stale-unavailable-or-unknown" });
       }
@@ -401,7 +410,7 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
           integrationReviewRunId: authority.context.runId, integrationReviewSessionId: authority.context.sessionId }, decision: null });
       await authority.check();
       const afterCheck = await evidence();
-      if (!afterCheck || !eligible(afterCheck, workspaceId, projectId) || hash(json(afterCheck)) !== event.request!.snapshotSha256) {
+      if (!afterCheck || !preparationEligible(afterCheck, workspaceId, projectId) || hash(json(afterCheck)) !== event.request!.snapshotSha256) {
         return Object.freeze({ status: "blocked" as const, reason: "attested-packet-or-required-gates-changed-before-request" });
       }
       const result = await journal.publish({ expectedBaseRevisionId: expected, revision: event });
@@ -445,8 +454,11 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
       if ((latest?.revision.eventId ?? null) !== expected) return Object.freeze({ status: "conflict" as const, actualRevisionId: latest?.revision.eventId ?? null });
       let approvalSnapshot: FinalEvidenceSnapshot | null = null;
       if (row.action === "approve") {
+        const attestation = await currentAttestation(requestId);
+        if (!attestation?.attestation?.mainReview || attestation.eventId !== request.request.attestationEventId
+          || attestation.attestation.snapshotSha256 !== request.request.snapshotSha256) throw new Error("The exact Main G7 review is unavailable.");
         approvalSnapshot = await evidence();
-        if (!approvalSnapshot || !eligible(approvalSnapshot, workspaceId, projectId) || hash(json(approvalSnapshot)) !== request.request.snapshotSha256
+        if (!approvalSnapshot || !preparationEligible(approvalSnapshot, workspaceId, projectId) || hash(json(approvalSnapshot)) !== request.request.snapshotSha256
           || approvalSnapshot.packet.packetRevisionId !== request.request.packet.packetRevisionId) {
           throw new Error("The approved packet, required gates, or source pins are stale, unavailable, or UNKNOWN.");
         }
