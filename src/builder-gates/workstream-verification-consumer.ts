@@ -495,8 +495,8 @@ export async function consumeVerifiedWorkstream(input: Readonly<{
     let receipt: ManagerDispatchReceiptRead | null = null;
     try { receipt = validReceiptRead(await manager.readReceipt(entry.requestId!), entry.requestId!); } catch { /* Must not infer absence from a failed read. */ }
     if (!receipt || receipt.status === "uncertain") {
-      const uncertain: Reservation = { ...entry, status: entry.status === "accepted" ? "accepted" : "uncertain" };
-      if (entry.status !== "accepted") {
+      if (entry.status === "pending") {
+        const uncertain: Reservation = { ...entry, status: "uncertain" };
         try { await saveEntry(state, key, raw, ledger, uncertain); } catch { /* Keep the reservation; receipt can be reread. */ }
       }
       return outcome(entry.status === "accepted" ? "accepted" : "uncertain", input.eventId,
@@ -513,8 +513,8 @@ export async function consumeVerifiedWorkstream(input: Readonly<{
         { requestId: entry.requestId!, evidenceDigest: entry.evidenceDigest, receipt: accepted.receipt! });
     }
     if (receipt.status === "pending") {
-      const pending: Reservation = { ...entry, status: entry.status === "accepted" ? "accepted" : "pending" };
-      if (entry.status !== "accepted") {
+      if (entry.status === "uncertain") {
+        const pending: Reservation = { ...entry, status: "pending" };
         try { await saveEntry(state, key, raw, ledger, pending); } catch { /* Keep the previous state; readback remains safe. */ }
       }
       return outcome(entry.status === "accepted" ? "uncertain" : "pending", input.eventId,
@@ -595,8 +595,7 @@ export async function consumeVerifiedWorkstream(input: Readonly<{
       { requestId: entry.requestId!, evidenceDigest: entry.evidenceDigest });
   }
   if (readback.status === "pending") {
-    const pending: Reservation = { ...entry, status: "pending" };
-    try { await saveEntry(state, key, raw, ledger, pending); } catch { /* Original reservation remains replayable. */ }
+    // The attempt was already durably reserved as pending before dispatch.
     return outcome("pending", input.eventId, "manager-request-pending",
       { requestId: entry.requestId!, evidenceDigest: entry.evidenceDigest });
   }

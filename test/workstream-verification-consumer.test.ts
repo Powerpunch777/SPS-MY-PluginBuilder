@@ -22,10 +22,12 @@ const current: VerifiedSnapshotRead = { status: "current", snapshot };
 // TEST_FIXTURE_ONLY: all Host state, current-proof reads, Manager receipts, and dispatches are synthetic.
 function fixture() {
   const values = new Map<string, JsonValue>();
+  let casCalls = 0;
   const keyId = (key: SpsStateKey) => `${key.scopeId}/${key.namespace}/${key.stateKey}`;
   const state = {
     async get(key: SpsStateKey) { return structuredClone(values.get(keyId(key)) ?? null); },
     async compareAndSet(key: SpsStateKey, expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue) {
+      casCalls++;
       const id = keyId(key), present = values.has(id), raw = values.get(id);
       const match = expected.exists ? present && JSON.stringify(raw) === JSON.stringify(expected.value) : !present;
       if (match) values.set(id, structuredClone(value));
@@ -56,6 +58,7 @@ function fixture() {
   const legacyKey = `${WORKSPACE}/sonpark.my-builder/verified-consumption.v1.${createHash("sha256").update(`${scope.projectId}\0${scope.workstreamId}`, "utf8").digest("hex")}`;
   return {
     state, values, manager, dispatches, receiptReads, readCurrent,
+    get casCalls() { return casCalls; },
     setCurrent(value: VerifiedSnapshotRead) { currentRead = value; readSequence = null; },
     setReadSequence(values: VerifiedSnapshotRead[]) { readSequence = [...values]; },
     setReceiptReader(value: (requestId: string) => ManagerDispatchReceiptRead) { receiptReader = value; },
@@ -122,6 +125,32 @@ test("uncertain timeout does not resend in-call; authoritative absence permits o
   const third = await consumeVerifiedWorkstream(scope, f.state, f.readCurrent, f.manager);
   assert.equal(third.status, "accepted");
   assert.equal(f.dispatches.length, 2);
+});
+
+test("unchanged pending and uncertain receipts neither rewrite the reservation nor redispatch", async () => {
+  const f = fixture();
+  const consume = () => consumeVerifiedWorkstream(scope, f.state, f.readCurrent, f.manager);
+  f.setReceiptReader(requestId => ({ status: "pending", requestId }));
+  const pending = await consume();
+  assert.equal(pending.status, "pending");
+  assert.equal(f.casCalls, 1, "initial pending readback needs no write beyond the durable reservation");
+  assert.deepEqual(await consume(), pending);
+  assert.equal(f.casCalls, 1);
+
+  f.setReceiptReader(() => ({ status: "uncertain", reason: "receipt observation unavailable" }));
+  const uncertain = await consume();
+  assert.equal(uncertain.status, "uncertain");
+  assert.equal(f.casCalls, 2, "a real state transition is persisted");
+  assert.deepEqual(await consume(), uncertain);
+  assert.equal(f.casCalls, 2);
+
+  f.setReceiptReader(requestId => ({ status: "pending", requestId }));
+  assert.equal((await consume()).status, "pending");
+  assert.equal(f.casCalls, 3);
+  f.setReceiptReader(f.accepted);
+  assert.equal((await consume()).status, "accepted");
+  assert.equal(f.casCalls, 4);
+  assert.equal(f.dispatches.length, 1);
 });
 
 test("stale evidence, revocation before effect, or changed evidence on replay never dispatches", async () => {
