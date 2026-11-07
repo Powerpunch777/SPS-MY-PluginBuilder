@@ -92,6 +92,19 @@ type SubmissionState = Readonly<{
     | Readonly<{ status: "rejected"; reason: string }>;
 }>;
 
+type TaskSourceClaimState = Readonly<{
+  schemaVersion: 1;
+  claimId: string;
+  workspaceId: string;
+  projectId: string;
+  bindingSha256: string;
+  phase: "intent" | "outcome";
+  producerRunId: string;
+  submissionId: string;
+  requestedPaths: readonly string[];
+  outcome?: NonNullable<SubmissionState["outcome"]>;
+}>;
+
 function exactRecord(value: unknown, fields: readonly string[], label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError(`${label} must be a plain record.`);
@@ -167,6 +180,10 @@ function parseBinding(value: unknown): TaskSourceSubmissionBinding {
 
 function stateKey(kind: "intent" | "outcome", submissionId: string) {
   return { scopeKind: "company" as const, scopeId: "", namespace: "sonpark.my-builder", stateKey: `task-source-${kind}.v1.${submissionId}` };
+}
+
+function claimStateKey(kind: "intent" | "outcome", id: string) {
+  return { scopeKind: "company" as const, scopeId: "", namespace: "sonpark.my-builder", stateKey: `task-source-${kind}.v2.${id}` };
 }
 
 function parseStoredSubmission(value: unknown, expected: Readonly<{ binding: TaskSourceSubmissionBinding; paths: readonly string[];
@@ -284,6 +301,46 @@ function stableBindingDigest(binding: TaskSourceSubmissionBinding) {
   return digest(JSON.stringify(stableBinding));
 }
 
+function taskSourceClaimId(binding: TaskSourceSubmissionBinding) {
+  return digest(JSON.stringify(["builder-task-source-claim-v1", stableBindingDigest(binding)]));
+}
+
+function parseTaskSourceClaimState(value: unknown, binding: TaskSourceSubmissionBinding, claimId: string): TaskSourceClaimState {
+  const phase = value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, "phase")?.value : undefined;
+  const fields = ["schemaVersion", "claimId", "workspaceId", "projectId", "bindingSha256", "phase", "producerRunId",
+    "submissionId", "requestedPaths"];
+  const row = exactRecord(value, phase === "outcome" ? [...fields, "outcome"] : fields, "Task source claim");
+  const paths = row.requestedPaths;
+  if (row.schemaVersion !== 1 || row.claimId !== claimId || row.workspaceId !== binding.workspaceId
+    || row.projectId !== binding.projectId || row.bindingSha256 !== stableBindingDigest(binding)
+    || (phase !== "intent" && phase !== "outcome") || typeof row.producerRunId !== "string" || !UUID.test(row.producerRunId)
+    || typeof row.submissionId !== "string" || !SHA.test(row.submissionId)
+    || !Array.isArray(paths) || paths.length < 1 || paths.length > 64 || Reflect.ownKeys(paths).length !== paths.length + 1
+    || paths.some(path => typeof path !== "string") || new Set(paths).size !== paths.length
+    || JSON.stringify(paths) !== JSON.stringify([...(paths as string[])].sort())) {
+    throw new Error("Task source claim does not match the exact current Task binding.");
+  }
+  const allowed = binding.role === "worker" ? binding.writePaths : binding.qaWritePaths;
+  if ((paths as string[]).some(path => !allowed.includes(path))) throw new Error("Task source claim exceeds this role's current source scope.");
+  const producerBinding = Object.freeze({ ...binding, runId: row.producerRunId as string });
+  if (row.submissionId !== submissionId(producerBinding, paths as string[])) {
+    throw new Error("Task source claim submission identifier does not match its exact path subset.");
+  }
+  let outcome: TaskSourceClaimState["outcome"];
+  if (phase === "outcome") {
+    const parsed = parseSubmissionState({ schemaVersion: 1, workspaceId: row.workspaceId, projectId: row.projectId,
+      submissionId: row.submissionId, bindingSha256: row.bindingSha256, phase: "outcome",
+      producerRunId: row.producerRunId, outcome: row.outcome }, { binding: producerBinding, paths: paths as string[],
+      workspaceId: binding.workspaceId, projectId: binding.projectId, submissionId: row.submissionId as string,
+      bindingSha256: row.bindingSha256 as string });
+    outcome = parsed.outcome;
+  }
+  return Object.freeze({ schemaVersion: 1, claimId, workspaceId: binding.workspaceId, projectId: binding.projectId,
+    bindingSha256: row.bindingSha256 as string, phase, producerRunId: row.producerRunId as string,
+    submissionId: row.submissionId as string, requestedPaths: Object.freeze([...(paths as string[])]),
+    ...(outcome ? { outcome } : {}) });
+}
+
 function unknown(id: string, reason: string): TaskSourceSubmissionResult {
   return Object.freeze({ status: "unknown", submissionId: id, reason, commitSha: null,
     completion: "not-established", qaVerdict: "not-established" });
@@ -340,18 +397,42 @@ export async function submitTaskSourceFiles(input: Readonly<{
   }
   const paths = Object.freeze([...(input.paths as string[])].sort());
   const id = submissionId(binding, paths);
+  const claimId = taskSourceClaimId(binding);
   const bindingSha256 = stableBindingDigest(binding);
   const expectedState = { binding, paths, workspaceId: binding.workspaceId, projectId: binding.projectId,
     submissionId: id, bindingSha256 };
-  const intentKey = { ...stateKey("intent", id), scopeId: binding.workspaceId };
-  const outcomeKey = { ...stateKey("outcome", id), scopeId: binding.workspaceId };
+  const claimIntentKey = { ...claimStateKey("intent", claimId), scopeId: binding.workspaceId };
+  const claimOutcomeKey = { ...claimStateKey("outcome", claimId), scopeId: binding.workspaceId };
 
   await authority.assertCurrent();
-  let existingOutcome: JsonValue | null;
-  try { existingOutcome = await input.state.get(outcomeKey); }
+  let existingClaimOutcome: JsonValue | null;
+  try { existingClaimOutcome = await input.state.get(claimOutcomeKey); }
   catch { return unknown(id, "submission-outcome-read-failed"); }
-  if (existingOutcome !== null) {
-    const record = parseSubmissionState(existingOutcome, expectedState);
+  if (existingClaimOutcome !== null) {
+    const claim = parseTaskSourceClaimState(existingClaimOutcome, binding, claimId);
+    if (claim.phase !== "outcome" || !claim.outcome) return unknown(claim.submissionId, "submission-outcome-invalid");
+    if (claim.outcome.status === "submitted") return Object.freeze({ status: "existing", submission: claim.outcome.submission, duplicateCommitPrevented: true });
+    if (claim.outcome.status === "unchanged") return Object.freeze({ status: "unchanged", submissionId: claim.submissionId, headSha: claim.outcome.headSha });
+    if (claim.outcome.status === "conflict") return Object.freeze({ status: "conflict", submissionId: claim.submissionId,
+      reason: claim.outcome.reason, actualHead: claim.outcome.actualHead });
+    return unknown(claim.submissionId, claim.outcome.reason);
+  }
+  let existingClaimIntent: JsonValue | null;
+  try { existingClaimIntent = await input.state.get(claimIntentKey); }
+  catch { return unknown(id, "submission-intent-read-failed"); }
+  if (existingClaimIntent !== null) {
+    const claim = parseTaskSourceClaimState(existingClaimIntent, binding, claimId);
+    return unknown(claim.submissionId, "prior-commit-attempt-has-no-authoritative-outcome");
+  }
+
+  // Read v1 path-keyed records before making a v2 claim so upgrades preserve
+  // their exact receipt and never repeat a known submission.
+  const legacyOutcomeKey = { ...stateKey("outcome", id), scopeId: binding.workspaceId };
+  let legacyOutcome: JsonValue | null;
+  try { legacyOutcome = await input.state.get(legacyOutcomeKey); }
+  catch { return unknown(id, "submission-outcome-read-failed"); }
+  if (legacyOutcome !== null) {
+    const record = parseSubmissionState(legacyOutcome, expectedState);
     if (record.phase !== "outcome" || !record.outcome) return unknown(id, "submission-outcome-invalid");
     if (record.outcome.status === "submitted") return Object.freeze({ status: "existing", submission: record.outcome.submission, duplicateCommitPrevented: true });
     if (record.outcome.status === "unchanged") return Object.freeze({ status: "unchanged", submissionId: id, headSha: record.outcome.headSha });
@@ -359,11 +440,12 @@ export async function submitTaskSourceFiles(input: Readonly<{
       reason: record.outcome.reason, actualHead: record.outcome.actualHead });
     return unknown(id, record.outcome.reason);
   }
-  let existingIntent: JsonValue | null;
-  try { existingIntent = await input.state.get(intentKey); }
+  const legacyIntentKey = { ...stateKey("intent", id), scopeId: binding.workspaceId };
+  let legacyIntent: JsonValue | null;
+  try { legacyIntent = await input.state.get(legacyIntentKey); }
   catch { return unknown(id, "submission-intent-read-failed"); }
-  if (existingIntent !== null) {
-    parseSubmissionState(existingIntent, expectedState);
+  if (legacyIntent !== null) {
+    parseSubmissionState(legacyIntent, expectedState);
     return unknown(id, "prior-commit-attempt-has-no-authoritative-outcome");
   }
 
@@ -371,18 +453,19 @@ export async function submitTaskSourceFiles(input: Readonly<{
   catch { return Object.freeze({ status: "unsupported", reason: "declared-task-source-alias-unavailable-or-mismatched",
     completion: "not-established", qaVerdict: "not-established" }); }
   await authority.assertCurrent();
-  const intent: SubmissionState = Object.freeze({ schemaVersion: 1, workspaceId: binding.workspaceId,
-    projectId: binding.projectId, submissionId: id, bindingSha256, phase: "intent", producerRunId: binding.runId });
+  const intent: TaskSourceClaimState = Object.freeze({ schemaVersion: 1, claimId, workspaceId: binding.workspaceId,
+    projectId: binding.projectId, bindingSha256, phase: "intent", producerRunId: binding.runId,
+    submissionId: id, requestedPaths: paths });
   try {
-    const receipt = await cas(input.state, intentKey, { exists: false }, intent);
+    const receipt = await cas(input.state, claimIntentKey, { exists: false }, intent);
     if (!receipt.swapped) return unknown(id, "another-producer-owns-the-exact-submission-attempt");
   } catch { return unknown(id, "submission-intent-write-unconfirmed-no-commit-attempted"); }
 
   const finish = async (outcome: NonNullable<SubmissionState["outcome"]>): Promise<boolean> => {
-    const next: SubmissionState = Object.freeze({ schemaVersion: 1, workspaceId: binding.workspaceId,
-      projectId: binding.projectId, submissionId: id, bindingSha256, phase: "outcome",
-      producerRunId: binding.runId, outcome });
-    try { return (await cas(input.state, outcomeKey, { exists: false }, next)).swapped; }
+    const next: TaskSourceClaimState = Object.freeze({ schemaVersion: 1, claimId, workspaceId: binding.workspaceId,
+      projectId: binding.projectId, bindingSha256, phase: "outcome", producerRunId: binding.runId,
+      submissionId: id, requestedPaths: paths, outcome });
+    try { return (await cas(input.state, claimOutcomeKey, { exists: false }, next)).swapped; }
     catch { return false; }
   };
   try { await authority.assertCurrent(); await assertFolder(folders, binding); }
@@ -427,6 +510,32 @@ export type TaskSourceSubmissionReadResult =
   | Readonly<{ status: "not-found" }>
   | Readonly<{ status: "ineligible"; reason: "not-a-definitive-submission" | "legacy-receipt-unbound-paths" }>;
 
+export type TaskSourceClaimReadResult = TaskSourceSubmissionReadResult
+  | Readonly<{ status: "ineligible"; reason: "prior-commit-attempt-has-no-authoritative-outcome" }>;
+
+async function readTaskSourceClaimState(input: Readonly<{ state: RevisionState; binding: TaskSourceSubmissionBinding }>, claimId: string) {
+  const keyForPhase = (phase: "intent" | "outcome") => ({ ...claimStateKey(phase, claimId), scopeId: input.binding.workspaceId });
+  const outcome = await input.state.get(keyForPhase("outcome"));
+  if (outcome !== null) return parseTaskSourceClaimState(outcome, input.binding, claimId);
+  const intent = await input.state.get(keyForPhase("intent"));
+  return intent === null ? null : parseTaskSourceClaimState(intent, input.binding, claimId);
+}
+
+/** Reads the sole durable claim for this exact Task/source/head binding without a model-supplied submission ID. */
+export async function readTaskSourceClaim(input: Readonly<{
+  state: RevisionState;
+  binding: Omit<TaskSourceSubmissionBinding, "runId">;
+}>): Promise<TaskSourceClaimReadResult> {
+  const binding = parseBinding({ ...input.binding, runId: "00000000-0000-4000-8000-000000000000" });
+  const claim = await readTaskSourceClaimState({ state: input.state, binding }, taskSourceClaimId(binding));
+  if (!claim) return Object.freeze({ status: "not-found" });
+  if (claim.phase === "intent") return Object.freeze({ status: "ineligible",
+    reason: "prior-commit-attempt-has-no-authoritative-outcome" });
+  if (!claim.outcome || claim.outcome.status !== "submitted") return Object.freeze({ status: "ineligible",
+    reason: "not-a-definitive-submission" });
+  return Object.freeze({ status: "submitted", submission: claim.outcome.submission });
+}
+
 /** Reads one exact receipt from the producer's immutable journal and re-derives its deterministic key. */
 export async function readTaskSourceSubmission(input: Readonly<{
   state: RevisionState;
@@ -435,6 +544,12 @@ export async function readTaskSourceSubmission(input: Readonly<{
 }>): Promise<TaskSourceSubmissionReadResult> {
   if (!/^[a-f0-9]{64}$/u.test(input.submissionId)) throw new TypeError("submissionId must be a SHA-256 identifier.");
   const binding = parseBinding({ ...input.binding, runId: "00000000-0000-4000-8000-000000000000" });
+  const claim = await readTaskSourceClaimState({ state: input.state, binding }, taskSourceClaimId(binding));
+  if (claim?.submissionId === input.submissionId) {
+    if (claim.phase === "intent") return Object.freeze({ status: "ineligible", reason: "not-a-definitive-submission" });
+    if (claim.outcome?.status === "submitted") return Object.freeze({ status: "submitted", submission: claim.outcome.submission });
+    return Object.freeze({ status: "ineligible", reason: "not-a-definitive-submission" });
+  }
   const key = { ...stateKey("outcome", input.submissionId), scopeId: binding.workspaceId };
   const raw = await input.state.get(key);
   if (raw === null) return Object.freeze({ status: "not-found" });

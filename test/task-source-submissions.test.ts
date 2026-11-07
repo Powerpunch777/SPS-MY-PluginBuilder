@@ -3,7 +3,7 @@ import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { parseTaskPacket } from "../src/domain/task-packets.ts";
-import { readTaskSourceSubmission, submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "../src/task-source-submissions.ts";
+import { readTaskSourceClaim, readTaskSourceSubmission, submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "../src/task-source-submissions.ts";
 
 const W = "10000000-0000-4000-8000-000000000001";
 const P = "20000000-0000-4000-8000-000000000002";
@@ -24,14 +24,15 @@ function binding(role: "worker" | "qa" = "worker"): TaskSourceSubmissionBinding 
     agentId: AGENT, sessionId: SESSION, runId: RUN,
     source: Object.freeze({ sourceId: SOURCE, folderKey: "project-source", branch: "builder/task-impl",
       expectedHead: HEAD }), readPaths: Object.freeze(["src/main.ts", "test/main.test.ts"]),
-    writePaths: Object.freeze(role === "worker" ? ["src/main.ts"] : []),
+    writePaths: Object.freeze(role === "worker" ? ["src/main.ts", "src/alternate.ts"] : []),
     qaWritePaths: Object.freeze(role === "qa" ? ["test/main.test.ts"] : []) });
 }
 
 function fixture(options: Readonly<{ result?: unknown; commitThrows?: boolean; status?: unknown; match?: unknown;
-  casThrowsAt?: "intent" | "outcome"; authorityThrowsAt?: number }> = {}) {
+  casThrowsAt?: "intent" | "outcome"; casResponseLostAfterWriteAt?: "intent" | "outcome"; authorityThrowsAt?: number }> = {}) {
   const rows = new Map<string, JsonValue>();
   const operations: Array<{ method: string; input?: unknown }> = [];
+  const workingFiles = new Map([["src/main.ts", "worker-wip-main"], ["src/alternate.ts", "worker-wip-alternate"]]);
   let commits = 0, checks = 0;
   const state: RevisionState = {
     async get(key) { return structuredClone(rows.get(key.namespace + "/" + key.stateKey) ?? null); },
@@ -41,6 +42,9 @@ function fixture(options: Readonly<{ result?: unknown; commitThrows?: boolean; s
       if (options.casThrowsAt && key.stateKey.startsWith("task-source-" + options.casThrowsAt)) throw new Error("CAS response lost");
       if (expected.exists ? JSON.stringify(current) !== JSON.stringify(expected.value) : current !== null) return { swapped: false };
       rows.set(id, structuredClone(value));
+      if (options.casResponseLostAfterWriteAt && key.stateKey.startsWith(`task-source-${options.casResponseLostAfterWriteAt}.v2.`)) {
+        throw new Error("CAS response lost after write");
+      }
       return { swapped: true };
     },
   };
@@ -71,7 +75,7 @@ function fixture(options: Readonly<{ result?: unknown; commitThrows?: boolean; s
   };
   const submit = (paths: unknown = ["src/main.ts"]) => submitTaskSourceFiles({ runContext: hostRunContext,
     paths, platform, state, resolveAuthority: authority });
-  return { rows, operations, state, platform, submit, get commits() { return commits; }, get checks() { return checks; } };
+  return { rows, operations, workingFiles, state, platform, submit, get commits() { return commits; }, get checks() { return checks; } };
 }
 
 test("Core commit receipt becomes an immutable Task source submission, not QA or completion", async () => {
@@ -95,26 +99,63 @@ test("Core commit receipt becomes an immutable Task source submission, not QA or
   assert.equal([...f.rows.values()].length, 2, "intent and immutable outcome are separate records");
 });
 
-test("CTO read primitive verifies the submitted key and exact requested paths; old unbound receipts are ineligible", async () => {
+test("CTO discovers the exact submission by binding; legacy unbound receipts remain ineligible", async () => {
   const f = fixture();
   const result = await f.submit();
   assert.equal(result.status, "submitted");
   if (result.status !== "submitted") return;
   const { runId: _runId, ...base } = binding();
+  const discovered = await readTaskSourceClaim({ state: f.state, binding: base });
+  assert.equal(discovered.status, "submitted");
+  if (discovered.status === "submitted") assert.equal(discovered.submission.submissionId, result.submission.submissionId);
   const read = await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: result.submission.submissionId });
   assert.equal(read.status, "submitted");
   if (read.status === "submitted") assert.deepEqual(read.submission.requestedPaths, ["src/main.ts"]);
   assert.deepEqual(await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: "f".repeat(64) }),
     { status: "not-found" });
 
-  const outcomeKey = [...f.rows.keys()].find(key => key.includes("task-source-outcome"))!;
+  const outcomeKey = [...f.rows.keys()].find(key => key.includes("task-source-outcome.v2."))!;
   const stored = f.rows.get(outcomeKey)! as Record<string, unknown>;
   const outcome = stored.outcome as Record<string, unknown>;
   const receipt = outcome.submission as Record<string, unknown>;
   const { requestedPaths: _requestedPaths, ...legacyReceipt } = receipt;
-  f.rows.set(outcomeKey, structuredClone({ ...stored, outcome: { ...outcome, submission: legacyReceipt } }) as JsonValue);
+  f.rows.delete(outcomeKey);
+  for (const key of [...f.rows.keys()]) if (key.includes("task-source-intent.v2.")) f.rows.delete(key);
+  const legacyState = { schemaVersion: 1, workspaceId: W, projectId: P, submissionId: result.submission.submissionId,
+    bindingSha256: stored.bindingSha256, phase: "outcome", producerRunId: stored.producerRunId,
+    outcome: { status: "submitted", submission: legacyReceipt } };
+  f.rows.set(`sonpark.my-builder/task-source-outcome.v1.${result.submission.submissionId}`, legacyState as JsonValue);
   assert.deepEqual(await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: result.submission.submissionId }),
     { status: "ineligible", reason: "legacy-receipt-unbound-paths" });
+});
+
+test("different path subsets share one durable claim and the first exact receipt", async () => {
+  const f = fixture();
+  const first = await f.submit(["src/main.ts"]);
+  const second = await f.submit(["src/alternate.ts"]);
+  assert.equal(first.status, "submitted");
+  assert.equal(second.status, "existing");
+  if (first.status === "submitted" && second.status === "existing") {
+    assert.equal(second.submission.submissionId, first.submission.submissionId);
+    assert.deepEqual(second.submission.requestedPaths, ["src/main.ts"]);
+    assert.equal(second.duplicateCommitPrevented, true);
+  }
+  assert.equal(f.commits, 1);
+  const { runId: _runId, ...base } = binding();
+  const discovered = await readTaskSourceClaim({ state: f.state, binding: base });
+  assert.equal(discovered.status, "submitted");
+  if (discovered.status === "submitted") assert.deepEqual(discovered.submission.requestedPaths, ["src/main.ts"]);
+
+  const otherHead = { ...base, source: { ...base.source, expectedHead: "f".repeat(40) } };
+  assert.deepEqual(await readTaskSourceClaim({ state: f.state, binding: otherHead }), { status: "not-found" });
+});
+
+test("concurrent path subsets race on one claim before either can commit twice", async () => {
+  const f = fixture();
+  const results = await Promise.all([f.submit(["src/main.ts"]), f.submit(["src/alternate.ts"])]);
+  assert.equal(f.commits, 1);
+  assert.equal(results.filter(result => result.status === "submitted").length, 1);
+  assert.equal(results.filter(result => result.status === "unknown").length, 1);
 });
 
 test("unchanged and conflicted Core outcomes are not submission receipts", async t => {
@@ -137,11 +178,41 @@ test("lost Core reply leaves a durable intent and never repeats the commit", asy
   const f = fixture({ commitThrows: true });
   const first = await f.submit();
   assert.equal(first.status, "unknown");
-  const second = await f.submit();
+  const second = await f.submit(["src/alternate.ts"]);
   assert.equal(second.status, "unknown");
   assert.equal(f.commits, 1);
-  assert.equal([...f.rows.keys()].filter(key => key.includes("task-source-intent")).length, 1);
-  assert.equal([...f.rows.keys()].filter(key => key.includes("task-source-outcome")).length, 1);
+  assert.equal([...f.rows.keys()].filter(key => key.includes("task-source-intent.v2.")).length, 1);
+  assert.equal([...f.rows.keys()].filter(key => key.includes("task-source-outcome.v2.")).length, 1);
+  assert.equal(f.workingFiles.get("src/main.ts"), "worker-wip-main");
+  assert.equal(f.workingFiles.get("src/alternate.ts"), "worker-wip-alternate");
+});
+
+test("lost intent reply after the claim write blocks all path subsets before Core", async () => {
+  const f = fixture({ casResponseLostAfterWriteAt: "intent" });
+  assert.equal((await f.submit()).status, "unknown");
+  assert.equal((await f.submit(["src/alternate.ts"])).status, "unknown");
+  assert.equal(f.commits, 0);
+  assert.equal([...f.rows.keys()].filter(key => key.includes("task-source-intent.v2.")).length, 1);
+  assert.deepEqual([...f.workingFiles], [["src/main.ts", "worker-wip-main"], ["src/alternate.ts", "worker-wip-alternate"]]);
+});
+
+test("lost outcome reply after persistence is discoverable and never recommits", async () => {
+  const f = fixture({ casResponseLostAfterWriteAt: "outcome" });
+  assert.equal((await f.submit()).status, "unknown");
+  const retry = await f.submit(["src/alternate.ts"]);
+  assert.equal(retry.status, "existing");
+  assert.equal(f.commits, 1);
+  const { runId: _runId, ...base } = binding();
+  assert.equal((await readTaskSourceClaim({ state: f.state, binding: base })).status, "submitted");
+});
+
+test("lost outcome write without persistence leaves a no-retry claim", async () => {
+  const f = fixture({ casThrowsAt: "outcome" });
+  assert.equal((await f.submit()).status, "unknown");
+  assert.equal((await f.submit(["src/alternate.ts"])).status, "unknown");
+  assert.equal(f.commits, 1);
+  assert.equal([...f.rows.keys()].filter(key => key.includes("task-source-intent.v2.")).length, 1);
+  assert.equal([...f.rows.keys()].filter(key => key.includes("task-source-outcome.v2.")).length, 0);
 });
 
 test("retry from a later Host Run reuses the stable Task submission key and attributes the original producer", async () => {

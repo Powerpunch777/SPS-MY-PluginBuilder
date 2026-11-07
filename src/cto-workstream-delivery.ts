@@ -82,7 +82,7 @@ function prompt(delivery: CtoDelivery) {
   const workers = delivery.executionPolicy.toolNames.includes("builder.prepare-task-worker")
     ? "Use builder.read-task-workers to reconcile registrations. For an exact current published packet, use builder.prepare-task-worker to register a distinct development Worker or QA identity and keyed session. Only after reviewing the exact packet may you explicitly use builder.dispatch-task-worker with its task ID, current packet revision and role. A dispatch receipt confirms admission, not execution or completion. File tools remain restricted to the exact active Task role and paths. An unsupported or unknown result is not authorization to use a fallback. " : "";
   const handoff = delivery.executionPolicy.toolNames.includes("builder.accept-task-source-submission")
-    ? "When an exact submission ID is available, read it using builder.read-task-source-submissions and acknowledge its immutable commit with builder.accept-task-source-submission. Acknowledgment is not independent QA, Git tip verification, or task completion. " : "";
+    ? "Use builder.read-task-source-submissions for the current Task to discover its immutable submission, then acknowledge it by exact submission ID with builder.accept-task-source-submission. Acknowledgment is not independent QA, Git tip verification, or task completion. " : "";
   const text = `Builder structured Workstream planning event:\n${JSON.stringify(event)}\n` + memory + questions
     + "Read the exact assigned instruction and pinned sources with builder.read-cto-workstream, then record your understanding/readiness using builder.acknowledge-workstream. "
     + packets + workers + handoff

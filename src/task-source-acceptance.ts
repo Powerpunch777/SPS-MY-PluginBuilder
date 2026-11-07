@@ -4,7 +4,7 @@ import { parseTaskWorkerRegistry, taskWorkerRegistryKey, type TaskWorkerRecord }
 import { taskPacketRecordDigest, type TaskPacketRecord } from "./domain/task-packets.ts";
 import { exactToolRecord, parseLeadToolContext } from "./lead-tool-authority.ts";
 import { resolveCtoTaskAuthority } from "./task-packet-tools.ts";
-import { readTaskSourceSubmission, type TaskSourceSubmission, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
+import { readTaskSourceClaim, readTaskSourceSubmission, type TaskSourceSubmission, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "./task-worker-runtime.ts";
 import type { RevisionState } from "./solution-revision-store.ts";
 
@@ -144,24 +144,34 @@ async function resolveCurrent(input: { projectId: string; ctoId: string; workstr
 
 type ExactSubmissionRead = Readonly<{ status: "submitted"; submission: TaskSourceSubmission; historical: boolean }>
   | Readonly<{ status: "not-found" }>
-  | Readonly<{ status: "ineligible"; reason: "not-a-definitive-submission" | "legacy-receipt-unbound-paths" }>;
+  | Readonly<{ status: "ineligible"; reason: string }>;
 
-async function readExactSubmission(current: Current, submissionId: string, platform: SpsPlatformInvocationContext): Promise<ExactSubmissionRead> {
+async function readExactSubmission(current: Current, submissionId: string | null, platform: SpsPlatformInvocationContext): Promise<ExactSubmissionRead> {
   const rawState = platform.state as typeof platform.state & RevisionState;
-  let lookup: ReturnType<RevisionState["get"]> | undefined;
+  const reads = new Map<string, ReturnType<RevisionState["get"]>>();
   const state: RevisionState = {
-    get: key => lookup ??= (async () => {
-      await current.assertCurrent();
-      const result = await rawState.get(key);
-      await current.assertCurrent();
-      return result;
-    })(),
+    get(key) {
+      const identity = JSON.stringify([key.scopeKind, key.scopeId, key.namespace, key.stateKey]);
+      const prior = reads.get(identity);
+      if (prior) return prior;
+      const read = (async () => {
+        await current.assertCurrent();
+        const result = await rawState.get(key);
+        await current.assertCurrent();
+        return result;
+      })();
+      reads.set(identity, read);
+      return read;
+    },
   };
-  const candidates = current.submissionCandidates.map(candidate => readTaskSourceSubmission({ state,
-    binding: submissionBinding(current, candidate.task, candidate.packetDigest, candidate.worker), submissionId }));
+  const candidates = current.submissionCandidates.filter(candidate => (submissionId !== null || candidate.current)
+    && candidate.task.packet.sourceAccess?.branch && candidate.task.packet.sourceAccess.expectedHead).map(candidate => {
+    const binding = submissionBinding(current, candidate.task, candidate.packetDigest, candidate.worker);
+    return submissionId === null ? readTaskSourceClaim({ state, binding }) : readTaskSourceSubmission({ state, binding, submissionId });
+  });
   const results = await Promise.all(candidates);
   const receipts = results.filter((result): result is Extract<ExactSubmissionRead, { status: "submitted" }> => result.status === "submitted");
-  if (receipts.length > 1) throw new Error("One submission ID resolved to multiple current Task roles.");
+  if (receipts.length > 1) return { status: "ineligible", reason: "multiple-submissions-require-exact-id" };
   if (receipts.length === 1) {
     const candidate = current.submissionCandidates.find(item => item.worker.role === receipts[0]!.submission.role
       && item.worker.agentId === receipts[0]!.submission.producer.agentId && item.worker.sessionId === receipts[0]!.submission.producer.sessionId
@@ -309,7 +319,7 @@ async function sourceRootCurrent(submission: TaskSourceSubmission, platform: Sps
 
 type IntakeResult = Readonly<{
   status: "submitted" | "accepted" | "existing" | "stale" | "unsupported" | "unknown";
-  submissionId: string;
+  submissionId: string | null;
   submission?: TaskSourceSubmission;
   acceptance?: CtoTaskSourceAcceptance;
   reason?: string;
@@ -319,19 +329,22 @@ type IntakeResult = Readonly<{
 }>;
 
 async function intake(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext, accept: boolean): Promise<IntakeResult> {
-  const input = exactToolRecord(params, ["projectId", "ctoId", "workstreamId", "taskId", "submissionId"]);
+  const scope = ["projectId", "ctoId", "workstreamId", "taskId"];
+  const input = accept ? exactToolRecord(params, [...scope, "submissionId"]) : exactToolRecord(params, scope, ["submissionId"]);
   const projectId = bounded(input.projectId, "projectId"), ctoId = bounded(input.ctoId, "ctoId");
   const workstreamId = bounded(input.workstreamId, "workstreamId"), taskId = bounded(input.taskId, "taskId");
-  if (typeof input.submissionId !== "string" || !SHA.test(input.submissionId)) throw new TypeError("submissionId must be a SHA-256 identifier.");
-  const submissionId = input.submissionId;
+  const explicit = Object.hasOwn(input, "submissionId");
+  if (explicit && (typeof input.submissionId !== "string" || !SHA.test(input.submissionId))) throw new TypeError("submissionId must be a SHA-256 identifier.");
+  const requestedId = explicit ? input.submissionId as string : null;
   const toolName = accept ? "builder.accept-task-source-submission" : "builder.read-task-source-submissions";
   const current = await resolveCurrent({ projectId, ctoId, workstreamId, taskId }, runContext, platform, toolName);
   await current.assertCurrent();
-  const submissionRead = await readExactSubmission(current, submissionId, platform);
+  const submissionRead = await readExactSubmission(current, requestedId, platform);
   if (submissionRead.status !== "submitted") return Object.freeze({ status: "unknown",
-    submissionId, reason: submissionRead.status === "not-found" ? "submission-not-found" : submissionRead.reason,
+    submissionId: requestedId, reason: submissionRead.status === "not-found" ? "submission-not-found" : submissionRead.reason,
     qaPreparation: "unknown", qaExecution: "unknown", qaVerdict: "not-established" });
   const submission = submissionRead.submission;
+  const submissionId = submission.submissionId;
   if (submissionRead.historical) return Object.freeze({ status: "stale", submissionId, submission,
     reason: "task-packet-or-dependency-revision-superseded",
     qaPreparation: submission.role === "qa" ? "unknown" : "not-applicable",

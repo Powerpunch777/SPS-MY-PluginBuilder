@@ -111,8 +111,8 @@ const taskSourceHandoffScope = { type: "object", additionalProperties: false,
     submissionId: { type: "string", pattern: "^[a-f0-9]{64}$" } } };
 export const READ_TASK_SOURCE_SUBMISSIONS_TOOL = Object.freeze({
   name: "builder.read-task-source-submissions", displayName: "Read an exact Task source submission",
-  description: "Only the assigned active CTO may look up a submission ID from the Worker. This checks the recorded source and Run, not the current Git tip or protected QA.",
-  parametersSchema: taskSourceHandoffScope,
+  description: "Only the assigned active CTO may discover the current Task source submission, or look up its exact ID. This checks the recorded source and Run, not the current Git tip or protected QA.",
+  parametersSchema: { ...taskSourceHandoffScope, required: ["projectId", "ctoId", "workstreamId", "taskId"] },
 });
 export const ACCEPT_TASK_SOURCE_SUBMISSION_TOOL = Object.freeze({
   name: "builder.accept-task-source-submission", displayName: "Acknowledge receipt of exact submitted source",

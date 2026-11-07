@@ -128,12 +128,20 @@ test("registered Worker submit and CTO receipt bind the same commit, deny other 
   const platform = createBuilderPlatform();
   const call = (name: string, params: object, context = f.ctoContext) => Promise.resolve().then(() =>
     platform.tools.find(tool => tool.name === name)!.handler(params as never, context as never, f.f.platform));
+  const task = { projectId: W, ctoId: CTO, workstreamId: "ws-1", taskId: "task-dev" };
+  const read = "builder.read-task-source-submissions", accept = "builder.accept-task-source-submission";
+  const empty = (await call(read, task)).data as { status: string; reason: string };
+  assert.equal(empty.status, "unknown");
+  assert.equal(empty.reason, "submission-not-found");
+  await assert.rejects(call(accept, task));
   const submit = await call("builder.submit-task-source", { paths: ["src/feature.ts"] }, f.context);
   const submitted = submit.data as { status: string; submission: { submissionId: string; commitSha: string } };
   assert.equal(submitted.status, "submitted");
   assert.equal(submitted.submission.commitSha, COMMIT);
-  const input = { projectId: W, ctoId: CTO, workstreamId: "ws-1", taskId: "task-dev", submissionId: submitted.submission.submissionId };
-  const read = "builder.read-task-source-submissions", accept = "builder.accept-task-source-submission";
+  const input = { ...task, submissionId: submitted.submission.submissionId };
+  const discovered = (await call(read, task)).data as { status: string; submissionId: string };
+  assert.equal(discovered.status, "submitted");
+  assert.equal(discovered.submissionId, input.submissionId);
   await assert.rejects(call(accept, input, f.context));
   assert.equal(((await call(read, input)).data as { status: string }).status, "submitted");
   const first = (await call(accept, input)).data as { status: string; acceptance: { commitSha: string }; qaVerdict: string };
@@ -151,6 +159,7 @@ test("registered Worker submit and CTO receipt bind the same commit, deny other 
   await assert.rejects(call(read, input), /Task Packet or dependency changed/);
   f.setOnMatch(async () => {});
   assert.equal(((await call(read, input)).data as { status: string }).status, "stale");
+  assert.equal(((await call(read, task)).data as { reason: string }).reason, "submission-not-found");
 });
 
 test("Workspace-only Worker file tools never fall back to legacy alias IO on a Host without V1", async () => {
