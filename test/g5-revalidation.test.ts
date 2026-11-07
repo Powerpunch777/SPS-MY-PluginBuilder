@@ -2,20 +2,22 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import type { JsonValue, SpsActionContext, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
-import { parseTaskPacketBoard, taskPacketRecordDigest } from "../src/domain/task-packets.ts";
+import { parseTaskPacketBoard, parseTaskPacketRecord, taskPacketRecordDigest } from "../src/domain/task-packets.ts";
 import { candidateIds, checkTaskDependencyPins, projectExactCandidateRecords, projectWorkstreamReadinessReceipt, readG5Revalidation } from "../src/g5-revalidation.ts";
+import { assertCurrentCtoTaskG5Effect } from "../src/g5-change-impact-tools.ts";
 import { parseDesignBaseline } from "../src/domain/design-baseline.ts";
 import { createDesignBaselineStore } from "../src/design-baseline-tools.ts";
 import { createTechnologyDecisionStore } from "../src/technology-decision-tools.ts";
 import { createUiContractStore } from "../src/ui-contracts/store.ts";
 import { sha256Utf8 } from "../src/ui-contracts/domain.ts";
 import { createRevisionJournal, type RevisionState } from "../src/solution-revision-store.ts";
-import { parseWorkstreamBoard } from "../src/domain/workstreams.ts";
+import { parseWorkstreamBoard, type WorkstreamRecord } from "../src/domain/workstreams.ts";
 import { createTaskPacketStore } from "../src/task-packet-tools.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import { validateG5Handoff } from "../src/workstream-tools.ts";
 import { parseWorkstreamChange, parseWorkstreamSpec } from "../src/domain/workstreams.ts";
 import { LEAD_CHANNELS } from "../src/domain/lead-sessions.ts";
+import { workstreamInstructionDigest } from "../src/cto-delivery-store.ts";
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
 const AGENT = "33333333-3333-4333-8333-333333333333";
@@ -49,11 +51,12 @@ function fixture() {
     platform: { state, events: {}, agents: {} } as unknown as SpsPlatformInvocationContext };
 }
 
-async function pairedProjectionFixture() {
+async function pairedProjectionFixture(withTaskRecords = false) {
   const f = fixture();
   const address = (item: SpsStateKey) => JSON.stringify(item);
   let taskHeadReads = 0;
   let workstreamHeadReads = 0;
+  let journalWrites = 0;
   let onThirdTaskHeadRead: (() => void) | null = null;
   const state = {
     async get(item: SpsStateKey) {
@@ -65,6 +68,7 @@ async function pairedProjectionFixture() {
       return structuredClone(f.values.get(address(item)) ?? null);
     },
     async compareAndSet(item: SpsStateKey, expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue) {
+      journalWrites += 1;
       const id = address(item), exists = f.values.has(id), old = f.values.get(id);
       const swapped = expected.exists ? exists && JSON.stringify(old) === JSON.stringify(expected.value) : !exists;
       if (swapped) f.values.set(id, structuredClone(value));
@@ -83,7 +87,8 @@ async function pairedProjectionFixture() {
   const ui = createUiContractStore(COMPANY, COMPANY, revisionState);
   const publishBaseline = async (revisionId: string, expectedBaseRevisionId: string | null) => {
     const specification = { projectId: COMPANY, revisionId: `spec-${revisionId}`, productTier: "M",
-      requirements: [{ id: "REQ-1", description: revisionId, acceptanceCriteriaIds: ["AC-1"] }], targets: ["sps-plugin"],
+      requirements: [{ id: "REQ-1", description: revisionId, acceptanceCriteriaIds: ["AC-1"] },
+        { id: "REQ-2", description: "unchanged", acceptanceCriteriaIds: ["AC-2"] }], targets: ["sps-plugin"],
       dataPolicyRef: "policy-unreviewed", approvalEvidenceRef: `lead-turn:${RUN}` };
     const baseline = parseDesignBaseline({ projectId: COMPANY, revisionId, sourceDraftRevisionId: `draft-${revisionId}`,
       draftDigest: sha(revisionId), createdAt: "2026-11-06T00:00:00.000Z",
@@ -154,13 +159,22 @@ async function pairedProjectionFixture() {
   await workstreamStore.publish({ expectedBaseRevisionId: null, revision: { projectId: COMPANY, revisionId: "ws-old", workstreams: [oldWorkstream] } });
   await workstreamStore.publish({ expectedBaseRevisionId: "ws-old", revision: { projectId: COMPANY, revisionId: "ws-new", workstreams: [newWorkstream] } });
   const taskStore = createTaskPacketStore(COMPANY, COMPANY, CTO, "ws-1", state as unknown as RevisionState);
-  await taskStore.publish({ expectedBaseRevisionId: null, revision: { projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-old", packets: [] } });
-  await taskStore.publish({ expectedBaseRevisionId: "task-old", revision: { projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-new", packets: [] } });
+  const pairedTask = (workstream: WorkstreamRecord, requirementId: string) => parseTaskPacketRecord({
+    ...taskRecord(requirementId === "REQ-1" ? "task-affected" : "task-unaffected", 1),
+    packet: { ...taskRecord(requirementId === "REQ-1" ? "task-affected" : "task-unaffected", 1).packet, requirementIds: [requirementId] },
+    source: { requestId: REQUEST, workstreamId: "ws-1", specRevision: workstream.spec.revision,
+      instructionSha256: workstreamInstructionDigest(workstream) },
+  }, COMPANY, CTO, "ws-1");
+  await taskStore.publish({ expectedBaseRevisionId: null, revision: { projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-old",
+    packets: withTaskRecords ? [pairedTask(oldWorkstream, "REQ-1"), pairedTask(oldWorkstream, "REQ-2")] : [] } });
+  await taskStore.publish({ expectedBaseRevisionId: "task-old", revision: { projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-new",
+    packets: withTaskRecords ? [pairedTask(newWorkstream, "REQ-1"), pairedTask(newWorkstream, "REQ-2")] : [] } });
   const params = { projectId: COMPANY, oldBaselineRevisionId: "base-old", newBaselineRevisionId: "base-new",
     oldUiRevisionId: "ui-old", newUiRevisionId: "ui-new", technology: { oldRevisionId: "tech-old", newRevisionId: "tech-new" },
     workstreams: { oldRevisionId: "ws-old", newRevisionId: "ws-new" },
     tasks: { ctoId: CTO, workstreamId: "ws-1", oldRevisionId: "task-old", newRevisionId: "task-new" } };
-  return { ...f, platform, params, taskStore, workstreamStore,
+  return { ...f, platform, params, taskStore, workstreamStore, baselineStore, publishBaseline, pairedTask,
+    journalWrites: () => journalWrites,
     onThirdTaskHeadRead(callback: () => void) { onThirdTaskHeadRead = callback; },
     resetPairReadCounts() { taskHeadReads = 0; workstreamHeadReads = 0; },
     get taskHeadReads() { return taskHeadReads; }, get workstreamHeadReads() { return workstreamHeadReads; } };
@@ -347,4 +361,76 @@ test("G5 handoff proposal is derived from exact published pairs and a current CT
   const drifted = await readG5Revalidation(f.params, f.runContext, f.platform);
   const driftedData = drifted.data as unknown as { g5WorkstreamHandoffAcceptance: readonly { status: string }[] };
   assert.equal(driftedData.g5WorkstreamHandoffAcceptance[0]?.status, "STALE_TASK_SCOPE");
+});
+
+test("server-only G5 dispatch guard binds current approved scope and exact revalidated Task without upgrading historical QA", async () => {
+  const f = await pairedProjectionFixture(true);
+  const comparison = await readG5Revalidation(f.params, f.runContext, f.platform);
+  const data = comparison.data as unknown as { g5WorkstreamHandoffProposals: readonly { workstreamId: string; g5Handoff: Record<string, unknown> }[] };
+  const proposal = data.g5WorkstreamHandoffProposals.find(item => item.workstreamId === "ws-1")!.g5Handoff;
+  assert.equal(proposal.taskImpactStatus, "UNKNOWN", "missing inventory stays unknown even when exact candidate IDs exist");
+  const paired = (await f.workstreamStore.publishedRevision("ws-new"))!.revision.workstreams[0]!;
+  const spec = parseWorkstreamSpec({ ...paired.spec, revision: 2 }, COMPANY);
+  const change = parseWorkstreamChange({ ...paired.change, previousRevision: 1,
+    impactTaskIds: proposal.affectedTaskIds, g5Handoff: proposal });
+  const acknowledged = { ...paired, spec, change, receipt: { revision: 2, agentId: paired.ctoAgentId,
+    sessionId: paired.ctoSessionId, runId: RUN, createdAt: "2026-11-07T00:00:00.000Z", readiness: "ready" as const,
+    note: "Fixture: acknowledged exact scoped handoff." } };
+  await f.workstreamStore.publish({ expectedBaseRevisionId: "ws-new", revision: {
+    projectId: COMPANY, revisionId: "ws-g5-current", workstreams: [acknowledged],
+  } });
+  const currentWorkstream = (await f.workstreamStore.current())!.revision.workstreams[0]!;
+  const latestTask = parseTaskPacketRecord({ ...f.pairedTask(paired, "REQ-1"), packet: {
+    ...f.pairedTask(paired, "REQ-1").packet, revision: 2,
+  }, source: { requestId: REQUEST, workstreamId: "ws-1", specRevision: 2,
+    instructionSha256: workstreamInstructionDigest(currentWorkstream) } }, COMPANY, CTO, "ws-1");
+  await f.taskStore.publish({ expectedBaseRevisionId: "task-new", revision: {
+    projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-current", packets: [latestTask],
+  } });
+  const currentTask = (await f.taskStore.current())!.revision.packets[0]!;
+  const read = (workstream = currentWorkstream, taskRecord = currentTask, assertCurrent = async () => {}) =>
+    assertCurrentCtoTaskG5Effect({ workspaceId: COMPANY, projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1",
+      taskId: "task-affected", workstream, taskRecord, assertCurrent, state: f.platform.state as unknown as RevisionState });
+
+  const writesBeforeRead = f.journalWrites();
+  assert.deepEqual(await read(), { status: "candidate", impactStatus: "UNKNOWN" },
+    "the exact candidate remains dispatchable only as a revalidation task; incomplete G5 inventory stays UNKNOWN");
+  assert.equal(f.journalWrites(), writesBeforeRead, "the server-only G5 scope reader never writes journals");
+  await assert.rejects(() => read({ ...currentWorkstream,
+    receipt: { ...currentWorkstream.receipt!, readiness: "blocked" } }), /current scoped Workstream acknowledgement/);
+  await assert.rejects(() => read(currentWorkstream, { ...currentTask,
+    packet: { ...currentTask.packet, title: "changed after snapshot" } }), /changed during effect-scope resolution/);
+
+  let checks = 0;
+  await assert.rejects(() => read(currentWorkstream, currentTask, async () => {
+    checks += 1;
+    if (checks === 3) await f.taskStore.publish({ expectedBaseRevisionId: "task-current", revision: {
+      projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-raced",
+      packets: [{ ...currentTask, packet: { ...currentTask.packet, revision: 4, title: "concurrent Task change" } }],
+    } });
+  }), /changed during dispatch preflight/);
+
+  const changedHandoff = { ...currentWorkstream, spec: { ...currentWorkstream.spec, revision: 3 },
+    change: parseWorkstreamChange({ ...currentWorkstream.change, previousRevision: 2, g5Handoff: {
+      ...currentWorkstream.change.g5Handoff!, impactSha256: "f".repeat(64),
+    } }),
+    receipt: { ...currentWorkstream.receipt!, revision: 3 } };
+  await f.workstreamStore.publish({ expectedBaseRevisionId: "ws-g5-current", revision: {
+    projectId: COMPANY, revisionId: "ws-g5-impact-changed", workstreams: [changedHandoff],
+  } });
+  const currentAfterImpactChange = (await f.workstreamStore.current())!.revision.workstreams[0]!;
+  const racedTask = (await f.taskStore.current())!.revision.packets[0]!;
+  const taskAfterImpactChange = parseTaskPacketRecord({ ...racedTask, packet: { ...racedTask.packet, revision: 5 }, source: {
+    requestId: REQUEST, workstreamId: "ws-1", specRevision: 3,
+    instructionSha256: workstreamInstructionDigest(currentAfterImpactChange),
+  } }, COMPANY, CTO, "ws-1");
+  await f.taskStore.publish({ expectedBaseRevisionId: "task-raced", revision: {
+    projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-current-after-impact-change",
+    packets: [taskAfterImpactChange],
+  } });
+  const taskAfterImpact = (await f.taskStore.current())!.revision.packets[0]!;
+  await assert.rejects(() => read(currentAfterImpactChange, taskAfterImpact),
+    /impact digest no longer matches/);
+  await f.publishBaseline("base-after", "base-new");
+  await assert.rejects(() => read(currentAfterImpactChange, taskAfterImpact), /current approved Baseline, formal UI/);
 });

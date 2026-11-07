@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { JsonValue, SpsActionContext, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { produceG5ChangeImpactCandidates, type G5Dimension, type G5Snapshot } from "./domain/g5-change-impact.ts";
-import { parseTaskPacketBoard } from "./domain/task-packets.ts";
+import { parseTaskPacketBoard, type TaskPacketRecord } from "./domain/task-packets.ts";
 import { parseDesignBaseline } from "./domain/design-baseline.ts";
 import { parseAuthoredTechnologyDecisions } from "./domain/authored-technology-decisions.ts";
 import { parseUiApproval, revisionDigest } from "./ui-contracts/domain.ts";
@@ -9,7 +9,7 @@ import { parseUiRevision, type UiRevision } from "./ui-contracts/domain.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
-import { parseWorkstreamBoard } from "./domain/workstreams.ts";
+import { parseWorkstreamBoard, type WorkstreamRecord } from "./domain/workstreams.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 
@@ -105,6 +105,99 @@ export async function readUserG5ChangeImpact(params: unknown, context: Pick<SpsA
   const workspaceId = id(context.companyId, "workspaceId");
   if (input.projectId !== workspaceId) throw new Error("G5 project does not match the authenticated Workspace.");
   return (await comparePublishedRevisions(input, workspaceId, workspaceId, context.state as RevisionState, check)).data;
+}
+
+/** Internal dispatch guard. This is deliberately not registered as a CTO-facing tool. */
+export async function assertCurrentCtoTaskG5Effect(input: Readonly<{
+  workspaceId: string; projectId: string; ctoId: string; workstreamId: string; taskId: string;
+  workstream: WorkstreamRecord;
+  taskRecord: TaskPacketRecord;
+  assertCurrent(): Promise<void>;
+  state: RevisionState;
+}>): Promise<Readonly<{ status: "not-scoped" | "candidate" | "unaffected-exact" | "unknown";
+  impactStatus: "NOT_APPLICABLE" | "CANDIDATES" | "NO_CANDIDATE_OBSERVED" | "UNKNOWN" }>> {
+  const { workspaceId, projectId, ctoId, workstreamId, taskId, workstream, taskRecord, assertCurrent, state } = input;
+  if (!workstream.change.g5Handoff) return Object.freeze({ status: "not-scoped", impactStatus: "NOT_APPLICABLE" });
+  if (workspaceId !== projectId) throw new Error("G5 effect scope requires the current Workspace project boundary.");
+  const handoff = workstream.change.g5Handoff;
+  if (handoff.tasks.ctoId !== ctoId || handoff.tasks.workstreamId !== workstreamId
+    || workstream.spec.projectId !== projectId || workstream.spec.id !== workstreamId
+    || workstream.spec.assignedCtoId !== ctoId || taskRecord.packet.taskId !== taskId
+    || taskRecord.packet.ctoId !== ctoId || taskRecord.packet.workstreamId !== workstreamId
+    || !workstream.receipt || workstream.receipt.revision !== workstream.spec.revision
+    || workstream.receipt.readiness !== "ready") {
+    throw new Error("G5 task dispatch requires the exact current scoped Workstream acknowledgement and Task binding.");
+  }
+
+  await assertCurrent();
+  const baselineStore = createG5BaselineReader(workspaceId, projectId, state);
+  const uiStore = createG5UiReader(workspaceId, projectId, state, "ui-contracts");
+  const workstreamStore = createG5WorkstreamReader(workspaceId, projectId, state);
+  const taskStore = createG5TaskReader(workspaceId, projectId, ctoId, workstreamId, state);
+  const [currentBaseline, currentUi, currentWorkstreams, currentTasks] = await Promise.all([
+    baselineStore.current(), uiStore.current(), workstreamStore.current(), taskStore.current(),
+  ]);
+  const liveWorkstream = currentWorkstreams?.revision.workstreams.find(row => row.spec.id === workstreamId);
+  const pairedWorkstreams = await workstreamStore.publishedRevision(handoff.workstreams.newRevisionId);
+  const pairedWorkstream = pairedWorkstreams?.revision.workstreams.find(row => row.spec.id === workstreamId);
+  const sameSpecExceptRevision = Boolean(pairedWorkstream
+    && hash({ ...pairedWorkstream.spec, revision: workstream.spec.revision }) === hash(workstream.spec));
+  if (!currentBaseline || currentBaseline.revision.revisionId !== handoff.newBaselineRevisionId
+    || workstream.sourceBaselineRevisionId !== currentBaseline.revision.revisionId
+    || workstream.baselineDigest !== hash(currentBaseline.revision)
+    || !currentUi || currentUi.revision.revisionId !== handoff.newUiRevisionId
+    || currentUi.revision.publication !== "formal" || currentUi.revision.source.kind !== "baseline"
+    || currentUi.revision.source.revisionId !== currentBaseline.revision.revisionId
+    || !currentWorkstreams || !liveWorkstream || hash(liveWorkstream) !== hash(workstream) || !sameSpecExceptRevision
+    || !pairedWorkstream || pairedWorkstream.sourceBaselineRevisionId !== currentBaseline.revision.revisionId
+    || pairedWorkstream.spec.technologyDecisionsRef !== workstream.spec.technologyDecisionsRef
+    || !currentTasks || !await taskStore.publishedRevision(handoff.tasks.newRevisionId)) {
+    throw new Error("G5 effect scope is stale: current approved Baseline, formal UI, Workstream or Task ancestry changed.");
+  }
+
+  const comparison = await comparePublishedRevisions({ projectId,
+    oldBaselineRevisionId: handoff.oldBaselineRevisionId, newBaselineRevisionId: handoff.newBaselineRevisionId,
+    oldUiRevisionId: handoff.oldUiRevisionId, newUiRevisionId: handoff.newUiRevisionId,
+    ...(handoff.technology ? { technology: handoff.technology } : {}),
+    workstreams: handoff.workstreams, tasks: handoff.tasks }, workspaceId, projectId, state, assertCurrent);
+  const data = comparison.data as unknown as { sourcePins: Record<string, unknown>; dimensions: Record<string, {
+    status: "CANDIDATES" | "NO_CANDIDATE_OBSERVED" | "UNKNOWN"; candidates: readonly { recordId: string }[] }> };
+  const taskDimension = data.dimensions.tasks;
+  const impactSha256 = hash({ sourcePins: data.sourcePins, dimensions: data.dimensions });
+  const candidateIds = taskDimension?.candidates.map(candidate => candidate.recordId).sort() ?? [];
+  if (!taskDimension || impactSha256 !== handoff.impactSha256
+    || taskDimension.status !== handoff.taskImpactStatus
+    || JSON.stringify(candidateIds) !== JSON.stringify([...handoff.affectedTaskIds].sort())
+    || JSON.stringify([...workstream.change.impactTaskIds].sort()) !== JSON.stringify(candidateIds)) {
+    throw new Error("G5 effect scope or impact digest no longer matches its exact published source pair.");
+  }
+
+  const liveTask = currentTasks.revision.packets.find(row => row.packet.taskId === taskId);
+  if (!liveWorkstream || !liveTask || hash(liveWorkstream) !== hash(workstream)
+    || hash(liveTask) !== hash(taskRecord)) {
+    throw new Error("G5 dispatch Task or Workstream changed during effect-scope resolution.");
+  }
+  await assertCurrent();
+  const [baselineAgain, uiAgain, workstreamsAgain, tasksAgain] = await Promise.all([
+    baselineStore.current(), uiStore.current(), workstreamStore.current(), taskStore.current(),
+  ]);
+  if (baselineAgain?.revision.revisionId !== currentBaseline.revision.revisionId
+    || uiAgain?.revision.revisionId !== currentUi.revision.revisionId
+    || workstreamsAgain?.revision.revisionId !== currentWorkstreams.revision.revisionId
+    || tasksAgain?.revision.revisionId !== currentTasks.revision.revisionId
+    || hash(workstreamsAgain.revision.workstreams.find(row => row.spec.id === workstreamId) ?? null) !== hash(workstream)
+    || hash(tasksAgain.revision.packets.find(row => row.packet.taskId === taskId) ?? null) !== hash(taskRecord)) {
+    throw new Error("G5 approved scope or current Task changed during dispatch preflight.");
+  }
+  await assertCurrent();
+
+  if (taskDimension.status === "UNKNOWN") {
+    return Object.freeze({ status: candidateIds.includes(taskId) ? "candidate" : "unknown", impactStatus: "UNKNOWN" });
+  }
+  if (taskDimension.status === "CANDIDATES") {
+    return Object.freeze({ status: candidateIds.includes(taskId) ? "candidate" : "unaffected-exact", impactStatus: "CANDIDATES" });
+  }
+  return Object.freeze({ status: "unknown", impactStatus: taskDimension.status });
 }
 
 async function comparePublishedRevisions(input: ReturnType<typeof impactInput>, workspaceId: string, projectId: string,

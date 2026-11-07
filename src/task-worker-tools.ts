@@ -12,6 +12,7 @@ import { resolveCtoTaskAuthority, createTaskPacketStore } from "./task-packet-to
 import type { RevisionState } from "./solution-revision-store.ts";
 import { readWorkstreams } from "./workstream-tools.ts";
 import { createCtoDeliveryStore, workstreamInstructionDigest } from "./cto-delivery-store.ts";
+import { assertCurrentCtoTaskG5Effect } from "./g5-change-impact-tools.ts";
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId, dispatchTaskWorkerSession,
   readTaskWorkerSourceFile, writeTaskWorkerSourceFile, deleteTaskWorkerSourceFile,
   type TaskWorkerFileBinding } from "./task-worker-runtime.ts";
@@ -346,6 +347,15 @@ export async function dispatchPreparedTaskWorker(params: unknown, runContext: un
       || (role === "worker" ? packet.packet.kind !== "development" : packet.packet.kind !== "qa")
       || !dependenciesMatchCurrent(packet, board!.revision.packets)) {
       throw new Error("Dispatch requires the exact current Task Packet revision and dependency/source pins.");
+    }
+    const currentWorkstreams = await readWorkstreams(context.companyId, projectId, platform);
+    const currentWorkstream = currentWorkstreams?.revision.workstreams.find(item => item.spec.id === workstreamId);
+    if (!currentWorkstream) throw new Error("Dispatch requires the current Workstream source record.");
+    const g5Effect = await assertCurrentCtoTaskG5Effect({ workspaceId: context.companyId, projectId, ctoId, workstreamId,
+      taskId, workstream: currentWorkstream, taskRecord: packet, assertCurrent: authority.check,
+      state: platform.state as typeof platform.state & RevisionState });
+    if (g5Effect.status === "unknown") {
+      throw new Error("G5 task impact is UNKNOWN; a current G5 scope and exact Task revalidation are required before dispatch.");
     }
     const raw = await platform.state.get(registryKey(context.companyId, projectId, ctoId));
     const registry = parseTaskWorkerRegistry(raw ?? { schemaVersion: 1, workspaceId: context.companyId,
