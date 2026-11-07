@@ -5,8 +5,8 @@ import { W } from "./fixtures/cto-platform.ts";
 import { progressTool, validationFixture, validationTool } from "./fixtures/integration-manager-platform.ts";
 
 // Fixture Host responses exercise the existing journals and registered producer tools.
-async function setup() {
-  const f = await validationFixture();
+async function setup(withRegression = false) {
+  const f = await validationFixture(withRegression);
   const { localFolders: folders } = f.f.platform as unknown as { localFolders: {
     readWorkspaceSourceGitTipV1(...args: string[]): Promise<Record<string, unknown>>;
   } };
@@ -15,7 +15,7 @@ async function setup() {
     const tip = await original(...args);
     return tip.status === "current" ? { ...tip, observedAt: "2026-11-07T12:00:00.000Z" } : tip;
   };
-  const complete = async (phase: "ci" | "e2e", processExitCode = 0) => {
+  const complete = async (phase: "ci" | "e2e" | "regression", processExitCode = 0) => {
     const result = await validationTool().handler({ ...f.input, phase }, f.managerContext, f.f.platform);
     const data = result.data as unknown as { reference: { runId: string } };
     const run = f.runs.get(data.reference.runId);
@@ -70,4 +70,34 @@ test("lost Git authorization does not preserve a previously observed candidate",
   assert.equal((await read()).status, "observed");
   folders.readWorkspaceSourceGitTipV1 = async () => ({ status: "denied", reason: "branch_not_authorized" });
   assert.deepEqual(await read(), { status: "unknown", reason: "integration-candidate-read-unconfirmed" });
+});
+
+test("configured regression has its own candidate-pinned Run and survives CI/E2E writes and replay", async () => {
+  const { f, complete, read } = await setup(true);
+  const request = { ...f.input, phase: "regression" };
+  const first = await validationTool().handler(request, f.managerContext, f.f.platform);
+  const reserved = first.data as unknown as { reference: { runId: string; approvalTemplateId: string; commitSha: string; treeSha: string } };
+  assert.equal(reserved.reference.approvalTemplateId, f.plan.validationPlans!.regression!.approvalTemplateId);
+  assert.equal(reserved.reference.commitSha, "b".repeat(40));
+  assert.equal(reserved.reference.treeSha, "c".repeat(40));
+  await complete("ci");
+  await complete("e2e");
+  assert.deepEqual(await read(), { status: "pending", reason: "integration-regression-not-passed" });
+  const regression = await complete("regression");
+  assert.equal(regression, reserved.reference.runId);
+  const current = await read();
+  assert.equal(current.status, "observed");
+  if (current.status !== "observed") return;
+  assert.equal(current.regression?.runId, regression);
+  assert.equal(current.regression?.qaVerdict, "not-established");
+  assert.equal(f.enqueueCalls, 3);
+  f.moveCandidate();
+  assert.equal((await read()).status, "stale");
+});
+
+test("unconfigured regression is unsupported without reserving a new Run", async () => {
+  const { f } = await setup();
+  const result = await validationTool().handler({ ...f.input, phase: "regression" }, f.managerContext, f.f.platform);
+  assert.deepEqual(result.data, { status: "unsupported", reason: "main-validation-plan-reference-unavailable", executionStarted: false });
+  assert.equal(f.enqueueCalls, 0);
 });

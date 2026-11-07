@@ -22,7 +22,8 @@ export type IntegrationAttemptScope = Readonly<{ workspaceId: string; workstream
 type Scope = IntegrationAttemptScope;
 export type IntegrationValidationReference = Readonly<{ requestId: string; subjectKey: string; subjectKeySha256: string;
   approvalTemplateId: string; planSha256: string; commitSha: string; treeSha: string; runId: string | null; approvalId: string | null }>;
-export type IntegrationValidationReferences = Readonly<{ ci: IntegrationValidationReference | null; e2e: IntegrationValidationReference | null }>;
+export type IntegrationValidationReferences = Readonly<{ ci: IntegrationValidationReference | null; e2e: IntegrationValidationReference | null;
+  regression?: IntegrationValidationReference | null }>;
 
 function validationReference(value: unknown): IntegrationValidationReference | null {
   if (value === null) return null;
@@ -77,12 +78,13 @@ function parseAttempt(value: unknown): IntegrationAttempt {
       git = observed as unknown as GitResult;
     }
   }
-  const refs = Object.hasOwn(row, "validationRuns") ? exactToolRecord(row.validationRuns, ["ci", "e2e"]) : null;
+  const refs = Object.hasOwn(row, "validationRuns") ? exactToolRecord(row.validationRuns, ["ci", "e2e"], ["regression"]) : null;
   if (refs && (row.stage !== "git-observed" || git?.status === "conflict")) throw new TypeError("Only observed non-conflicting Git effects can have validation references.");
   const content = { schemaVersion: 1 as const, scope: scope as unknown as Scope, planRevisionId: bounded(row.planRevisionId),
     reportRevisionId: bounded(row.reportRevisionId), stage: row.stage as IntegrationAttempt["stage"], effect: effect as unknown as EffectInput,
     git, validation: "not-executed" as const,
-    ...(refs ? { validationRuns: Object.freeze({ ci: validationReference(refs.ci), e2e: validationReference(refs.e2e) }) } : {}),
+    ...(refs ? { validationRuns: Object.freeze({ ci: validationReference(refs.ci), e2e: validationReference(refs.e2e),
+      ...(Object.hasOwn(refs, "regression") ? { regression: validationReference(refs.regression) } : {}) }) } : {}),
     author: author as unknown as IntegrationAttempt["author"] };
   const revisionId = `integration-attempt-v1:${hash(content)}`;
   if (row.revisionId !== revisionId) throw new TypeError("Integration attempt digest mismatch.");
@@ -103,7 +105,8 @@ const stored = (content: Omit<IntegrationAttempt, "revisionId">) => parseAttempt
 export function withIntegrationValidationReferences(attempt: IntegrationAttempt, validationRuns: IntegrationValidationReferences) {
   return stored({ schemaVersion: attempt.schemaVersion, scope: attempt.scope, planRevisionId: attempt.planRevisionId,
     reportRevisionId: attempt.reportRevisionId, stage: attempt.stage, effect: attempt.effect, git: attempt.git,
-    validation: attempt.validation, validationRuns: { ci: validationRuns.ci, e2e: validationRuns.e2e }, author: attempt.author });
+    validation: attempt.validation, validationRuns: { ci: validationRuns.ci, e2e: validationRuns.e2e,
+      ...(Object.hasOwn(validationRuns, "regression") ? { regression: validationRuns.regression } : {}) }, author: attempt.author });
 }
 
 async function managerEvent(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
@@ -238,7 +241,8 @@ export async function readIntegrationProgress(params: unknown, runContext: unkno
     if (result.status !== "observed") return result;
     return { status: result.status, candidate: result.candidate, planRevisionId: result.plan.revisionId,
       boardRevisionId: result.boardRevisionId, workstreamCount: result.snapshots.length, taskCount: result.attempts.length,
-      ciRunId: result.ci.runId, e2eRunId: result.e2e.runId, deliveryAuthority: result.deliveryAuthority };
+      ciRunId: result.ci.runId, e2eRunId: result.e2e.runId,
+      ...(result.regression ? { regressionRunId: result.regression.runId } : {}), deliveryAuthority: result.deliveryAuthority };
   }
   const taskPins = snapshot.sourcePins.filter(pin => pin.sourceId.startsWith("builder-v1:task-packet:"));
   const attempts = [];

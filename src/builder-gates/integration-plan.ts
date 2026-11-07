@@ -15,7 +15,10 @@ const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const BRANCH = /^(?![/.])(?!.*(?:\.\.|\.lock(?:\/|$)|\/\.|\/\/|@\{))[A-Za-z0-9._/-]{1,240}(?<![./])$/u;
 
 export type IntegrationValidationPlan = Readonly<{ approvalTemplateId: string; planSha256: string }>;
-export type IntegrationValidationPlans = Readonly<{ ci: IntegrationValidationPlan; e2e: IntegrationValidationPlan }>;
+export const INTEGRATION_VALIDATION_PHASES = ["ci", "e2e", "regression"] as const;
+export type IntegrationValidationPhase = typeof INTEGRATION_VALIDATION_PHASES[number];
+export type IntegrationValidationPlans = Readonly<{ ci: IntegrationValidationPlan; e2e: IntegrationValidationPlan;
+  regression?: IntegrationValidationPlan }>;
 
 export type IntegrationPlan = Readonly<{
   schemaVersion: 1; revisionId: string; workspaceId: string;
@@ -26,7 +29,7 @@ export type IntegrationPlan = Readonly<{
 }>;
 
 function validationPlans(value: unknown): IntegrationValidationPlans {
-  const plans = exactToolRecord(value, ["ci", "e2e"]);
+  const plans = exactToolRecord(value, ["ci", "e2e"], ["regression"]);
   const parse = (input: unknown): IntegrationValidationPlan => {
     const row = exactToolRecord(input, ["approvalTemplateId", "planSha256"]);
     if (typeof row.approvalTemplateId !== "string" || !UUID.test(row.approvalTemplateId)
@@ -35,7 +38,8 @@ function validationPlans(value: unknown): IntegrationValidationPlans {
     }
     return Object.freeze({ approvalTemplateId: row.approvalTemplateId, planSha256: row.planSha256 });
   };
-  return Object.freeze({ ci: parse(plans.ci), e2e: parse(plans.e2e) });
+  return Object.freeze({ ci: parse(plans.ci), e2e: parse(plans.e2e),
+    ...(Object.hasOwn(plans, "regression") ? { regression: parse(plans.regression) } : {}) });
 }
 
 function id(value: unknown): string {

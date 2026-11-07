@@ -9,6 +9,7 @@ import { WORKSTREAM_VERIFIED_JOB, createWorkstreamVerificationPublication } from
 import { consumeVerifiedWorkstream, type ManagerDispatchRequest, type VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
 import { readWorkstreams } from "../workstream-tools.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
+import type { IntegrationPlan } from "./integration-plan.ts";
 
 export const INTEGRATION_MANAGER_VERIFIED_READ_TOOL = "builder.read-verified-workstream";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
@@ -44,7 +45,7 @@ const stateKey = (workspaceId: string, stateKey: string) => ({ scopeKind: "compa
 const revisionState = (platform: Host) => platform.state as typeof platform.state & RevisionState;
 const sha256Json = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 
-type CurrentIntegrationPlan = Readonly<{ revision: unknown; sequence: number }>;
+type CurrentIntegrationPlan = Readonly<{ revision: IntegrationPlan; sequence: number }>;
 type IntegrationPrerequisite = Readonly<{ status: "ready" | "waiting-dependencies" | "unknown"; reason?: string }>;
 
 async function readIntegrationReadiness(workspaceId: string, workstreamId: string, platform: Host): Promise<Readonly<{
@@ -73,6 +74,7 @@ function managerPrompt(request: ManagerDispatchRequest, plan: CurrentIntegration
     + "Use builder.read-verified-workstream and builder.read-integration-progress before acting. "
     + "Record integration work only through builder.integrate-verified-task under the approved plan. "
     + "After all ready Tasks are integrated, request the current candidate's CI and E2E through builder.request-integration-validation when Main has pinned their Host template references. Read actual results through builder.read-integration-progress. "
+    + (plan.revision.validationPlans?.regression ? "Request the pinned regression phase for the same current candidate too. " : "")
     + "This dispatch is admission only; it is not integration completion, CI success, or final delivery approval.";
   if (Buffer.byteLength(prompt, "utf8") > MAX_MANAGER_TOOL_RESPONSE_BYTES) throw new Error("manager-integration-request-exceeds-bounded-prompt");
   return prompt;

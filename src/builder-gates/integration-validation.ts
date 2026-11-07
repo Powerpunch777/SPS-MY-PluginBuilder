@@ -4,14 +4,13 @@ import { readProtectedOutputArtifacts, type ProtectedOutputRead } from "../prote
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext } from "../lead-tool-authority.ts";
 import { parseProtectedRun } from "../task-protected-qa.ts";
-import { checkIntegrationPrerequisites, readCurrentIntegrationPlan } from "./integration-plan.ts";
+import { checkIntegrationPrerequisites, INTEGRATION_VALIDATION_PHASES, readCurrentIntegrationPlan } from "./integration-plan.ts";
 import { readVerifiedWorkstreamForManager } from "./integration-manager-job.ts";
 import { createIntegrationAttemptStore, withIntegrationValidationReferences,
   type IntegrationAttempt, type IntegrationValidationReference } from "./integration-progress.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const textHash = (value: string) => createHash("sha256").update(value).digest("hex");
-type Phase = "ci" | "e2e";
 type Host = SpsPlatformInvocationContext & { protectedTests?: {
   delegatedBranchInputVersion?: 1;
   enqueueApprovedV1?: (input: unknown) => Promise<unknown>;
@@ -59,7 +58,7 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
   const api = (platform as Host).protectedTests, folders = (platform as Host).localFolders;
   const results = [];
   for (const attempt of attempts) {
-    for (const phase of ["ci", "e2e"] as const) {
+    for (const phase of INTEGRATION_VALIDATION_PHASES) {
       const reference = attempt.validationRuns?.[phase];
       if (!reference) continue;
       let status: "pending" | "passed" | "failed" | "unknown" | "stale" = "unknown";
@@ -104,8 +103,9 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
 export async function requestIntegrationValidation(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["workstreamId", "eventId", "taskId", "phase"]);
   const context = parseLeadToolContext(runContext), workstreamId = bounded(input.workstreamId), eventId = bounded(input.eventId), taskId = bounded(input.taskId);
-  if (input.phase !== "ci" && input.phase !== "e2e") throw new TypeError("Integration validation phase must be ci or e2e.");
-  const phase: Phase = input.phase, scope = { workspaceId: context.companyId, workstreamId, eventId, taskId };
+  const phase = INTEGRATION_VALIDATION_PHASES.find(value => value === input.phase);
+  if (!phase) throw new TypeError("Integration validation phase must be ci, e2e or regression.");
+  const scope = { workspaceId: context.companyId, workstreamId, eventId, taskId };
   const api = (platform as Host).protectedTests, folders = (platform as Host).localFolders;
   const check = async () => {
     await readVerifiedWorkstreamForManager({ workstreamId, eventId }, runContext, platform);
@@ -140,7 +140,7 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
   if (prior && hash({ ...prior, runId: null, approvalId: null }) !== hash(reservation)) return { status: "stale", reason: "validation-reservation-pins-changed", executionStarted: false };
   if (prior?.runId) return { status: "existing", reference: prior, technicalValidation: await readIntegrationValidationRuns([attempt], platform), executionStarted: false };
   if (!prior) {
-    const reserved = withIntegrationValidationReferences(attempt, { ci: attempt.validationRuns?.ci ?? null, e2e: attempt.validationRuns?.e2e ?? null, [phase]: reservation });
+    const reserved = withIntegrationValidationReferences(attempt, { ci: null, e2e: null, ...attempt.validationRuns, [phase]: reservation });
     const saved = await store.publish({ expectedBaseRevisionId: attempt.revisionId, revision: reserved });
     if (saved.status !== "published") return { status: "conflict", reason: "validation-reservation-cas-conflict", executionStarted: false };
     attempt = reserved;

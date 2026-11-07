@@ -100,11 +100,26 @@ test("incomplete or caller-asserted validation authority never enters the Main p
   const f = await setup();
   const ci = { approvalTemplateId: "11111111-1111-4111-8111-111111111111", planSha256: "a".repeat(64) };
   for (const plans of [{ ci }, { ci, e2e: { ...ci, approved: true } }, { ci, e2e: { ...ci, command: "npm test" } },
-    { ci, e2e: { ...ci, planSha256: "not-a-hash" } }, { ci, e2e: { ...ci, approvalTemplateId: "other-workspace" } }, null]) {
+    { ci, e2e: { ...ci, planSha256: "not-a-hash" } }, { ci, e2e: { ...ci, approvalTemplateId: "other-workspace" } },
+    { ci, e2e: ci, regression: { ...ci, passed: true } }, null]) {
     await assert.rejects(() => publishIntegrationPlan({ ...f.input, validationPlans: plans }, ctx(), f.platform));
   }
   assert.equal(await createIntegrationPlanStore(W, f.state).current(), null);
   assert.equal(f.hostCalls, 0);
+});
+
+test("Main binds the optional regression plan to the immutable workflow revision", async () => {
+  const f = await setup();
+  const validationPlans = { ci: { approvalTemplateId: "11111111-1111-4111-8111-111111111111", planSha256: "a".repeat(64) },
+    e2e: { approvalTemplateId: "22222222-2222-4222-8222-222222222222", planSha256: "b".repeat(64) },
+    regression: { approvalTemplateId: "33333333-3333-4333-8333-333333333333", planSha256: "c".repeat(64) } };
+  const result = await publishIntegrationPlan({ ...f.input, validationPlans }, ctx(), f.platform);
+  assert.equal(result.status, "published");
+  assert.equal(result.executionStarted, false);
+  const saved = (await createIntegrationPlanStore(W, f.state).current())!.revision;
+  assert.deepEqual(saved.validationPlans, validationPlans);
+  assert.throws(() => parseIntegrationPlan({ ...saved, validationPlans: { ...validationPlans,
+    regression: { ...validationPlans.regression, planSha256: "d".repeat(64) } } }), /digest/);
 });
 
 test("legacy integration plans retain their exact serialized identity without validation configuration", async () => {

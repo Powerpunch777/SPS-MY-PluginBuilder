@@ -23,7 +23,7 @@ export const validationTool = () => createBuilderPlatform().tools.find(item => i
 export const progressTool = () => createBuilderPlatform().tools.find(item => item.name === "builder.read-integration-progress")!;
 
 /** Host/Core-facing receipts in the caller are deterministic DTO fixtures, not live AI or Git execution. */
-export async function preparedFixture(withValidation = false) {
+export async function preparedFixture(withValidation = false, withRegression = false) {
   const setup = await setupVerifiedWorkstreamPlatform();
   const f = setup.f;
   const verification = await setup.verify();
@@ -52,6 +52,7 @@ export async function preparedFixture(withValidation = false) {
     candidateBranch: "builder/integration-candidate", ...(withValidation ? { validationPlans: {
       ci: { approvalTemplateId: "12121212-1212-4212-8212-121212121212", planSha256: "a".repeat(64) },
       e2e: { approvalTemplateId: "13131313-1313-4313-8313-131313131313", planSha256: "b".repeat(64) },
+      ...(withRegression ? { regression: { approvalTemplateId: "19191919-1919-4919-8919-191919191919", planSha256: "c".repeat(64) } } : {}),
     } } : {}), author: { agentId: "22222222-2222-4222-8222-222222222222",
       sessionId: "33333333-3333-4333-8333-333333333333", runId: "55555555-5555-4555-8555-555555555555", selectionRevision: 1 } };
   const plan = parseIntegrationPlan({ ...planContent, revisionId: `integration-plan-v1:${hash(planContent)}` });
@@ -98,8 +99,8 @@ export async function preparedFixture(withValidation = false) {
     agentId: MANAGER, sessionId: MANAGER_SESSION, runId: MANAGER_RUN } };
 }
 
-export async function validationFixture() {
-  const fixture = await preparedFixture(true);
+export async function validationFixture(withRegression = false) {
+  const fixture = await preparedFixture(true, withRegression);
   let integrated = false, enqueueCalls = 0, loseReply = false, candidateMoved = false;
   const runs = new Map<string, any>(), requests: any[] = [];
   const folders = { async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
@@ -114,7 +115,8 @@ export async function validationFixture() {
   const api = { delegatedBranchInputVersion: 1, async enqueueApprovedV1(input: any) {
     enqueueCalls++; requests.push(structuredClone(input));
     if (loseReply) { loseReply = false; throw new Error("fixture lost admission reply"); }
-    const id = input.planSha256 === "a".repeat(64) ? "14141414-1414-4414-8414-141414141414" : "15151515-1515-4515-8515-151515151515";
+    const id = input.planSha256 === "a".repeat(64) ? "14141414-1414-4414-8414-141414141414"
+      : input.planSha256 === "c".repeat(64) ? "17171717-1717-4717-8717-171717171717" : "15151515-1515-4515-8515-151515151515";
     const run = { schemaVersion: 1, kind: "protected-node-test-v1", id, status: "queued", termination: "not_applicable",
       pins: { approvalId: "16161616-1616-4616-8616-161616161616", sourceId: input.sourceId, planSha256: input.planSha256,
         profileSha256: "1".repeat(64), commitSha: input.commitSha, treeSha: input.treeSha, manifestSha256: "2".repeat(64),

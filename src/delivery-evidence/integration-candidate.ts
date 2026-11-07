@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
-import { checkIntegrationPrerequisites, readCurrentIntegrationPlan } from "../builder-gates/integration-plan.ts";
+import { checkIntegrationPrerequisites, readCurrentIntegrationPlan, type IntegrationValidationPhase } from "../builder-gates/integration-plan.ts";
 import { createIntegrationAttemptStore, type IntegrationAttempt } from "../builder-gates/integration-progress.ts";
 import { readIntegrationValidationRuns } from "../builder-gates/integration-validation.ts";
 import { createWorkstreamVerificationPublication } from "../builder-gates/workstream-verification-publication.ts";
@@ -114,17 +114,19 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
     if (!chainMatches(attempts, base.commitSha, candidate.commitSha, candidate.treeSha)) return unavailable("stale", "integration-candidate-does-not-match-observed-effects");
     if (!plan.validationPlans) return unavailable("pending", "integration-validation-plans-unavailable");
     const plans = plan.validationPlans;
-    function currentReference(attempt: IntegrationAttempt, phase: "ci" | "e2e") {
+    function currentReference(attempt: IntegrationAttempt, phase: IntegrationValidationPhase) {
       const reference = attempt.validationRuns?.[phase], expected = plans[phase];
-      return reference && reference.commitSha === candidate.commitSha && reference.treeSha === candidate.treeSha
+      return reference && expected && reference.commitSha === candidate.commitSha && reference.treeSha === candidate.treeSha
         && reference.approvalTemplateId === expected.approvalTemplateId && reference.planSha256 === expected.planSha256 ? reference : null;
     }
     const eligible = attempts.map(attempt => ({ ...attempt, validationRuns: {
       ci: currentReference(attempt, "ci"), e2e: currentReference(attempt, "e2e"),
+      ...(plans.regression ? { regression: currentReference(attempt, "regression") } : {}),
     } }));
     const runs = await readIntegrationValidationRuns(eligible, platform);
-    const required = {} as Record<"ci" | "e2e", TechnicalRun>;
-    for (const phase of ["ci", "e2e"] as const) {
+    const required = {} as Record<"ci" | "e2e", TechnicalRun> & { regression?: TechnicalRun };
+    const phases: readonly IntegrationValidationPhase[] = plans.regression ? ["ci", "e2e", "regression"] : ["ci", "e2e"];
+    for (const phase of phases) {
       const matching = runs.filter(run => run.phase === phase);
       if (matching.length !== 1) return unavailable(matching.length ? "unknown" : "pending", `integration-${phase}-run-not-unique-or-unavailable`);
       const result = matching[0]!;
@@ -145,7 +147,8 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
       || JSON.stringify(await tip(plan.baseBranch)) !== JSON.stringify(base)
       || JSON.stringify(await tip(plan.candidateBranch)) !== JSON.stringify(candidate)) return unavailable("stale", "integration-candidate-changed-during-read");
     return { status: "observed" as const, candidate, plan, boardRevisionId: board.revisionId, snapshots, attempts,
-      ci: required.ci, e2e: required.e2e, deliveryAuthority: "not-established" as const };
+      ci: required.ci, e2e: required.e2e, ...(required.regression ? { regression: required.regression } : {}),
+      deliveryAuthority: "not-established" as const };
   } catch {
     return unavailable("unknown", "integration-candidate-read-unconfirmed");
   }
