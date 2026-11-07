@@ -99,3 +99,26 @@ test("legacy v1 bytes remain readable without rewriting their digest, IDs or sto
   assert.equal(JSON.stringify((await store.current())!.revision), JSON.stringify(first));
   assert.equal(writes, 0); assert.equal(head.digest, digest);
 });
+
+test("a valid unpublished v1 entry is reused by v2 publication without changing its original bytes or digest", async () => {
+  const first = revision("legacy-staged");
+  const body = { schemaVersion: 1, workspaceId: W, projectId: P, sequence: 1, parent: null, revision: first };
+  const entry = { ...body, digest: sha(JSON.stringify(body)) };
+  const headKey = `jsonb-head.v1.${sha(P)}`, entryKey = `jsonb-revision.v1.${sha(P)}.${sha(first.revisionId)}`;
+  const values = new Map<string, JsonValue>([[entryKey, structuredClone(entry) as unknown as JsonValue]]);
+  const state: RevisionState = {
+    async get(key) { return structuredClone(values.get(key.stateKey) ?? null); },
+    async compareAndSet(key, expected, value) {
+      const current = values.get(key.stateKey), exists = values.has(key.stateKey);
+      const swapped = expected.exists ? exists && JSON.stringify(current) === JSON.stringify(expected.value) : !exists;
+      if (swapped) values.set(key.stateKey, structuredClone(value));
+      return { swapped };
+    },
+  };
+  const store = createRevisionJournal<Revision>(W, P, state, { prefix: "jsonb", revisionId: row => row.revisionId, parse: row => row as Revision });
+  const prior = JSON.stringify(values.get(entryKey));
+  assert.equal((await store.publish({ expectedBaseRevisionId: null, revision: first })).status, "published");
+  assert.equal(JSON.stringify(values.get(entryKey)), prior);
+  assert.equal((values.get(headKey) as any).digest, entry.digest);
+  assert.equal(JSON.stringify((await store.current())!.revision), JSON.stringify(first));
+});

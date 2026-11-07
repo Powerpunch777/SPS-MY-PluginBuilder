@@ -287,6 +287,23 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
     return receipt.swapped;
   }
 
+  async function stageEntry(candidate: Entry<T>): Promise<Entry<T>> {
+    const revisionId = identifier(codec.revisionId(candidate.revision));
+    const storageKey = entryKey(revisionId);
+    if (await cas(storageKey, { exists: false }, asJson(candidate))) return candidate;
+    const raw = await state.get(storageKey);
+    if (raw === null) throw new Error("Published solution revision is missing; existing state has not been repaired or replaced.");
+    const row = entryFields(raw, "existing solution entry");
+    const existingRevision = decodeRevision(row);
+    const existing = parseEntry(raw, pointer({ revisionId: codec.revisionId(existingRevision), sequence: row.sequence, digest: row.digest }));
+    if (codec.revisionId(existing.revision) !== revisionId || existing.sequence !== candidate.sequence
+      || json(existing.parent) !== json(candidate.parent) || json(existing.revision) !== json(candidate.revision)) {
+      throw new Error("Solution revision ID already contains different immutable content.");
+    }
+    // Reuse a valid v1 orphan without rewriting it or replacing its digest with v2.
+    return existing;
+  }
+
   function validateJobWake(value: unknown): RevisionJobWake {
     const row = fields(value, ["name", "eventId", "jobKey", "payload"], "revision job wake");
     for (const key of ["name", "eventId", "jobKey"] as const) {
@@ -316,12 +333,8 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
     if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
     const sequence = (current.ref?.sequence ?? 0) + 1;
     if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
-    const entry = encodeEntry(sequence, current.ref, proposed);
+    const entry = await stageEntry(encodeEntry(sequence, current.ref, proposed));
     const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
-    if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
-      const existing = await entryAt(next);
-      if (json(existing) !== json(entry)) throw new Error("Solution revision ID already contains different immutable content.");
-    }
     // A rejected atomic call may have committed. Preserve the staged entry and never retry or split the wake from its head CAS.
     const guardedKey = { ...headKey, scopeKind: "company" as const, scopeId: workspaceId, guards };
     const expectedHead = current.raw === null ? { exists: false as const } : { exists: true as const, value: current.raw };
@@ -479,12 +492,8 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
       const sequence = (current.ref?.sequence ?? 0) + 1;
       if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
-      const entry = encodeEntry(sequence, current.ref, proposed);
+      const entry = await stageEntry(encodeEntry(sequence, current.ref, proposed));
       const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
-      if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
-        const existing = await entryAt(next);
-        if (json(existing) !== json(entry)) throw new Error("Solution revision ID already contains different immutable content.");
-      }
       // A failed head CAS leaves only an unpublished staged entry. Do not erase
       // it or retry writes: a response may have been lost after a real commit.
       if (!await cas(headKey, current.raw === null ? { exists: false } : { exists: true, value: current.raw }, asJson(next))) {
