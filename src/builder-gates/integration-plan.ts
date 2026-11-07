@@ -25,6 +25,7 @@ export type IntegrationPlan = Readonly<{
   baselineRevisionId: string; baselineDigest: string; uiRevisionId: string; uiDigest: string;
   sourceId: string; folderKey: string; baseBranch: string; baseCommit: string; baseTree: string; candidateBranch: string;
   validationPlans?: IntegrationValidationPlans;
+  validationRequestScope?: "candidate-v2";
   author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number }>;
 }>;
 
@@ -49,7 +50,8 @@ function id(value: unknown): string {
 
 export function parseIntegrationPlan(value: unknown): IntegrationPlan {
   const row = exactToolRecord(value, ["schemaVersion", "revisionId", "workspaceId", "baselineRevisionId", "baselineDigest",
-    "uiRevisionId", "uiDigest", "sourceId", "folderKey", "baseBranch", "baseCommit", "baseTree", "candidateBranch", "author"], ["validationPlans"]);
+    "uiRevisionId", "uiDigest", "sourceId", "folderKey", "baseBranch", "baseCommit", "baseTree", "candidateBranch", "author"],
+    ["validationPlans", "validationRequestScope"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision"]);
   if (row.schemaVersion !== 1 || [row.workspaceId, row.sourceId, author.agentId, author.sessionId, author.runId]
     .some(value => typeof value !== "string" || !UUID.test(value))
@@ -57,6 +59,7 @@ export function parseIntegrationPlan(value: unknown): IntegrationPlan {
     || [row.baseCommit, row.baseTree].some(value => typeof value !== "string" || !OID.test(value))
     || [row.baseBranch, row.candidateBranch].some(value => typeof value !== "string" || !BRANCH.test(value))
     || row.baseBranch === row.candidateBranch || typeof row.folderKey !== "string" || !/^[a-z0-9][a-z0-9._:-]{0,127}$/u.test(row.folderKey)
+    || Object.hasOwn(row, "validationRequestScope") && (row.validationRequestScope !== "candidate-v2" || !Object.hasOwn(row, "validationPlans"))
     || !Number.isSafeInteger(author.selectionRevision) || (author.selectionRevision as number) < 0) throw new TypeError("Invalid exact integration plan.");
   const content = { schemaVersion: 1 as const, workspaceId: row.workspaceId as string,
     baselineRevisionId: id(row.baselineRevisionId), baselineDigest: row.baselineDigest as string,
@@ -64,6 +67,7 @@ export function parseIntegrationPlan(value: unknown): IntegrationPlan {
     folderKey: row.folderKey, baseBranch: row.baseBranch as string, baseCommit: row.baseCommit as string,
     baseTree: row.baseTree as string, candidateBranch: row.candidateBranch as string,
     ...(Object.hasOwn(row, "validationPlans") ? { validationPlans: validationPlans(row.validationPlans) } : {}),
+    ...(row.validationRequestScope === "candidate-v2" ? { validationRequestScope: "candidate-v2" as const } : {}),
     author: { agentId: author.agentId as string, sessionId: author.sessionId as string, runId: author.runId as string,
       selectionRevision: author.selectionRevision as number } };
   const revisionId = `integration-plan-v1:${digest(content)}`;
@@ -140,7 +144,7 @@ export async function publishIntegrationPlan(params: unknown, runContext: unknow
   const content = { schemaVersion: 1 as const, workspaceId: context.companyId, baselineRevisionId: baseline.revision.revisionId,
     baselineDigest: digest(baseline.revision), uiRevisionId: ui.revision.revisionId, uiDigest: digest(ui.revision), sourceId, folderKey,
     baseBranch, baseCommit: tip.commitSha, baseTree: tip.treeSha, candidateBranch,
-    ...(selectedValidation ? { validationPlans: selectedValidation } : {}),
+    ...(selectedValidation ? { validationPlans: selectedValidation, validationRequestScope: "candidate-v2" as const } : {}),
     author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId, selectionRevision: authority.selectionRevision } };
   const plan = parseIntegrationPlan({ ...content, revisionId: `integration-plan-v1:${digest(content)}` });
   const store = createIntegrationPlanStore(context.companyId, platform.state);

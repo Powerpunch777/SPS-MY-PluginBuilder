@@ -23,7 +23,7 @@ export const validationTool = () => createBuilderPlatform().tools.find(item => i
 export const progressTool = () => createBuilderPlatform().tools.find(item => item.name === "builder.read-integration-progress")!;
 
 /** Host/Core-facing receipts in the caller are deterministic DTO fixtures, not live AI or Git execution. */
-export async function preparedFixture(withValidation = false, withRegression = false, withUnmappedRequirement = false) {
+export async function preparedFixture(withValidation = false, withRegression = false, withUnmappedRequirement = false, candidateRequests = false) {
   const setup = await setupVerifiedWorkstreamPlatform(withUnmappedRequirement);
   const f = setup.f;
   const verification = await setup.verify();
@@ -53,7 +53,8 @@ export async function preparedFixture(withValidation = false, withRegression = f
       ci: { approvalTemplateId: "12121212-1212-4212-8212-121212121212", planSha256: "a".repeat(64) },
       e2e: { approvalTemplateId: "13131313-1313-4313-8313-131313131313", planSha256: "b".repeat(64) },
       ...(withRegression ? { regression: { approvalTemplateId: "19191919-1919-4919-8919-191919191919", planSha256: "c".repeat(64) } } : {}),
-    } } : {}), author: { agentId: "22222222-2222-4222-8222-222222222222",
+    } } : {}), ...(withValidation && candidateRequests ? { validationRequestScope: "candidate-v2" as const } : {}),
+    author: { agentId: "22222222-2222-4222-8222-222222222222",
       sessionId: "33333333-3333-4333-8333-333333333333", runId: "55555555-5555-4555-8555-555555555555", selectionRevision: 1 } };
   const plan = parseIntegrationPlan({ ...planContent, revisionId: `integration-plan-v1:${hash(planContent)}` });
   await createIntegrationPlanStore(W, state).publish({ expectedBaseRevisionId: null, revision: plan });
@@ -100,8 +101,8 @@ export async function preparedFixture(withValidation = false, withRegression = f
     agentId: MANAGER, sessionId: MANAGER_SESSION, runId: MANAGER_RUN } };
 }
 
-export async function validationFixture(withRegression = false, withUnmappedRequirement = false) {
-  const fixture = await preparedFixture(true, withRegression, withUnmappedRequirement);
+export async function validationFixture(withRegression = false, withUnmappedRequirement = false, candidateRequests = false) {
+  const fixture = await preparedFixture(true, withRegression, withUnmappedRequirement, candidateRequests);
   let integrated = false, enqueueCalls = 0, loseReply = false, candidateMoved = false;
   const runs = new Map<string, any>(), requests: any[] = [];
   const folders = { async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {

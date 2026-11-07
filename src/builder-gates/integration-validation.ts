@@ -4,10 +4,11 @@ import { readProtectedOutputArtifacts, type ProtectedOutputRead } from "../prote
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext } from "../lead-tool-authority.ts";
 import { parseProtectedRun } from "../task-protected-qa.ts";
-import { checkIntegrationPrerequisites, INTEGRATION_VALIDATION_PHASES, readCurrentIntegrationPlan } from "./integration-plan.ts";
+import { checkIntegrationPrerequisites, INTEGRATION_VALIDATION_PHASES, readCurrentIntegrationPlan,
+  type IntegrationPlan, type IntegrationValidationPhase } from "./integration-plan.ts";
 import { readVerifiedWorkstreamForManager } from "./integration-manager-job.ts";
 import { createIntegrationAttemptStore, withIntegrationValidationReferences,
-  type IntegrationAttempt, type IntegrationValidationReference } from "./integration-progress.ts";
+  type IntegrationAttempt, type IntegrationAttemptScope, type IntegrationValidationReference } from "./integration-progress.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const textHash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -20,6 +21,21 @@ type Host = SpsPlatformInvocationContext & { protectedTests?: {
 function bounded(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/u.test(value)) throw new TypeError("An exact integration validation scope is required.");
   return value;
+}
+
+export function integrationValidationReservation(plan: IntegrationPlan, scope: IntegrationAttemptScope, phase: IntegrationValidationPhase,
+  commitSha: string, treeSha: string): IntegrationValidationReference {
+  const selected = plan.validationPlans?.[phase];
+  if (!selected || scope.workspaceId !== plan.workspaceId) throw new Error("The exact planned validation phase is required.");
+  // Keep the Host-approved subject prefix; only the identity domain changes.
+  const key = hash(plan.validationRequestScope === "candidate-v2"
+    ? ["builder-integration-validation-candidate-v2", plan.workspaceId, plan.revisionId, phase, plan.sourceId,
+      plan.folderKey, plan.candidateBranch, commitSha, treeSha, selected]
+    : ["builder-integration-validation-v1", scope, plan.revisionId, phase, plan.sourceId,
+      plan.candidateBranch, commitSha, treeSha, selected]);
+  const subjectKey = `builder-integration-${phase}-v1:${key}`;
+  return Object.freeze({ requestId: subjectKey, subjectKey, subjectKeySha256: textHash(subjectKey),
+    approvalTemplateId: selected.approvalTemplateId, planSha256: selected.planSha256, commitSha, treeSha, runId: null, approvalId: null });
 }
 
 function matchesRun(raw: unknown, attempt: IntegrationAttempt, reference: IntegrationValidationReference) {
@@ -119,23 +135,22 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
     || typeof folders?.readWorkspaceSourceGitTipV1 !== "function") return { status: "unsupported", reason: "protected-validation-api-unavailable", executionStarted: false };
   const store = createIntegrationAttemptStore(scope, platform.state), current = await store.current();
   if (!current || current.revision.stage !== "git-observed" || !current.revision.git || current.revision.git.status === "conflict"
-    || current.revision.planRevisionId !== plan.revision.revisionId) throw new Error("The exact observed integration candidate and current plan are required.");
+    || current.revision.planRevisionId !== plan.revision.revisionId || current.revision.effect.sourceId !== plan.revision.sourceId
+    || current.revision.effect.folderKey !== plan.revision.folderKey || current.revision.effect.branch !== plan.revision.candidateBranch) {
+    throw new Error("The exact observed integration candidate and current plan are required.");
+  }
   let attempt = current.revision;
   const git = current.revision.git!;
-  const tip = exactToolRecord(await folders.readWorkspaceSourceGitTipV1(attempt.effect.sourceId, attempt.effect.folderKey, attempt.effect.branch),
-    ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
+  const readTip = async () => exactToolRecord(await folders.readWorkspaceSourceGitTipV1!(plan.revision.sourceId, plan.revision.folderKey, plan.revision.candidateBranch),
+    ["status"], ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt", "reason"]);
+  const tip = await readTip();
   const expectedCommit = git.status === "unchanged" ? git.headSha : (git as { commitSha: string }).commitSha;
   const expectedTree = git.status === "integrated" || git.status === "replayed" ? git.treeSha : tip.treeSha;
   if (tip.status !== "current" || tip.sourceId !== attempt.effect.sourceId || tip.folderKey !== attempt.effect.folderKey
     || tip.branch !== attempt.effect.branch || tip.branch !== plan.revision.candidateBranch || tip.commitSha !== expectedCommit
     || tip.treeSha !== expectedTree || typeof tip.commitSha !== "string" || typeof tip.treeSha !== "string"
     || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(tip.treeSha)) return { status: "stale", reason: "integration-candidate-tip-changed", executionStarted: false };
-  const key = hash(["builder-integration-validation-v1", scope, plan.revision.revisionId, phase,
-    attempt.effect.sourceId, attempt.effect.branch, tip.commitSha, tip.treeSha, selected]);
-  const subjectKey = `builder-integration-${phase}-v1:${key}`;
-  const reservation: IntegrationValidationReference = Object.freeze({ requestId: subjectKey, subjectKey,
-    subjectKeySha256: textHash(subjectKey), approvalTemplateId: selected.approvalTemplateId, planSha256: selected.planSha256,
-    commitSha: tip.commitSha, treeSha: tip.treeSha, runId: null, approvalId: null });
+  const reservation = integrationValidationReservation(plan.revision, scope, phase, tip.commitSha, tip.treeSha);
   const prior = attempt.validationRuns?.[phase];
   if (prior && hash({ ...prior, runId: null, approvalId: null }) !== hash(reservation)) return { status: "stale", reason: "validation-reservation-pins-changed", executionStarted: false };
   if (prior?.runId) return { status: "existing", reference: prior, technicalValidation: await readIntegrationValidationRuns([attempt], platform), executionStarted: false };
@@ -148,6 +163,11 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
   await check();
   if ((await readCurrentIntegrationPlan(context.companyId, platform))?.revision.revisionId !== plan.revision.revisionId
     || (await store.current())?.revision.revisionId !== attempt.revisionId) return { status: "stale", reason: "validation-authority-changed-before-enqueue", executionStarted: false };
+  const latestTip = await readTip();
+  if (latestTip.status !== "current" || latestTip.sourceId !== tip.sourceId || latestTip.folderKey !== tip.folderKey
+    || latestTip.branch !== tip.branch || latestTip.commitSha !== tip.commitSha || latestTip.treeSha !== tip.treeSha) {
+    return { status: "stale", reason: "integration-candidate-tip-changed", executionStarted: false };
+  }
   let run;
   try {
     run = matchesRun(await api.enqueueApprovedV1({ companyId: context.companyId, sourceId: attempt.effect.sourceId,
@@ -158,5 +178,6 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
   await check();
   const observed = withIntegrationValidationReferences(attempt, { ...attempt.validationRuns!, [phase]: reference });
   const saved = await store.publish({ expectedBaseRevisionId: attempt.revisionId, revision: observed });
-  return { status: saved.status, reference, technicalValidation: technicalOutcome(run), qaVerdict: "not-established", executionStarted: true };
+  return { status: saved.status, reference, admission: "confirmed", technicalValidation: technicalOutcome(run),
+    qaVerdict: "not-established", executionStarted: null };
 }

@@ -88,6 +88,7 @@ test("Main pins both validation templates without issuing technical approval or 
   assert.equal(result.technicalAuthority, "separate-host-grants-required");
   const saved = (await createIntegrationPlanStore(W, f.state).current())!.revision;
   assert.deepEqual(saved.validationPlans, plans);
+  assert.equal(saved.validationRequestScope, "candidate-v2");
   assert.ok(Object.isFrozen(saved.validationPlans!.ci));
   assert.equal(f.sent.length, 0);
   assert.throws(() => parseIntegrationPlan({ ...saved, validationPlans: { ...plans,
@@ -127,6 +128,7 @@ test("legacy integration plans retain their exact serialized identity without va
   await publishIntegrationPlan(f.input, ctx(), f.platform);
   const saved = (await createIntegrationPlanStore(W, f.state).current())!.revision;
   assert.equal(Object.hasOwn(saved, "validationPlans"), false);
+  assert.equal(Object.hasOwn(saved, "validationRequestScope"), false);
   const { revisionId, ...content } = saved;
   assert.equal(revisionId, `integration-plan-v1:${hash(content)}`);
   assert.deepEqual(parseIntegrationPlan(saved), saved);

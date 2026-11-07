@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { checkIntegrationPrerequisites, readCurrentIntegrationPlan, type IntegrationValidationPhase } from "../builder-gates/integration-plan.ts";
-import { createIntegrationAttemptStore, type IntegrationAttempt } from "../builder-gates/integration-progress.ts";
-import { readIntegrationValidationRuns } from "../builder-gates/integration-validation.ts";
+import { createIntegrationAttemptStore, type IntegrationAttempt, type IntegrationValidationReference } from "../builder-gates/integration-progress.ts";
+import { integrationValidationReservation, readIntegrationValidationRuns } from "../builder-gates/integration-validation.ts";
 import { createWorkstreamVerificationPublication } from "../builder-gates/workstream-verification-publication.ts";
 import type { VerifiedWorkstreamSnapshot } from "../builder-gates/workstream-verification-consumer.ts";
 import { readDesignBaseline } from "../design-baseline-tools.ts";
@@ -19,6 +19,25 @@ type TechnicalRun = Awaited<ReturnType<typeof readIntegrationValidationRuns>>[nu
 type TaskTrace = Readonly<{ workstreamId: string; verificationEventId: string; taskId: string; taskRevision: number;
   taskSha256: string; scopeNodeIds: readonly string[]; qaReportRevisionId: string; qaReportSha256: string;
   integrationAttemptRevisionId: string; commitSha: string; treeSha: string }>;
+
+type PhaseReference = Readonly<{ attempt: IntegrationAttempt; reference: IntegrationValidationReference }>;
+
+/** Multiple local observations of a single Core request are not multiple tests.
+ * Never select between contradictory receipts or distinct requests. */
+export function selectLogicalValidationRun(references: readonly PhaseReference[]) {
+  let selected: PhaseReference | null = null;
+  for (const entry of references) {
+    if (!selected) { selected = entry; continue; }
+    const a = selected.reference, b = entry.reference;
+    if (a.requestId !== b.requestId || a.subjectKey !== b.subjectKey || a.subjectKeySha256 !== b.subjectKeySha256
+      || a.approvalTemplateId !== b.approvalTemplateId || a.planSha256 !== b.planSha256 || a.commitSha !== b.commitSha || a.treeSha !== b.treeSha
+      || a.runId !== null && b.runId !== null && (a.runId !== b.runId || a.approvalId !== b.approvalId)) {
+      return { status: "ambiguous" as const };
+    }
+    if (a.runId === null && b.runId !== null) selected = entry;
+  }
+  return selected ? { status: "selected" as const, ...selected } : { status: "absent" as const };
+}
 
 function chainMatches(attempts: readonly IntegrationAttempt[], base: string, commit: string, tree: string) {
   const next = new Map<string, { commitSha: string; treeSha: string }>();
@@ -135,22 +154,29 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
     if (!chainMatches(attempts, base.commitSha, candidate.commitSha, candidate.treeSha)) return unavailable("stale", "integration-candidate-does-not-match-observed-effects");
     if (!plan.validationPlans) return unavailable("pending", "integration-validation-plans-unavailable");
     const plans = plan.validationPlans;
-    function currentReference(attempt: IntegrationAttempt, phase: IntegrationValidationPhase) {
-      const reference = attempt.validationRuns?.[phase], expected = plans[phase];
-      return reference && expected && reference.commitSha === candidate.commitSha && reference.treeSha === candidate.treeSha
-        && reference.approvalTemplateId === expected.approvalTemplateId && reference.planSha256 === expected.planSha256 ? reference : null;
-    }
-    const eligible = attempts.map(attempt => ({ ...attempt, validationRuns: {
-      ci: currentReference(attempt, "ci"), e2e: currentReference(attempt, "e2e"),
-      ...(plans.regression ? { regression: currentReference(attempt, "regression") } : {}),
-    } }));
-    const runs = await readIntegrationValidationRuns(eligible, platform);
     const required = {} as Record<"ci" | "e2e", TechnicalRun> & { regression?: TechnicalRun };
     const phases: readonly IntegrationValidationPhase[] = plans.regression ? ["ci", "e2e", "regression"] : ["ci", "e2e"];
     for (const phase of phases) {
-      const matching = runs.filter(run => run.phase === phase);
-      if (matching.length !== 1) return unavailable(matching.length ? "unknown" : "pending", `integration-${phase}-run-not-unique-or-unavailable`);
-      const result = matching[0]!;
+      const references: PhaseReference[] = [];
+      const expected = plans[phase]!;
+      for (const attempt of attempts) {
+        const reference = attempt.validationRuns?.[phase];
+        if (!reference || reference.commitSha !== candidate.commitSha || reference.treeSha !== candidate.treeSha
+          || reference.approvalTemplateId !== expected.approvalTemplateId || reference.planSha256 !== expected.planSha256) continue;
+        if (plan.validationRequestScope === "candidate-v2") {
+          const key = integrationValidationReservation(plan, attempt.scope, phase, candidate.commitSha, candidate.treeSha);
+          if (reference.requestId !== key.requestId || reference.subjectKey !== key.subjectKey || reference.subjectKeySha256 !== key.subjectKeySha256) {
+            return unavailable("unknown", `integration-${phase}-request-identity-mismatch`);
+          }
+        }
+        references.push({ attempt, reference });
+      }
+      const selected = selectLogicalValidationRun(references);
+      if (selected.status !== "selected") return unavailable(selected.status === "ambiguous" ? "unknown" : "pending",
+        `integration-${phase}-run-not-unique-or-unavailable`);
+      const [result] = await readIntegrationValidationRuns([{ ...selected.attempt,
+        validationRuns: { ci: null, e2e: null, [phase]: selected.reference } }], platform);
+      if (!result) return unavailable("unknown", `integration-${phase}-run-read-unavailable`);
       if (result.status !== "passed") return unavailable(result.status, `integration-${phase}-not-passed`);
       required[phase] = result;
     }
