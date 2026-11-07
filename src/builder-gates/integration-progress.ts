@@ -102,6 +102,14 @@ export function createIntegrationAttemptStore(scope: Scope, state: RevisionState
 }
 const stored = (content: Omit<IntegrationAttempt, "revisionId">) => parseAttempt({ ...content, revisionId: `integration-attempt-v1:${hash(content)}` });
 
+function retryableHead(attempt: IntegrationAttempt, sequence: number): string | null {
+  const git = attempt.git;
+  // Initial reservation/result are revisions 1/2. A new target gets at most one
+  // reservation/result pair; uncertain outcomes still reconcile their own pins.
+  return sequence === 2 && git?.status === "conflict" && git.reason === "head_changed"
+    && git.actualHead !== attempt.effect.expectedHead ? git.actualHead : null;
+}
+
 export function withIntegrationValidationReferences(attempt: IntegrationAttempt, validationRuns: IntegrationValidationReferences) {
   return stored({ schemaVersion: attempt.schemaVersion, scope: attempt.scope, planRevisionId: attempt.planRevisionId,
     reportRevisionId: attempt.reportRevisionId, stage: attempt.stage, effect: attempt.effect, git: attempt.git,
@@ -162,7 +170,12 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
     || binding.folderKey !== plan.revision.folderKey) throw new Error("Incoming object pins do not match the verified Task and plan.");
   const scope = { workspaceId: context.companyId, workstreamId, eventId, taskId };
   const store = createIntegrationAttemptStore(scope, state), prior = await store.current();
-  if (prior?.revision.stage === "git-observed") return { status: "existing", attempt: prior.revision,
+  let attempt = prior?.revision;
+  if (attempt && (attempt.planRevisionId !== plan.revision.revisionId || attempt.reportRevisionId !== report.revision.revisionId)) {
+    return { status: "stale", reason: "integration-reservation-source-or-plan-changed" };
+  }
+  const retryHead = prior ? retryableHead(prior.revision, prior.sequence) : null;
+  if (prior?.revision.stage === "git-observed" && retryHead === null) return { status: "existing", attempt: prior.revision,
     integrationStatus: prior.revision.git?.status === "conflict" ? "INTEGRATION_HOLD" : "INTEGRATING",
     reason: "git-result-preserved-required-ci-and-e2e-not-executed" };
   const api = (platform as typeof platform & { localFolders?: {
@@ -172,17 +185,13 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   if (typeof api?.readWorkspaceSourceGitTipV1 !== "function" || typeof api.integrateWorkspaceSourceCommitV1 !== "function") {
     return { status: "unsupported", reason: "guarded-git-integration-api-unavailable" };
   }
-  let attempt = prior?.revision;
-  if (attempt && (attempt.planRevisionId !== plan.revision.revisionId || attempt.reportRevisionId !== report.revision.revisionId)) {
-    return { status: "stale", reason: "integration-reservation-source-or-plan-changed" };
+  const base = exactToolRecord(await api.readWorkspaceSourceGitTipV1(plan.revision.sourceId, plan.revision.folderKey, plan.revision.baseBranch),
+    ["status"], ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt", "reason"]);
+  if (base.status !== "current" || base.sourceId !== plan.revision.sourceId || base.folderKey !== plan.revision.folderKey
+    || base.branch !== plan.revision.baseBranch || base.commitSha !== plan.revision.baseCommit || base.treeSha !== plan.revision.baseTree) {
+    return { status: "stale", reason: "approved-integration-base-branch-changed" };
   }
-  if (!attempt) {
-    const base = exactToolRecord(await api.readWorkspaceSourceGitTipV1(plan.revision.sourceId, plan.revision.folderKey, plan.revision.baseBranch),
-      ["status"], ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt", "reason"]);
-    if (base.status !== "current" || base.sourceId !== plan.revision.sourceId || base.folderKey !== plan.revision.folderKey
-      || base.branch !== plan.revision.baseBranch || base.commitSha !== plan.revision.baseCommit || base.treeSha !== plan.revision.baseTree) {
-      return { status: "stale", reason: "approved-integration-base-branch-changed" };
-    }
+  if (!attempt || retryHead !== null) {
     const tip = exactToolRecord(await api.readWorkspaceSourceGitTipV1(plan.revision.sourceId, plan.revision.folderKey, plan.revision.candidateBranch),
       ["status"], ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt", "reason"]);
     // Only an authoritative missing-ref result permits create-only CAS.
@@ -191,6 +200,9 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
       || tip.branch !== plan.revision.candidateBranch || typeof tip.commitSha !== "string" || !OID.test(tip.commitSha))) {
       return { status: "unknown", reason: "integration-candidate-tip-not-authoritative" };
     }
+    if (retryHead !== null && (missing || tip.commitSha !== retryHead)) {
+      return { status: "stale", reason: "integration-candidate-changed-after-confirmed-head-race" };
+    }
     attempt = stored({ schemaVersion: 1, scope, planRevisionId: plan.revision.revisionId, reportRevisionId: report.revision.revisionId,
       stage: "reserved", effect: { sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey,
         branch: plan.revision.candidateBranch, expectedHead: missing ? plan.revision.baseCommit : tip.commitSha as string,
@@ -198,7 +210,7 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
       git: null, validation: "not-executed", author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId } });
     const guards = [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1."));
     if (guards.length > 64) return { status: "unsupported", reason: "integration-authority-guard-bound" };
-    const reserved = await store.publishGuarded({ expectedBaseRevisionId: null, revision: attempt }, guards);
+    const reserved = await store.publishGuarded({ expectedBaseRevisionId: prior?.revision.revisionId ?? null, revision: attempt }, guards);
     if (reserved.status !== "published") return { status: "conflict", reason: "integration-reservation-cas-conflict" };
   }
   await managerEvent({ workstreamId, eventId }, runContext, currentPlatform);
@@ -226,6 +238,9 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
     reportRevisionId: selected.reportRevisionId, stage: "git-observed", effect: selected.effect, git: result.git as GitResult,
     validation: "not-executed", author: selected.author });
   const saved = await store.publish({ expectedBaseRevisionId: selected.revisionId, revision: completed });
+  if (saved.status === "published" && retryableHead(completed, saved.sequence) !== null) {
+    return integrateVerifiedTask(params, runContext, platform);
+  }
   return { status: saved.status, attempt: completed, integrationStatus: completed.git?.status === "conflict" ? "INTEGRATION_HOLD" : "INTEGRATING",
     reason: "git-observed-required-ci-and-e2e-not-executed" };
 }

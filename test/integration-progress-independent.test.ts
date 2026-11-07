@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { createIntegrationPlanStore, parseIntegrationPlan } from "../src/builder-gates/integration-plan.ts";
+import { createIntegrationAttemptStore } from "../src/builder-gates/integration-progress.ts";
 import { parseTaskQaReport } from "../src/task-qa-reports.ts";
 import { integrationManagerSessionStateKey, integrationManagerSessionTaskKey, integrationManagerStateKey } from "../src/domain/integration-manager.ts";
 import { mapKey, W } from "./fixtures/cto-platform.ts";
@@ -217,4 +218,86 @@ test("plan drift after uncertain reservation is stale and never creates a replac
   const retry = await tool.handler(input, fixture.managerContext, fixture.f.platform) as any;
   assert.equal(retry.data.status, "stale");
   assert.equal(gitCalls, 1);
+});
+
+test("a confirmed competing candidate update retries once with the same verified incoming objects", async () => {
+  const fixture = await preparedFixture();
+  const inputs: Array<Record<string, unknown>> = [];
+  const competingHead = "9".repeat(40);
+  Object.assign(fixture.f.platform, { localFolders: {
+    async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
+      if (branch === fixture.plan.baseBranch) return { status: "current", sourceId, folderKey, branch,
+        commitSha: BASE_COMMIT, treeSha: BASE_TREE, observedAt: "fixture" };
+      return inputs.length === 0 ? { status: "denied", reason: "branch_unavailable" }
+        : { status: "current", sourceId, folderKey, branch, commitSha: competingHead, treeSha: "8".repeat(40), observedAt: "fixture" };
+    },
+    async integrateWorkspaceSourceCommitV1(input: Record<string, unknown>) {
+      inputs.push(structuredClone(input));
+      return { status: "observed", git: inputs.length === 1 ? { status: "conflict", reason: "head_changed", actualHead: competingHead }
+        : { status: "integrated", commitSha: "b".repeat(40), treeSha: "c".repeat(40), changedPaths: ["src/feature.ts"] } };
+    },
+  } });
+  const tool = integrationTool()!;
+  const input = { workstreamId: "ws-1", eventId: fixture.eventId, taskId: "task-dev" };
+  const result = await tool.handler(input, fixture.managerContext, fixture.f.platform) as any;
+  assert.equal(result.data.status, "published");
+  assert.equal(result.data.attempt.git.status, "integrated");
+  assert.equal(inputs.length, 2);
+  assert.equal(inputs[0]?.expectedHead, BASE_COMMIT);
+  assert.equal(inputs[0]?.initializeIfMissing, true);
+  assert.equal(inputs[1]?.expectedHead, competingHead);
+  assert.equal(Object.hasOwn(inputs[1]!, "initializeIfMissing"), false);
+  assert.equal(inputs[1]?.incomingCommit, inputs[0]?.incomingCommit);
+  assert.equal(inputs[1]?.incomingTree, inputs[0]?.incomingTree);
+  assert.notDeepEqual(inputs[1]?.reservation, inputs[0]?.reservation);
+  const history = await createIntegrationAttemptStore({ workspaceId: W, ...input }, fixture.f.platform.state).recent(4);
+  assert.deepEqual(history.revisions.map(row => [row.sequence, row.revision.git?.status ?? "reserved"]),
+    [[4, "integrated"], [3, "reserved"], [2, "conflict"], [1, "reserved"]]);
+  assert.equal((await tool.handler(input, fixture.managerContext, fixture.f.platform) as any).data.status, "existing");
+  assert.equal(inputs.length, 2);
+});
+
+test("real merge conflicts and a second competing update stay held without repeated Git effects", async t => {
+  for (const reason of ["merge_conflict", "head_changed"] as const) await t.test(reason, async () => {
+    const fixture = await preparedFixture();
+    let calls = 0;
+    Object.assign(fixture.f.platform, { localFolders: {
+      async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
+        return { status: "current", sourceId, folderKey, branch, observedAt: "fixture",
+          commitSha: branch === fixture.plan.baseBranch || calls === 0 ? BASE_COMMIT : "9".repeat(40),
+          treeSha: BASE_TREE };
+      },
+      async integrateWorkspaceSourceCommitV1() {
+        calls++;
+        return { status: "observed", git: { status: "conflict", reason, actualHead: (calls === 1 ? "9" : "8").repeat(40) } };
+      },
+    } });
+    const tool = integrationTool()!;
+    const input = { workstreamId: "ws-1", eventId: fixture.eventId, taskId: "task-dev" };
+    assert.equal((await tool.handler(input, fixture.managerContext, fixture.f.platform) as any).data.integrationStatus, "INTEGRATION_HOLD");
+    assert.equal((await tool.handler(input, fixture.managerContext, fixture.f.platform) as any).data.status, "existing");
+    assert.equal(calls, reason === "head_changed" ? 2 : 1);
+  });
+});
+
+test("the retry does not follow an unconfirmed newer candidate head", async () => {
+  const fixture = await preparedFixture();
+  let calls = 0;
+  Object.assign(fixture.f.platform, { localFolders: {
+    async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
+      return { status: "current", sourceId, folderKey, branch, observedAt: "fixture",
+        commitSha: branch === fixture.plan.baseBranch || calls === 0 ? BASE_COMMIT : "8".repeat(40), treeSha: BASE_TREE };
+    },
+    async integrateWorkspaceSourceCommitV1() {
+      calls++;
+      return { status: "observed", git: { status: "conflict", reason: "head_changed", actualHead: "9".repeat(40) } };
+    },
+  } });
+  const input = { workstreamId: "ws-1", eventId: fixture.eventId, taskId: "task-dev" };
+  const result = await integrationTool()!.handler(input, fixture.managerContext, fixture.f.platform);
+  assert.deepEqual(result.data, { status: "stale", reason: "integration-candidate-changed-after-confirmed-head-race" });
+  assert.equal(calls, 1);
+  const head = await createIntegrationAttemptStore({ workspaceId: W, ...input }, fixture.f.platform.state).current();
+  assert.equal(head?.sequence, 2);
+  assert.deepEqual(head?.revision.git, { status: "conflict", reason: "head_changed", actualHead: "9".repeat(40) });
 });
