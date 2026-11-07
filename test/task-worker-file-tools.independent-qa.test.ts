@@ -15,7 +15,7 @@ const RUN = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const SOURCE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-async function taskFixture() {
+async function taskFixture(sourceBound = true) {
   const f = await fixture(W);
   await dispatchCtoWorkstream(f.params, ctx(), f.platform);
   const delivery = (await f.deliveryStore().current())!.revision;
@@ -69,19 +69,35 @@ async function taskFixture() {
   });
   const files = new Map([["src/feature.ts", "original"]]);
   const effects = { reads: 0, writes: 0, deletes: 0 };
+  function assertSource(sourceId: string, folderKey: string, relativePath: string) {
+    assert.equal(sourceId, SOURCE);
+    assert.equal(folderKey, "project-source");
+    assert.equal(relativePath, "src/feature.ts");
+  }
   Object.assign(f.platform, { localFolders: {
     async status(folderKey: string) { return { folderKey, configured: true, access: "readWrite", readable: true, writable: true, healthy: true }; },
     async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) { return { folderKey, workspaceSourceId, match: "same_root" }; },
-    async readText(_folder: string, relativePath: string) { effects.reads++; return files.get(relativePath); },
-    async writeTextAtomic(_folder: string, relativePath: string, contents: string) { effects.writes++; files.set(relativePath, contents); },
-    async deleteFile(_folder: string, relativePath: string) { effects.deletes++; files.delete(relativePath); },
+    async readText() { assert.fail("Legacy reads must not be used for a Task Source"); },
+    async writeTextAtomic() { assert.fail("Legacy writes must not be used for a Task Source"); },
+    async deleteFile() { assert.fail("Legacy deletes must not be used for a Task Source"); },
+    ...(sourceBound ? {
+      async readWorkspaceSourceTextV1(sourceId: string, folderKey: string, relativePath: string) {
+        assertSource(sourceId, folderKey, relativePath); effects.reads++; return files.get(relativePath);
+      },
+      async writeWorkspaceSourceTextAtomicV1(sourceId: string, folderKey: string, relativePath: string, contents: string) {
+        assertSource(sourceId, folderKey, relativePath); effects.writes++; files.set(relativePath, contents);
+      },
+      async deleteWorkspaceSourceFileV1(sourceId: string, folderKey: string, relativePath: string) {
+        assertSource(sourceId, folderKey, relativePath); effects.deletes++; files.delete(relativePath);
+      },
+    } : {}),
   } });
   return { f, ensureContext, effects, files, packets, record,
     context: { companyId: W, agentId: AGENT, sessionId: SESSION, runId: RUN },
     cancel() { cancellationRequested = true; }, changeReceipt() { receiptRunId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"; } };
 }
 
-test("Workspace-only Worker context prepares without a Core Project and reaches exact registered file handlers", async () => {
+test("Workspace-only Worker context prepares without a Core Project and passes exact Source identity to V1 file handlers", async () => {
   const f = await taskFixture();
   assert.equal(f.ensureContext, undefined);
   const read = await readTaskWorkerFile({ relativePath: "src/feature.ts" }, f.context, f.f.platform);
@@ -92,6 +108,20 @@ test("Workspace-only Worker context prepares without a Core Project and reaches 
   const deleted = await deleteTaskWorkerFile({ relativePath: "src/feature.ts" }, f.context, f.f.platform);
   assert.equal((deleted.data as { status: string }).status, "deleted");
   assert.deepEqual(f.effects, { reads: 1, writes: 1, deletes: 1 });
+});
+
+test("Workspace-only Worker file tools never fall back to legacy alias IO on a Host without V1", async () => {
+  const f = await taskFixture(false);
+  const params = { relativePath: "src/feature.ts" };
+  for (const result of [
+    await readTaskWorkerFile(params, f.context, f.f.platform),
+    await writeTaskWorkerFile({ ...params, contents: "unexpected" }, f.context, f.f.platform),
+    await deleteTaskWorkerFile(params, f.context, f.f.platform),
+  ]) {
+    assert.equal((result.data as { status: string }).status, "unsupported");
+  }
+  assert.equal(f.files.get("src/feature.ts"), "original");
+  assert.deepEqual(f.effects, { reads: 0, writes: 0, deletes: 0 });
 });
 
 test("file handlers reject caller-selected Task identity, unassigned paths and cancelled exact runs before file effects", async () => {
