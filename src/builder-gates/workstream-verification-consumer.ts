@@ -30,9 +30,8 @@ export type ManagerDispatchReceiptRead =
   | Readonly<{ status: "uncertain"; reason: string }>;
 
 /**
- * Proposed Host-bound Manager port; no current Builder binding is registered.
- * dispatch must dedupe requestId. `not-found` is valid only when the Host can
- * authoritatively establish absence; current getRequest(null) alone is uncertain.
+ * Approved integration-task/Runner port. It must dedupe requestId. `not-found`
+ * is valid only when the Host can authoritatively establish absence; null alone is uncertain.
  */
 export type ManagerDispatchPort = Readonly<{
   dispatch(request: ManagerDispatchRequest): Promise<void>;
@@ -235,8 +234,8 @@ function dispatchRequest(input: { workspaceId: string; projectId: string; workst
 }
 
 /**
- * Reserve then dispatch to a future Host-bound Manager port. Acceptance is only
- * a Manager request receipt, never Manager completion or workstream readiness.
+ * Reserve current evidence. Without an approved effect port, persist a pending
+ * no-effect reservation so the event is observable but not marked consumed.
  */
 export async function consumeVerifiedWorkstream(input: Readonly<{
   workspaceId: string; projectId: string; workstreamId: string; eventId: string;
@@ -257,12 +256,37 @@ export async function consumeVerifiedWorkstream(input: Readonly<{
   catch { return outcome("unknown", input.eventId, "manager-dispatch-ledger-read-failed"); }
 
   let entry = ledger.events.find(item => item.eventId === input.eventId);
-  if (entry?.requestId === null) return outcome("uncertain", input.eventId, "legacy-event-has-no-safe-idempotency-key");
-  if (entry && !manager) return outcome(entry.status === "accepted" ? "accepted" : "uncertain",
-    input.eventId, "manager-dispatch-port-unavailable", { requestId: entry.requestId ?? undefined,
-      evidenceDigest: entry.evidenceDigest, ...(entry.receipt ? { receipt: entry.receipt } : {}) });
+  let reservedForDispatch = false;
+  if (entry?.requestId === null) {
+    if (entry.status !== "pending" || entry.dispatchAttempts !== 0) {
+      return outcome("uncertain", input.eventId, "legacy-event-has-no-safe-idempotency-key");
+    }
+    if (!currentSnapshot || !currentDigest) return outcome(current?.status === "stale" ? "stale" : "unknown", input.eventId,
+      current?.status === "stale" ? "verification-event-stale-while-runner-unavailable" : "current-verified-evidence-unavailable",
+      { evidenceDigest: entry.evidenceDigest });
+    if (!manager) return outcome("pending", input.eventId, "approved-integration-runner-unavailable-no-effect-attempted",
+      { evidenceDigest: entry.evidenceDigest });
+    if (entry.evidenceDigest !== currentDigest) return outcome("stale", input.eventId,
+      "verified-evidence-changed-while-integration-runner-unavailable", { evidenceDigest: entry.evidenceDigest });
+    const requestId = `builder-ws-dispatch-v1:${digest(JSON.stringify([input.workspaceId, input.projectId, input.workstreamId, input.eventId, currentDigest]))}`;
+    const promoted: Reservation = { ...entry, requestId, status: "pending", dispatchAttempts: 1 };
+    let reserved;
+    try { reserved = await saveEntry(state, key, raw, ledger, promoted); }
+    catch { return outcome("uncertain", input.eventId, "runner-reservation-promotion-uncertain", { evidenceDigest: entry.evidenceDigest }); }
+    if (!reserved.swapped) return outcome("conflict", input.eventId, "runner-reservation-promotion-conflict");
+    raw = reserved.next as unknown as JsonValue;
+    ledger = reserved.next;
+    entry = promoted;
+    reservedForDispatch = true;
+  }
+  if (entry && !manager) return outcome(entry.status === "accepted" ? "accepted"
+    : entry.status === "pending" ? "pending" : "uncertain",
+  input.eventId, entry.requestId === null ? "approved-integration-runner-unavailable-no-effect-attempted"
+    : entry.status === "pending" ? "integration-request-reconciliation-unavailable" : "manager-dispatch-port-unavailable",
+  { requestId: entry.requestId ?? undefined, evidenceDigest: entry.evidenceDigest,
+    ...(entry.receipt ? { receipt: entry.receipt } : {}) });
 
-  if (entry && manager) {
+  if (entry && manager && !reservedForDispatch) {
     let receipt: ManagerDispatchReceiptRead | null = null;
     try { receipt = validReceiptRead(await manager.readReceipt(entry.requestId!), entry.requestId!); } catch { /* Must not infer absence from a failed read. */ }
     if (!receipt || receipt.status === "uncertain") {
@@ -311,11 +335,21 @@ export async function consumeVerifiedWorkstream(input: Readonly<{
     raw = reserved.next as unknown as JsonValue;
     ledger = reserved.next;
     entry = retried;
-  } else {
+  } else if (!entry) {
     if (!currentSnapshot || !currentDigest) return outcome(current?.status === "stale" ? "stale" : "unknown", input.eventId,
       current?.status === "stale" ? "verification-event-stale" : current?.status === "unknown" ? current.reason : "current-verification-evidence-unavailable");
-    if (!manager) return outcome("unknown", input.eventId, "manager-dispatch-port-unavailable", { evidenceDigest: currentDigest });
     if (ledger.events.length >= MAX_EVENTS) return outcome("unknown", input.eventId, "manager-dispatch-ledger-capacity");
+    if (!manager) {
+      entry = { eventId: input.eventId, evidenceDigest: currentDigest, requestId: null, status: "pending", dispatchAttempts: 0, receipt: null };
+      let reserved;
+      try { reserved = await saveEntry(state, key, raw, ledger, entry); }
+      catch (error) { return outcome(error instanceof RangeError ? "unknown" : "uncertain",
+        input.eventId, error instanceof RangeError ? "manager-dispatch-ledger-capacity" : "unavailable-reservation-cas-uncertain",
+        { evidenceDigest: currentDigest }); }
+      if (!reserved.swapped) return outcome("conflict", input.eventId, "unavailable-reservation-cas-conflict");
+      return outcome("pending", input.eventId, "approved-integration-runner-unavailable-no-effect-attempted",
+        { evidenceDigest: currentDigest });
+    }
     const requestId = `builder-ws-dispatch-v1:${digest(JSON.stringify([input.workspaceId, input.projectId, input.workstreamId, input.eventId, currentDigest]))}`;
     entry = { eventId: input.eventId, evidenceDigest: currentDigest, requestId, status: "pending", dispatchAttempts: 1, receipt: null };
     let reserved;
@@ -344,7 +378,8 @@ export async function consumeVerifiedWorkstream(input: Readonly<{
     return outcome("stale", input.eventId, "evidence-changed-before-dispatch", { requestId: entry!.requestId!, evidenceDigest: entry!.evidenceDigest });
   }
 
-  const request = dispatchRequest(input, normalizeVerifiedWorkstreamSnapshot(immediatelyCurrent.snapshot), entry!.evidenceDigest, entry!.requestId!);
+  if (!entry?.requestId) return outcome("unknown", input.eventId, "integration-task-reservation-id-unavailable");
+  const request = dispatchRequest(input, normalizeVerifiedWorkstreamSnapshot(immediatelyCurrent.snapshot), entry.evidenceDigest, entry.requestId);
   try { await manager!.dispatch(request); } catch { /* Dispatch response loss is resolved only by authoritative readback. */ }
   let readback: ManagerDispatchReceiptRead | null = null;
   try { readback = validReceiptRead(await manager!.readReceipt(entry.requestId!), entry.requestId!); } catch { /* No status inference. */ }

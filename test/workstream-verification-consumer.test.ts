@@ -171,8 +171,18 @@ test("legacy consumed entries without an idempotency key remain uncertain and ar
 
 test("unavailable binding, malformed receipt, and CAS conflict never claim acceptance", async () => {
   const absentPort = fixture();
-  assert.equal((await consumeVerifiedWorkstream(scope, absentPort.state, absentPort.readCurrent)).reason, "manager-dispatch-port-unavailable");
-  assert.equal(absentPort.values.size, 0);
+  const unavailable = await consumeVerifiedWorkstream(scope, absentPort.state, absentPort.readCurrent);
+  assert.equal(unavailable.status, "pending");
+  assert.equal(unavailable.reason, "approved-integration-runner-unavailable-no-effect-attempted");
+  const staged = [...absentPort.values.values()][0] as { events: Array<{ status: string; requestId: string | null; dispatchAttempts: number }> };
+  assert.deepEqual(staged.events[0], { eventId: scope.eventId,
+    evidenceDigest: unavailable.evidenceDigest, requestId: null, status: "pending", dispatchAttempts: 0, receipt: null });
+
+  absentPort.setReceiptReader(requestId => absentPort.accepted(requestId));
+  const resumed = await consumeVerifiedWorkstream(scope, absentPort.state, absentPort.readCurrent, absentPort.manager);
+  assert.equal(resumed.status, "accepted", "a zero-attempt reservation may advance once an approved effect port exists");
+  assert.equal(absentPort.dispatches.length, 1);
+  assert.notEqual(absentPort.dispatches[0]?.requestId, null);
 
   const malformed = fixture();
   malformed.setReceiptReader(requestId => ({ status: "accepted", requestId: `${requestId}-wrong`, receiptId: "receipt", runId: "run" }));
