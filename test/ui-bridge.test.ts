@@ -88,6 +88,7 @@ test("BuilderPage uses the public UI bridge for scoped data and action hooks", a
     assert.match(html, /상담 텍스트 가져오기/);
     assert.ok(hookCalls.some(([hook, args]) => hook === "context" && args.length === 0));
     assert.ok(hookCalls.some(([hook, args]) => hook === "data" && args[0] === "builder.snapshot"));
+    assert.ok(hookCalls.some(([hook, args]) => hook === "data" && args[0] === "builder.delivery-documents"));
     assert.ok(hookCalls.some(([hook, args]) => hook === "action" && args[0] === "builder.import-consultation"));
     assert.equal(actionCalls, 0, "SSR wiring must not execute a user action");
 

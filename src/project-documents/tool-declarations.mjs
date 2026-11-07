@@ -2,7 +2,7 @@ const projectId = { type: "string", minLength: 1, maxLength: 160 };
 
 export const PROPOSE_DELIVERY_DOCUMENTS_TOOL = Object.freeze({
   name: "builder.propose-delivery-documents", displayName: "Store delivery document drafts",
-  description: "Main only. Store installation and user guides as unapproved drafts in the existing document Revision journal. The server pins the current Baseline, formal UI, integration plan and plan-base Source commit/tree. These are not a Final Packet, integrated candidate, QA result, G7 attestation or user delivery approval. Read the current head before changing it; reconcile uncertain outcomes without generating another revision.",
+  description: "Main only. Store installation and user guides as unapproved drafts in the existing document Revision journal. The server pins the current Baseline, formal UI, integration plan and authorized Source commit/tree. It uses the current candidate when present and the plan base only before the candidate exists. A draft does not prove integration, QA, G7 or user approval. Read the current head before changing it; reconcile uncertain outcomes without generating another revision.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["projectId", "expectedBaseRevisionId", "documents"], properties: {
       projectId, expectedBaseRevisionId: { type: ["string", "null"], minLength: 1, maxLength: 200 },

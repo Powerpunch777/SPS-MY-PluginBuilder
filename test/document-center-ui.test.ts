@@ -140,6 +140,21 @@ test("browser filters title and body, sorts by recorded time, preserves selectio
     assert.equal(await embedded.evaluate(element => element.scrollWidth <= element.clientWidth), true);
     assert.equal(await page.locator(".sps-dc-layout").evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length), 1);
     assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
+
+    const draft: BuilderDocument = { id: "delivery-document:guide", title: "docs/install.md", revisionId: "guide-r1",
+      text: "Install the candidate in the supported Host.", createdAt: "2026-11-07T10:20:30.125Z",
+      category: "delivery", sourceKind: "delivery-document", approvalStatus: "unapproved", freshnessStatus: "stale",
+      bodyAvailable: true, sourcePins: [{ sourceId: "delivery-draft", revisionId: "delivery-bundle-r1", sha256: sha }] };
+    await page.evaluate(documents => (window as unknown as { mountDocuments: (value: unknown) => void }).mountDocuments(documents), [...fixtures, draft]);
+    await page.getByRole("combobox", { name: "분류", exact: true }).selectOption("delivery");
+    await list.getByRole("button", { name: /docs\/install\.md/u }).click();
+    const detail = page.getByRole("region", { name: "선택한 문서" });
+    for (const label of ["납품 문서 초안", "미승인", "이전 버전", "delivery-bundle-r1", sha, draft.text]) {
+      assert.ok((await detail.innerText()).includes(label), label);
+    }
+    assert.equal(await list.getByRole("button").count(), 1);
+    await page.setViewportSize({ width: 375, height: 812 });
+    assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
   } finally {
     await browser?.close();
     await rm(temporary, { recursive: true, force: true });

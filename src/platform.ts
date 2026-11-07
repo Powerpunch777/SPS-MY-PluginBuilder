@@ -855,7 +855,7 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => {
         const run = parseLeadToolContext(context);
         return serialize(run.companyId, async () => ({
-          content: "Stored Main delivery guide drafts only. Exact plan-base source pins are not an integrated delivery candidate, QA, G7 or user approval.",
+          content: "Main delivery guide draft result only. Exact Source pins do not establish integration, QA, G7 or user approval.",
           data: await proposeDeliveryDocuments(params, run, platform) as unknown as JsonValue,
         }));
       } },

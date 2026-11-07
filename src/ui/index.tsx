@@ -19,6 +19,7 @@ import { parseLeadConversationPage } from "../lead-conversations.ts";
 import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
 import { projectDesignBaseline } from "../domain/design-baseline-view.ts";
 import { projectBaselineDocument } from "../domain/project-documents-view.ts";
+import { projectDeliveryDocuments } from "../domain/delivery-documents-view.ts";
 import { projectTechnologyDecisions } from "../domain/technology-decisions-view.ts";
 import { projectReuseFirstCandidates } from "../domain/reuse-first-view.ts";
 import { projectWorkstreams } from "../domain/workstreams-view.ts";
@@ -39,6 +40,7 @@ export function BuilderPage() {
   const design = usePluginData<unknown>("builder.design-draft", { projectId: context.companyId ?? "" });
   const designBaseline = usePluginData<unknown>("builder.design-baseline", { projectId: context.companyId ?? "" });
   const baselineDocument = usePluginData<unknown>("builder.baseline-document");
+  const deliveryDocuments = usePluginData<unknown>("builder.delivery-documents");
   const uiContracts = usePluginData<unknown>("builder.ui-contracts");
   const approveUiProposal = usePluginAction<ApproveUiProposalInput, unknown>("builder.approve-ui-proposal");
   const retryUiNotification = usePluginAction<{ approvalRevisionId: string }, unknown>("builder.retry-ui-approval-notification");
@@ -146,11 +148,24 @@ export function BuilderPage() {
     try { return { snapshot: projectReuseFirstCandidates(workstreamsView.snapshot, reuseCandidates.data), error: null }; }
     catch { return { snapshot: workstreamsView.snapshot, error: "재사용 후보의 출처를 확인하지 못했습니다." }; }
   }, [workstreamsView, reuseCandidates.data, reuseCandidates.loading, reuseCandidates.error]);
-  const documentsView = useMemo(() => {
+  const baselineDocumentView = useMemo(() => {
     if (!reuseView.snapshot || baselineDocument.loading || baselineDocument.error) return { snapshot: reuseView.snapshot, error: null };
     try { return { snapshot: projectBaselineDocument(reuseView.snapshot, baselineDocument.data), error: null }; }
     catch { return { snapshot: reuseView.snapshot, error: "기준선 문서 본문을 확인하지 못했습니다. 새로고침해 주세요." }; }
   }, [reuseView, baselineDocument.data, baselineDocument.loading, baselineDocument.error]);
+  const documentsView = useMemo(() => {
+    const { snapshot, error } = baselineDocumentView;
+    if (!snapshot || deliveryDocuments.loading || deliveryDocuments.data == null && !deliveryDocuments.error) return baselineDocumentView;
+    const readError = "납품 문서 초안을 확인하지 못했습니다.";
+    if (deliveryDocuments.error) return { snapshot, error: error ?? readError };
+    try {
+      const documents = projectDeliveryDocuments(snapshot.workspaceId, deliveryDocuments.data);
+      const ids = new Set(documents.map(document => document.id));
+      return { snapshot: { ...snapshot, documents: [...snapshot.documents.filter(document => !ids.has(document.id)), ...documents] }, error };
+    } catch {
+      return { snapshot, error: error ?? readError };
+    }
+  }, [baselineDocumentView, deliveryDocuments.data, deliveryDocuments.loading, deliveryDocuments.error]);
   const ctoQuestionsView = useMemo(() => {
     if (!context.companyId || !documentsView.snapshot) return { snapshot: documentsView.snapshot, error: null };
     const decisionBase = { ...documentsView.snapshot, questions: [] };
@@ -175,7 +190,7 @@ export function BuilderPage() {
       if (document.visibilityState === "hidden") { timer = setTimeout(() => void poll(), 2_000); return; }
       try {
         await refreshConversation({ channel });
-        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); firstReview.refresh(); technology.refresh(); reuseCandidates.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
+        if (!disposed && liveScope.current === observedScope) { conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); deliveryDocuments.refresh(); uiContracts.refresh(); firstReview.refresh(); technology.refresh(); reuseCandidates.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }
       } catch {
         // Polling only observes the exact saved request. Stop on error; the
         // explicit button remains available and no send is retried here.
@@ -186,7 +201,7 @@ export function BuilderPage() {
     timer = setTimeout(() => void poll(), 2_000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [conversationPage?.active?.requestId, conversationPage?.active?.runId, conversationPage?.active?.state,
-    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, baselineDocument.refresh, uiContracts.refresh, firstReview.refresh, technology.refresh, reuseCandidates.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
+    conversation.error, scope, channel, refreshConversation, conversation.refresh, design.refresh, designBaseline.refresh, baselineDocument.refresh, deliveryDocuments.refresh, uiContracts.refresh, firstReview.refresh, technology.refresh, reuseCandidates.refresh, workstreams.refresh, memory.refresh, projectCtos.refresh, ctoUserDecisions.refresh]);
   if (!current || !context.companyId) return <section role="status">Select an SPS Workspace to open Builder.</section>;
   const workspaceId = context.companyId;
   let firstDesign: FirstDesignReviewPanelView = { status: firstReview.loading ? "loading" : "error" };
@@ -233,9 +248,9 @@ export function BuilderPage() {
             const result = await approveFirstReview(input);
             if (result?.status !== "published" && result?.status !== "conflict") throw new Error("First-design approval was not confirmed.");
             return result;
-          } finally { firstReview.refresh(); designBaseline.refresh(); }
+          } finally { firstReview.refresh(); designBaseline.refresh(); deliveryDocuments.refresh(); }
         }} /> : undefined}
-    documentsLoading={state.loading || design.loading || baselineDocument.loading || designBaseline.loading || technology.loading || reuseCandidates.loading || workstreams.loading || memory.loading}
+    documentsLoading={state.loading || design.loading || baselineDocument.loading || deliveryDocuments.loading || designBaseline.loading || technology.loading || reuseCandidates.loading || workstreams.loading || memory.loading}
     documentsError={documentsView.error ?? reuseView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? draftView.error
       ?? (state.error || baselineDocument.error || design.error || memory.error ? "문서를 불러오지 못했습니다." : null)}
     finalReview={<IntegrationReviewPanel key={reviewRequest?.eventId ?? workspaceId} view={review}
@@ -287,7 +302,7 @@ export function BuilderPage() {
       try {
         const result = await refreshConversation({ channel });
         if (result.refreshed !== true) throw new Error("Unexpected refresh result.");
-      } finally { conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); }
+      } finally { conversation.refresh(); lead.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); deliveryDocuments.refresh(); uiContracts.refresh(); technology.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); }
     } : undefined}
     onCancelLeadMessage={conversationPage?.active?.runId ? async () => {
       try { await cancelMessage({ channel }); } finally { conversation.refresh(); }
@@ -364,8 +379,8 @@ export function BuilderPage() {
         if (result.saved !== true || result.executionStarted !== false || result.sessionsReady !== true) throw new Error("Unexpected Lead session preparation result.");
       } finally { sessions.refresh(); conversation.refresh(); }
     }}
-    loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? documentsView.error ?? ctoQuestionsView.error ?? (baselineDocument.error ? "기준선 문서를 불러오지 못했습니다." : null) ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
-    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); integrationManager.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); uiContracts.refresh(); finalReview.refresh(); firstReview.refresh(); technology.refresh(); reuseCandidates.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
+    loading={state.loading || projectCtos.loading || ctoUserDecisions.loading} error={current.error ?? memoryView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? baselineDocumentView.error ?? ctoQuestionsView.error ?? (baselineDocument.error ? "기준선 문서를 불러오지 못했습니다." : null) ?? (projectCtos.error ? "프로젝트 CTO 목록을 불러오지 못했습니다." : null) ?? (memory.error ? "Lead 공유 기억을 불러오지 못했습니다." : null) ?? (state.error ? "Builder data is unavailable. Refresh to try again." : null)}
+    onRefresh={() => { state.refresh(); productSelection.refresh(); lead.refresh(); sessions.refresh(); integrationManager.refresh(); conversation.refresh(); design.refresh(); designBaseline.refresh(); baselineDocument.refresh(); deliveryDocuments.refresh(); uiContracts.refresh(); finalReview.refresh(); firstReview.refresh(); technology.refresh(); reuseCandidates.refresh(); workstreams.refresh(); memory.refresh(); projectCtos.refresh(); ctoUserDecisions.refresh(); }} onImportConsultation={async text => {
       if (state.loading || state.error || current.error) throw new Error("Workspace data is not ready.");
       if (pending.current?.workspaceId !== workspaceId || pending.current.text !== text) {
         pending.current = { workspaceId, text, requestId: crypto.randomUUID() };
