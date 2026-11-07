@@ -49,6 +49,7 @@ export function BuilderPage() {
   const approveFirstReview = usePluginAction<FirstDesignReviewApprovalInput, { status: string }>("builder.approve-first-design-review");
   const decideFinalReview = usePluginAction<{ eventId: string; requestId: string; expectedBaseRevisionId: string;
     action: "approve" | "request-changes" | "hold"; reason?: string }, { status: string }>("builder.final-review-decision");
+  const finalDecisionAttempt = useRef<{ key: string; eventId: string } | null>(null);
   const technology = usePluginData<unknown>("builder.technology-decisions", { projectId: context.companyId ?? "" });
   const reuseCandidates = usePluginData<unknown>("builder.reuse-candidates");
   const workstreams = usePluginData<unknown>("builder.workstreams", { projectId: context.companyId ?? "" });
@@ -213,8 +214,11 @@ export function BuilderPage() {
   const reviewRequest = review.status === "ready" && !review.decision ? review.approvalRequest : null;
   async function respondToFinalReview(action: "approve" | "request-changes" | "hold", reason?: string) {
     if (!reviewRequest || reviewError) throw new Error("The current approval request is not available.");
+    const key = JSON.stringify([workspaceId, reviewRequest.requestId, reviewRequest.eventId, action, reason ?? null]);
+    const attempt = finalDecisionAttempt.current?.key === key ? finalDecisionAttempt.current : { key, eventId: crypto.randomUUID() };
+    finalDecisionAttempt.current = attempt;
     try {
-      const result = await decideFinalReview({ eventId: crypto.randomUUID(), requestId: reviewRequest.requestId,
+      const result = await decideFinalReview({ eventId: attempt.eventId, requestId: reviewRequest.requestId,
         expectedBaseRevisionId: reviewRequest.eventId, action, ...(reason === undefined ? {} : { reason }) });
       if (result?.status !== "recorded") throw new Error("Final review decision was not confirmed.");
     } finally { finalReview.refresh(); }

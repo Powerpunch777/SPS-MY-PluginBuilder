@@ -242,8 +242,17 @@ test("registered review exposes no bytes or approval eligibility from historical
   f.setLeadSelectionRevision(2);
   await assert.rejects(async () => action({ ...decision, action: "hold", reason: "Wait" }, ctx), /receipts could not be verified/);
   f.setLeadSelectionRevision(1);
-  const recorded = await action({ ...decision, action: "hold", reason: "Wait" }, ctx) as { status: string };
+  const hold = { ...decision, action: "hold", reason: "Wait" };
+  const recorded = await action(hold, ctx) as { status: string; sequence: number };
   assert.equal(recorded.status, "recorded");
+  f.setLeadSelectionRevision(2);
+  const restarted = createBuilderPlatform().actions.find(item => item.key === "builder.final-review-decision")!.handler;
+  const replay = await restarted(hold, ctx) as { status: string; sequence: number; replayed: boolean };
+  assert.equal(replay.status, "recorded");
+  assert.equal(replay.sequence, recorded.sequence);
+  assert.equal(replay.replayed, true);
+  await assert.rejects(async () => restarted({ ...hold, reason: "Different" }, ctx), /different immutable content/);
+  await assert.rejects(async () => restarted({ ...hold, eventId: "new-id" }, ctx), /receipts could not be verified/);
 });
 
 test("a changed delivery guide needs a new packet approval without erasing the prior decision", async () => {

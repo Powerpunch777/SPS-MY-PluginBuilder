@@ -1151,12 +1151,14 @@ export function createBuilderPlatform() {
       const input = exactToolRecord(userActionInput(params, context), ["eventId", "requestId", "expectedBaseRevisionId", "action"], ["reason"]);
       const companyId = workspaceId(context.companyId);
       return serialize(companyId, async () => {
-        const view = await finalReviewView(companyId, context);
-        if (view.status !== "ready" || !view.mainReceipt || !view.integrationReviewReceipt || view.decision
-          || !view.approvalRequest || view.approvalRequest.requestId !== input.requestId
-          || view.approvalRequest.eventId !== input.expectedBaseRevisionId) throw new Error("The current final review request and its authenticated run receipts could not be verified.");
-        if (input.action === "approve" && view.approvalEligibility.status !== "eligible") throw new Error("The current Final Packet is not eligible for user approval.");
-        return await createFinalPacketStore(companyId, companyId, context.state).respond(input, context) as unknown as JsonValue;
+        const store = createFinalPacketStore(companyId, companyId, context.state);
+        return await store.respond(input, context, async () => {
+          const view = await finalReviewView(companyId, context);
+          if (view.status !== "ready" || !view.mainReceipt || !view.integrationReviewReceipt || view.decision
+            || !view.approvalRequest || view.approvalRequest.requestId !== input.requestId
+            || view.approvalRequest.eventId !== input.expectedBaseRevisionId) throw new Error("The current final review request and its authenticated run receipts could not be verified.");
+          if (input.action === "approve" && view.approvalEligibility.status !== "eligible") throw new Error("The current Final Packet is not eligible for user approval.");
+        }) as unknown as JsonValue;
       });
     } }, { key: "builder.import-consultation", handler: async (params, context) => {
       // Core includes its authorized companyId in action parameters. It is
