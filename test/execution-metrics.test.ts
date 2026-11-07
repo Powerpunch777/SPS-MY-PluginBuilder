@@ -194,6 +194,30 @@ test("a Worker record not bound to the exact current Task Packet is excluded", a
   if (result.status === "ready") assert.deepEqual(result.runs.map(run => run.role), ["qa"]);
 });
 
+test("later Task observation does not reread an unrelated acceptance until the final consistency check", async () => {
+  for (const drift of [false, true]) {
+    const { f } = await setupVerifiedWorkstreamPlatform();
+    const address = [...f.values.keys()].find(value => JSON.parse(value).stateKey?.startsWith("task-source-acceptance.v1."));
+    assert.ok(address);
+    const sessions = f.platform.agents.sessions;
+    const originalRequest = sessions.getRequest.bind(sessions);
+    const originalGet = f.platform.state.get.bind(f.platform.state);
+    let requests = 0, priorAcceptanceReadsDuringQa = 0;
+    sessions.getRequest = async (...args) => {
+      if (++requests === 2 && drift) f.values.delete(address);
+      return originalRequest(...args);
+    };
+    f.platform.state.get = async input => {
+      if (requests >= 2 && mapKey(input) === address) priorAcceptanceReadsDuringQa++;
+      return originalGet(input);
+    };
+    const result = await readBuilderExecutionMetrics(W, f.platform);
+    assert.equal(requests, 2, "fixture contains one Worker and one QA request");
+    assert.equal(priorAcceptanceReadsDuringQa, 1, "only the final check reads the other Task's acceptance");
+    assert.equal(result.status, drift ? "unknown" : "ready");
+  }
+});
+
 test("second Run read must agree with the exact observed Run identity and status", async () => {
   const { f } = await setupVerifiedWorkstreamPlatform();
   const sessions = f.platform.agents.sessions, original = sessions.getRun.bind(sessions);

@@ -105,30 +105,34 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
   | Readonly<{ status: "unknown"; reason: string }>> {
   if (!UUID.test(workspaceId)) throw new TypeError("Execution metrics require the current Workspace.");
   const heads = new Map<string, { key: SpsStateKey; value: JsonValue | null }>();
-  const tracked = { ...platform, state: { ...platform.state, async get(key: SpsStateKey) {
+  const track = (scope: Set<string>) => ({ ...platform, state: { ...platform.state, async get(key: SpsStateKey) {
     if (key.scopeKind !== "company" || key.scopeId !== workspaceId) throw new Error("Metrics escaped their Workspace.");
     const value = await platform.state.get(key);
     if (!key.stateKey.includes("-revision.v1.")) {
       const identity = JSON.stringify([key.namespace ?? "default", key.stateKey]), previous = heads.get(identity);
       if (previous && JSON.stringify(previous.value) !== JSON.stringify(value)) throw new Error("Metrics source changed.");
-      heads.set(identity, { key, value: structuredClone(value) });
+      if (!previous) heads.set(identity, { key, value: structuredClone(value) });
+      scope.add(identity);
     }
     return value;
-  } } };
-  const check = async () => {
-    for (const { key, value } of heads.values()) if (JSON.stringify(await platform.state.get(key)) !== JSON.stringify(value)) {
-      throw new Error("Metrics source changed.");
+  } } });
+  const check = async (scope: Iterable<string> = heads.keys()) => {
+    for (const identity of scope) {
+      const { key, value } = heads.get(identity)!;
+      if (JSON.stringify(await platform.state.get(key)) !== JSON.stringify(value)) throw new Error("Metrics source changed.");
     }
   };
   try {
+    const sharedScope = new Set<string>(), tracked = track(sharedScope);
     const board = await readWorkstreams(workspaceId, workspaceId, tracked), ctos = await readProjectCtos(workspaceId, workspaceId, tracked);
     if ((board?.revision.workstreams.length ?? 0) > 64 || ctos.ctos.length > 64) return { status: "unknown", reason: "metrics-scope-over-bound" };
     const runs: WorkerExecutionMetric[] = [], seenRuns = new Set<string>();
     for (const workstream of board?.revision.workstreams ?? []) {
       const ctoId = workstream.spec.assignedCtoId, workstreamId = workstream.spec.id;
       if (!ctos.ctos.some(cto => cto.ctoId === ctoId && cto.status !== "RETIRED")) throw new Error("Metrics CTO is not current.");
-      const packets = await createTaskPacketStore(workspaceId, workspaceId, ctoId, workstreamId, tracked.state).current();
-      const registry = parseTaskWorkerRegistry(await tracked.state.get({ scopeKind: "company", scopeId: workspaceId,
+      const workstreamScope = new Set(sharedScope), workstreamPlatform = track(workstreamScope);
+      const packets = await createTaskPacketStore(workspaceId, workspaceId, ctoId, workstreamId, workstreamPlatform.state).current();
+      const registry = parseTaskWorkerRegistry(await workstreamPlatform.state.get({ scopeKind: "company", scopeId: workspaceId,
         namespace: "sonpark.my-builder", stateKey: taskWorkerRegistryKey(workspaceId, ctoId) }) ?? { schemaVersion: 1,
         workspaceId, projectId: workspaceId, ctoId, revision: 0, records: [] }, workspaceId, workspaceId, ctoId);
       for (const worker of registry.records.filter(item => item.workstreamId === workstreamId)) {
@@ -141,10 +145,12 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
           currentPackets: packets!.revision.packets, worker }); }
         catch { continue; }
         if (runs.length >= MAX_RUNS) return { status: "unknown", reason: "metrics-run-inventory-over-bound" };
+        const rowScope = new Set(workstreamScope), rowPlatform = track(rowScope);
+        const assertCurrent = () => check(rowScope);
         const commitAcceptanceMs = worker.role === "worker" ? await currentCommitAcceptanceMs({ workspaceId,
           projectId: workspaceId, ctoId, workstreamId, packet, worker, packets: packets!.revision.packets,
-          platform: tracked, assertCurrent: check }) : null;
-        const observation = await readTaskWorkerSessionRun({ platform: tracked, binding, assertCurrent: check });
+          platform: rowPlatform, assertCurrent }) : null;
+        const observation = await readTaskWorkerSessionRun({ platform: rowPlatform, binding, assertCurrent });
         const base = { ctoId, workstreamId, taskId: worker.taskId, role: worker.role, packetRevision: worker.packetRevision,
           requestId: observation.requestId, runId: observation.runId, commitAcceptanceMs };
         if (observation.status !== "observed") {
@@ -153,7 +159,7 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
         }
         if (seenRuns.has(observation.runId)) throw new Error("One Run is bound to multiple Worker records.");
         seenRuns.add(observation.runId);
-        const current = await tracked.agents.sessions.getRun(worker.sessionId, workspaceId, observation.runId);
+        const current = await rowPlatform.agents.sessions.getRun(worker.sessionId, workspaceId, observation.runId);
         if (current.runId !== observation.runId || current.status !== observation.runStatus) throw new Error("Run changed during metrics read.");
         const timingObservedAt = new Date().toISOString();
         const timingField = Object.getOwnPropertyDescriptor(current, "timing");
@@ -165,6 +171,7 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
       }
     }
     const observedAt = new Date().toISOString();
+    // Recheck every observed mutable record once before returning the full projection.
     await check();
     const executions = runs.filter(run => run.executionMs !== null), queues = runs.filter(run => run.queueMs !== null);
     const acceptedCommits = runs.filter(run => run.commitAcceptanceMs !== null);
