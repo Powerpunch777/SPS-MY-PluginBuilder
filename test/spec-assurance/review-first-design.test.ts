@@ -13,6 +13,7 @@ import { createCurrentBaselineAssuranceProvider } from "../../src/spec-assurance
 import { createSpecAssuranceConsumer } from "../../src/spec-assurance/evaluator.ts";
 import { PROPOSE_FIRST_DESIGN_REVIEW_TOOL } from "../../src/spec-assurance/tool-declarations.mjs";
 import { createBuilderPlatform } from "../../src/platform.ts";
+import { hasUndecidedTaskRequirement } from "../../src/builder-gates/task-decision-scope.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const PROJECT = WORKSPACE;
@@ -182,6 +183,42 @@ test("design-model changes create a different proposal and invalid AC quotes nev
   await assert.rejects(proposeFirstDesignReview({ ...input, designModel: { ...input.designModel,
     coverageTargets: [{ targetKind: "requirement", targetId: "forged-requirement", ruleIds: [] }] } }, f.runContext, f.platform),
   /exact in-scope/);
+});
+
+test("current approved provider binds UNDECIDED only to the Task's exact requirement scope", async () => {
+  const f = fixture(); await f.published;
+  const input = modelProposal(f);
+  input.designModel.itemDecisions[0] = { ...input.designModel.itemDecisions[0]!, status: "UNDECIDED",
+    reason: "The approved model explicitly leaves this requirement unresolved." };
+  const proposal = await proposeFirstDesignReview(input, f.runContext, f.platform);
+  if (!proposal.revision) throw new Error("UNDECIDED model proposal was not published.");
+  const approved = await approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: proposal.revision.revisionId }, f.context);
+  if (!("revision" in approved)) throw new Error("Exact UNDECIDED model approval was not published.");
+  const binding = await assertCurrentFirstDesignApproval({ projectId: PROJECT, approvedRevisionId: approved.revision.revisionId }, f.runContext, f.platform);
+  assert(binding);
+  const draft = (await f.drafts.current())!.revision;
+  const specification = { ...approved.revision.draft.specification, projectId: PROJECT, revisionId: "undecided-approved-spec",
+    approvalEvidenceRef: binding.reviewReference };
+  const baseline = await createDesignBaselineStore(WORKSPACE, PROJECT, f.state).publish({ expectedBaseRevisionId: null,
+    revision: { projectId: PROJECT, revisionId: "undecided-approved-baseline", sourceDraftRevisionId: approved.revision.draftRevisionId,
+      draftDigest: digest(JSON.stringify(draft)), createdAt: "2026-11-06T00:02:00.000Z",
+      author: { agentId: AGENT, sessionId: SESSION, runId: RUN, selectionRevision: 1 },
+      userDecision: { sourceId: binding.reviewReference, sourceSha256: binding.bundleDigest,
+        interpretation: "Exact model and design approved with an explicit unresolved requirement." },
+      specification, graph: { ...approved.revision.draft.graph, graphRevisionId: "undecided-approved-graph",
+        approvedSpecRevisionId: specification.revisionId } } });
+  assert.equal(baseline.status, "published");
+  const sessions = { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT,
+    sessions: { main: SESSION, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null } };
+  const provider = createCurrentBaselineAssuranceProvider({ workspaceId: WORKSPACE, projectId: PROJECT, sessions, platform: f.platform });
+  const identity = { workspaceId: WORKSPACE, projectId: PROJECT, specRevisionId: specification.revisionId,
+    specDigest: digest(JSON.stringify(specification)) };
+  const scoped = await provider({ identity, requirementIds: ["REQ-1"] });
+  const unrelated = await provider({ identity, requirementIds: ["REQ-OTHER"] });
+  assert.equal(scoped?.itemDecisions?.[0]?.status, "UNDECIDED");
+  assert.equal(hasUndecidedTaskRequirement(["REQ-1"], scoped?.itemDecisions), true);
+  assert.deepEqual(unrelated?.itemDecisions, []);
+  assert.equal(hasUndecidedTaskRequirement(["REQ-OTHER"], unrelated?.itemDecisions), false);
 });
 
 test("authenticated first-design flow stores proposal and exact-user attestation before any Baseline", async () => {

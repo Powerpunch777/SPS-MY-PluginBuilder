@@ -15,6 +15,7 @@ import type { EvidencePin } from "./workstream-verification-consumer.ts";
 import type { GateProofScope, GateProtectedTaskQaProof, GateSourceInventory } from "./workstream-verification.ts";
 import { createWorkstreamVerificationPublication, type AuthorityReader, type GuardBinding } from "./workstream-verification-publication.ts";
 import { readCurrentProtectedTaskQaEvidence } from "./protected-task-qa-evidence.ts";
+import { hasUndecidedTaskRequirement } from "./task-decision-scope.ts";
 
 export const VERIFY_WORKSTREAM_TOOL_NAME = "builder.verify-workstream";
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -74,6 +75,7 @@ export function createCurrentWorkstreamVerificationAuthority(input: Readonly<{
       if (!development.length || development.length > 128) return { status: "unavailable", reason: "verification-task-inventory-out-of-bound" };
       const proofs = new Map<string, GateProtectedTaskQaProof>();
       const inventories = new Map<string, GateSourceInventory>();
+      const decisionBlockedTasks = new Set<string>();
       const sourceBindings = new Map<string, string>();
       const checks: Array<() => Promise<void>> = [];
       const inputs = [];
@@ -132,6 +134,10 @@ export function createCurrentWorkstreamVerificationAuthority(input: Readonly<{
           specRevisionId: baseline.revision.specification.revisionId, specDigest: digest(baseline.revision.specification) },
         requirementIds: task.packet.requirementIds });
         if (!material) return { status: "unavailable", reason: "verification-current-d3-material-unavailable" };
+        if (hasUndecidedTaskRequirement(task.packet.requirementIds, material.itemDecisions)) {
+          decisionBlockedTasks.add(task.packet.taskId);
+          continue;
+        }
         proofs.set(task.packet.taskId, proof);
         inventories.set(task.packet.taskId, { provenance: { adapter: "builder.workstream-source-inventory.v1", operation: "readCurrent" },
           scope: taskScope, complete: true, pins: content.map(row => row.pin), heads: content.map(({ pin, sequence }) => ({
@@ -141,9 +147,13 @@ export function createCurrentWorkstreamVerificationAuthority(input: Readonly<{
         workstream, taskRecord: task, coverage: evaluateSpecCoverage(material.coverageInput) });
       }
       return { status: "available", taskBoard: board.revision, inputs, readers: {
-        sourceInventory: async scope => inventories.has(scope.taskId) ? { status: "available", value: inventories.get(scope.taskId)! }
+        sourceInventory: async scope => decisionBlockedTasks.has(scope.taskId)
+          ? { status: "unknown", reason: "task-requirement-has-approved-undecided-item-decision" }
+          : inventories.has(scope.taskId) ? { status: "available", value: inventories.get(scope.taskId)! }
           : { status: "unknown", reason: "verification-task-inventory-missing" },
-        runtimeProof: async scope => proofs.has(scope.taskId) ? { status: "available", value: proofs.get(scope.taskId)! }
+        runtimeProof: async scope => decisionBlockedTasks.has(scope.taskId)
+          ? { status: "unknown", reason: "task-requirement-has-approved-undecided-item-decision" }
+          : proofs.has(scope.taskId) ? { status: "available", value: proofs.get(scope.taskId)! }
           : { status: "unknown", reason: "verification-task-runtime-missing" }, baselineBodySource: documents,
       }, async bindGuards(verified) {
         await authority.check();

@@ -5,6 +5,7 @@ import { parseTaskPacketRecord, taskPacketRecordDigest, type TaskPacketRecord } 
 import { exactToolRecord, parseLeadToolContext } from "./lead-tool-authority.ts";
 import { parseLeadAgentBinding } from "./domain/lead-agent.ts";
 import { parseLeadSessions } from "./domain/lead-sessions.ts";
+import { readDesignBaseline } from "./design-baseline-tools.ts";
 import { integrationManagerSessionStateKey, legacyIntegrationManagerSessionStateKey,
   integrationManagerStateKey, parseIntegrationManagerBinding, parseIntegrationManagerSessionBinding } from "./domain/integration-manager.ts";
 import { readProjectCtos } from "./project-cto-tools.ts";
@@ -18,6 +19,8 @@ import { deriveTaskWorkerFileBinding, taskWorkerRequestId, dispatchTaskWorkerSes
   type TaskWorkerFileBinding } from "./task-worker-runtime.ts";
 import { submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
 import { assertSessionExecutionPolicySupport } from "./session-execution-policy.ts";
+import { createCurrentBaselineAssuranceProvider } from "./spec-assurance/current-baseline-provider.ts";
+import { hasUndecidedTaskRequirement } from "./builder-gates/task-decision-scope.ts";
 
 const asJson = (value: unknown) => value as JsonValue;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -86,6 +89,28 @@ function parseTaskWorkerToolContext(value: unknown): TaskWorkerToolContext {
 
 function taskRuntimeStateKey(companyId: string, stateKey: string) {
   return { scopeKind: "company" as const, scopeId: companyId, namespace: "sonpark.my-builder", stateKey };
+}
+
+async function assertTaskDecisionScopeCurrent(context: TaskWorkerToolContext, packet: TaskPacketRecord,
+  platform: SpsPlatformInvocationContext) {
+  const baseline = await readDesignBaseline(context.companyId, context.projectId, platform);
+  if (!baseline) throw new Error("Current approved Baseline is unavailable for Task decision validation.");
+  const lead = parseLeadAgentBinding(await platform.state.get(taskRuntimeStateKey(context.companyId, "lead-agent.v1")), context.companyId);
+  if (!lead.selectedAgentId || lead.revision < 1) throw new Error("Current Lead selection is unavailable for Task decision validation.");
+  const sessions = parseLeadSessions(await platform.state.get(taskRuntimeStateKey(context.companyId,
+    `lead-sessions.v1.${lead.revision}`)), context.companyId);
+  if (sessions.agentId !== lead.selectedAgentId || sessions.selectionRevision !== lead.revision || !sessions.sessions.main) {
+    throw new Error("Current Main session binding is unavailable for Task decision validation.");
+  }
+  const provider = createCurrentBaselineAssuranceProvider({ workspaceId: context.companyId, projectId: context.projectId,
+    sessions, platform });
+  const material = await provider({ identity: { workspaceId: context.companyId, projectId: context.projectId,
+    specRevisionId: baseline.revision.specification.revisionId,
+    specDigest: hash(baseline.revision.specification) }, requirementIds: packet.packet.requirementIds });
+  if (!material) throw new Error("Current approved decision model is unavailable for Task decision validation.");
+  if (hasUndecidedTaskRequirement(packet.packet.requirementIds, material.itemDecisions)) {
+    throw new Error("Task is blocked by an explicitly UNDECIDED approved requirement; unrelated Tasks remain eligible.");
+  }
 }
 
 function currentActiveRun(value: unknown, context: TaskWorkerToolContext) {
@@ -351,6 +376,7 @@ export async function dispatchPreparedTaskWorker(params: unknown, runContext: un
     const currentWorkstreams = await readWorkstreams(context.companyId, projectId, platform);
     const currentWorkstream = currentWorkstreams?.revision.workstreams.find(item => item.spec.id === workstreamId);
     if (!currentWorkstream) throw new Error("Dispatch requires the current Workstream source record.");
+    await assertTaskDecisionScopeCurrent({ ...context, projectId }, packet, platform);
     const g5Effect = await assertCurrentCtoTaskG5Effect({ workspaceId: context.companyId, projectId, ctoId, workstreamId,
       taskId, workstream: currentWorkstream, taskRecord: packet, assertCurrent: authority.check,
       state: platform.state as typeof platform.state & RevisionState });
