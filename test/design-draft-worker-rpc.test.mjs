@@ -334,7 +334,8 @@ test("built Worker routes design sources to an unapproved draft and back without
       params: { key: "builder.design-baseline", companyId: workspaceA, params: { projectId: workspaceA } } });
     const baselineDto = await serviceUntil(16);
     assert.equal(baselineDto.error, undefined, JSON.stringify(baselineDto.error));
-    assert.deepEqual(baselineDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 1, baseline });
+    assert.deepEqual(baselineDto.result, { workspaceId: workspaceA, projectId: workspaceA, sequence: 1, baseline,
+      baselineDigest: sha256(JSON.stringify(baseline)) });
     invoke(17, "builder.read-solution", { projectId: workspaceA });
     const canonicalGraph = await serviceUntil(17);
     assert.equal(canonicalGraph.error, undefined, JSON.stringify(canonicalGraph.error));
