@@ -4,6 +4,8 @@ import { exactToolRecord } from "./lead-tool-authority.ts";
 import { resolveCtoTaskAuthority } from "./task-packet-tools.ts";
 import { createTaskQaRunReferenceStore, type TaskQaRunReference } from "./task-qa-run-references.ts";
 import { createTaskQaReportStore } from "./task-qa-reports.ts";
+import { assertProtectedOutputMetadata, PROTECTED_OUTPUT_RECEIPT_FIELDS } from "./protected-test-output-metadata.ts";
+import { readProtectedOutputArtifacts, type ProtectedOutputRead } from "./protected-test-output-artifacts.ts";
 
 const TOOL = "builder.read-protected-task-qa-history";
 const hash = /^[a-f0-9]{64}$/u;
@@ -50,10 +52,13 @@ function projectRun(value: unknown, reference: TaskQaRunReference) {
     || pins.subjectKeySha256 !== binding.subjectKeySha256) throw new Error("Protected Core receipt does not match its historical Task reference.");
   let receiptDigest: string | null = null;
   let processExitCode: number | null = null;
+  let outputMetadataPresent = false;
   if (row.receipt !== null) {
     const receipt = exactToolRecord(row.receipt, ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes",
       "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
-      "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"]);
+      "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"], PROTECTED_OUTPUT_RECEIPT_FIELDS);
+    assertProtectedOutputMetadata(receipt);
+    outputMetadataPresent = Object.hasOwn(receipt, "outputManifest");
     if (typeof receipt.digest !== "string" || !hash.test(receipt.digest)
       || row.status === "succeeded" && (receipt.status !== "completed" || receipt.processExitCode !== 0
         || receipt.timedOut !== false || receipt.cancelled !== false || receipt.outputLimit !== false
@@ -65,7 +70,8 @@ function projectRun(value: unknown, reference: TaskQaRunReference) {
     processExitCode = typeof receipt.processExitCode === "number" ? receipt.processExitCode : null;
   } else if (row.status === "succeeded") throw new Error("Succeeded Core run lacks a completion receipt.");
   return { status: "available" as const, technicalStatus: row.status as string, termination: row.termination as string,
-    receiptDigest, processExitCode, qaVerdict: "not-established" as const };
+    receiptDigest, processExitCode, outputMetadataPresent,
+    qaVerdict: "not-established" as const };
 }
 
 /** Historical technical observations never authorize another run or establish independent QA. */
@@ -96,6 +102,10 @@ export async function readProtectedTaskQaHistory(params: unknown, runContext: un
         core = raw === null ? { status: "unavailable", reason: "protected-run-not-found" } : projectRun(raw, reference);
       } catch { core = { status: "unavailable", reason: "protected-run-read-denied-or-invalid" }; }
     }
+    let outputs: ProtectedOutputRead | null = null;
+    if (core.status === "available" && core.outputMetadataPresent) outputs = await readProtectedOutputArtifacts({
+      workspaceId: scope.workspaceId, runId: binding.runId, subjectKey: binding.subjectKey, approvalId: binding.approvalId,
+      sourceId: binding.sourceId, commitSha: binding.commitSha, treeSha: binding.treeSha, planSha256: binding.planSha256 }, platform);
     let freshness: "current" | "stale" | "unknown" = packetPinsCurrent(reference, packets) ? "unknown" : "stale";
     if (freshness !== "stale" && typeof platform.localFolders?.readWorkspaceSourceGitTipV1 === "function") {
       try {
@@ -127,7 +137,7 @@ export async function readProtectedTaskQaHistory(params: unknown, runContext: un
         failedCriteria: report.checks.filter(check => check.verdict === "failed").length,
         untestedCriteria: report.checks.filter(check => check.verdict === "not-tested").length }));
     }
-    entries.push(Object.freeze({ sequence, reference, freshness, core, qaReports: Object.freeze(qaReports),
+    entries.push(Object.freeze({ sequence, reference, freshness, core, outputs, qaReports: Object.freeze(qaReports),
       qaVerdict: "not-established" as const }));
   }
   await authority.check();

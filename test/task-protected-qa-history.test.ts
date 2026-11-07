@@ -105,6 +105,32 @@ test("permission errors and mismatched Core pins remain unavailable and never be
   assert.equal(page.qaVerdict, "not-established");
 });
 
+test("output-bearing historical receipts retain technical evidence while exact Artifact bytes are checked separately", async () => {
+  const f = await setup();
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+  const bytes = "qa evidence", file = { path: "qa.json", byteLength: Buffer.byteLength(bytes), sha256: hash(bytes) };
+  Object.assign(f.coreReceipt.receipt, { stdoutSha256: hash(""), stderrSha256: hash(""), outputManifest: [file],
+    outputBytes: file.byteLength, outputManifestSha256: hash(`F\0${file.path}\0${file.byteLength}\0${file.sha256}`) });
+  let encoded = Buffer.from(bytes).toString("base64");
+  Object.assign(f.f.platform, { artifacts: { async list() { return [{
+    id: "17171717-1717-4717-8717-171717171717", companyId: W, pluginKey: "com.sonparkserver.my-plugin-builder",
+    subjectKey: f.target.subjectKey, runId: RUN, title: "QA output", kind: "sps.protected-test-output-v1",
+    referenceUrl: null, summary: null, createdAt: now, updatedAt: now, data: { schemaVersion: 1,
+      kind: "sps.protected-test-output-v1", ...file, contentBase64: encoded, runId: RUN, approvalId: PLAN,
+      sourceId: SOURCE, commitSha: f.target.commitSha, treeSha: f.target.treeSha, planSha256: f.target.planSha256,
+      inputTreeSha256: f.coreReceipt.pins.inputTreeSha256 },
+  }]; } } });
+  let page = await f.read();
+  assert.equal(page.entries[0]?.core.status, "available");
+  assert.equal(page.entries[0]?.outputs?.status, "matched");
+  assert.equal(page.entries[0]?.qaVerdict, "not-established");
+  encoded = Buffer.from("different bytes").toString("base64");
+  page = await f.read();
+  assert.equal(page.entries[0]?.core.status, "available", "an invalid Artifact does not erase the original run receipt");
+  assert.equal(page.entries[0]?.outputs?.status, "unknown");
+  assert.doesNotMatch(JSON.stringify(page), /contentBase64/);
+});
+
 test("wrong CTO context and malformed cursors are denied before reading a Core run", async () => {
   const f = await setup();
   await assert.rejects(readProtectedTaskQaHistory(f.params, ctx(), f.f.platform));
