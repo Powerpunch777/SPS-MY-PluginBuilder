@@ -63,6 +63,11 @@
 - 등록된 Builder 제출/CTO 인수/QA 요청과 후보 SDK Worker IPC가 실제 임시 Core DB의
   보호 실행 접수까지 연결됐다. 같은 요청은 `queued` 기록 하나를 재사용했다. 이 시험의
   Git 제출 응답과 Node는 fixture였으며 실제 Git 생산자 연결 시험은 별도로 진행한다.
+- 후속 분리 시험은 실제 Core Host의 Source 일치·Git-write grant·`commitTaskFilesV1`으로
+  임시 Git Commit/Tree를 생성한 뒤 Builder CTO 인수와 실제 SDK Worker IPC의 QA 접수에
+  연결했다. 같은 실행에서 기존 합성 Git control과 실제 Git writer case가 함께 통과했다.
+  Node와 Builder 업무 상태는 시험 fixture이며 결과는 단일 `queued` 기록이다. 실제 AI
+  작성·AppContainer QA 완료·QA 합격 또는 설치본 검증으로 표시하지 않는다.
 - Manager의 별도 제한 도구 정책, Main의 현재 Baseline/UI·Source·후보 브랜치 계획,
   현재 검증 이벤트에서만 찾는 Task Commit/Tree와 예약된 Git 효과를 연결했다.
   실제 Git에서는 후보 ref 생성·경합·재생·철회·symbolic ref 거부를 검사했다. 보호된 기준
@@ -86,6 +91,10 @@
   보고서에 고정된 Git DTO, 응답 유실 뒤 같은 예약 재조정, 기록된 결과의 Git 재실행
   방지, Manager·Source·보고서·계획 변경 거부를 포함한다. 관련 focused 검사는 23개를
   통과했다. 실제 CLI·Git·CI 실행이나 전체 AC 합격의 근거로 사용하지 않는다.
+- `4d51a24`의 정확한 별도 사본과 물리 복사한 고정 SDK 의존성에서 독립 타입 검사·빌드,
+  계획 검사 7개 및 전체 자동 테스트 957개가 통과했다. 이전 `e81cf07` 사본의 전체 검사
+  953/954는 dependency junction을 거부한 포장 검사의 실패를 포함하며 PASS로 바꾸지
+  않는다. 후속 사본의 성공을 이전 실패와 혼합하지 않는다.
 
 빌드·타입·테스트는 선언된 SDK commit `c69915a518f0eb600f0ace8238144059911f8d04`와
 일치하는 고정 사본에서 검증한다. 기존 설치 의존성과 작업 데이터를 덮어쓰지 않는다.
