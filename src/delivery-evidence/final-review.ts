@@ -8,15 +8,21 @@ type ReviewEvidence = NonNullable<Awaited<ReturnType<Store["reviewEvidence"]>>>;
 export async function readFinalReview(store: Store, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
   const [history, evidence] = await Promise.all([store.current(), store.reviewEvidence()]);
   const latest = history.revisions[0]?.revision ?? null;
-  const request = latest ? history.revisions.find(({ revision }) => revision.requestId === latest.requestId && revision.kind === "approval-request")?.revision ?? null : null;
+  const storedRequest = latest ? history.revisions.find(({ revision }) => revision.requestId === latest.requestId && revision.kind === "approval-request")?.revision ?? null : null;
+  const storedAttestation = latest ? history.revisions.find(({ revision }) => revision.requestId === latest.requestId && revision.kind === "main-attestation"
+    && (!storedRequest?.request || revision.eventId === storedRequest.request.attestationEventId))?.revision ?? null : null;
+  const historical = storedRequest?.request ?? storedAttestation?.attestation ?? null;
+  const candidate = evidence?.snapshot.packet;
+  const changedRevision = Boolean(candidate && historical && candidate.packetRevisionId !== historical.packet.packetRevisionId);
+  const conflictingRevision = Boolean(candidate && historical && !changedRevision
+    && candidate.packetSha256 !== historical.packet.packetSha256);
+  const currentJournal = !changedRevision && !conflictingRevision;
+  const request = currentJournal ? storedRequest : null;
+  const attestation = currentJournal ? storedAttestation : null;
   const payload = request?.request ?? null;
-  const attestation = latest ? history.revisions.find(({ revision }) => revision.requestId === latest.requestId && revision.kind === "main-attestation"
-    && (!payload || revision.eventId === payload.attestationEventId))?.revision ?? null : null;
   const main = attestation?.attestation ?? null;
-  const decision = latest?.kind === "user-decision" ? latest : null;
-  const historical = payload ?? attestation?.attestation ?? null;
-  const pinnedEvidence = evidence && (!historical || evidence.snapshot.packet.packetRevisionId === historical.packet.packetRevisionId
-    && evidence.snapshot.packet.packetSha256 === historical.packet.packetSha256) ? evidence : null;
+  const decision = currentJournal && latest?.kind === "user-decision" ? latest : null;
+  const pinnedEvidence = conflictingRevision ? null : evidence;
   const snapshot: ReviewEvidence["snapshot"] | null = pinnedEvidence?.snapshot ?? (historical ? {
     workspaceId: sessions.workspaceId, projectId: sessions.workspaceId, packet: historical.packet,
     currentPinsSha256: historical.currentPinsSha256, integrationCodeAuthority: "unknown", hostRuntimeAuthority: "unknown",
@@ -46,7 +52,9 @@ export async function readFinalReview(store: Store, sessions: BuilderLeadSession
   const eligible = Boolean(pinnedEvidence?.eligible && payload && latest?.eventId === request?.eventId && mainReceipt && integrationReviewReceipt
     && payload.snapshotSha256 === pinnedEvidence.snapshotSha256 && payload.currentPinsSha256 === snapshot.currentPinsSha256);
   return { status: "ready" as const, snapshot, mainAttestation: attestation, approvalRequest: request, decision,
-    mainReceipt, integrationReviewReceipt, approvalEligibility: { status: eligible ? "eligible" as const : pinnedEvidence ? "blocked" as const : "unknown" as const },
+    mainReceipt, integrationReviewReceipt, approvalEligibility: { status: eligible ? "eligible" as const : pinnedEvidence ? "blocked" as const : "unknown" as const,
+      ...(changedRevision ? { reason: "The current packet revision needs its own Main attestation and approval request." }
+        : conflictingRevision ? { reason: "The current packet hash conflicts with the recorded immutable revision." } : {}) },
     // A review view is bounded; the full immutable history stays in its existing journal.
     history: history.revisions.slice(0, 4).map(({ revision }) => ({ eventId: revision.eventId, kind: revision.kind,
       requestId: revision.requestId, decision: revision.decision })) };

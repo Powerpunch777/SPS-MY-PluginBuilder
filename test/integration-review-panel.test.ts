@@ -89,14 +89,14 @@ test("renders exact pins, files, guides, gates, limits and history as escaped re
     assert.match(html, /QA: PASS/u);
     assert.match(html, /Synthetic test fixture only/u);
     assert.match(html, /본문 확인은 unavailable/u);
-    assert.match(html, /최종 납품 승인과 별개/u);
+    assert.match(html, /실제 고객 전달·배포와 별개/u);
     assert.match(html, /<button[^>]*disabled=""[^>]*>수정 요청/u);
     assert.match(html, /<button[^>]*disabled=""[^>]*>보류/u);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
-test("read DTO parser strips no authority and rejects binary payloads or unscoped history", async () => {
-  const { parseDTO, temporary } = await loadPanel();
+test("read DTO rejects binary payloads and shows older decisions only as history", async () => {
+  const { Panel, parseDTO, temporary } = await loadPanel();
   try {
   const read = parseDTO(fixture());
   assert.equal(read.status, "ready");
@@ -105,11 +105,18 @@ test("read DTO parser strips no authority and rejects binary payloads or unscope
   assert.equal("fileBytes" in read.snapshot, false);
   const withBinary = { ...fixture(), snapshot: { ...fixture().snapshot, commitObjectBytes: [1, 2, 3] } };
   assert.deepEqual(parseDTO(withBinary), { status: "unknown", reason: "Final Review read data is incomplete or malformed." });
-  const otherPacketSummary = { ...fixture(), history: [{ eventId: "older-event", kind: "approval-request" as const,
-    requestId: "another-packet", decision: null }] };
-  const scoped = parseDTO(otherPacketSummary);
-  assert.equal(scoped.status, "ready");
-  if (scoped.status === "ready") assert.deepEqual(scoped.history, []);
+  const current = { ...fixture("blocked"), approvalRequest: null, mainAttestation: null, mainReceipt: null,
+    integrationReviewReceipt: null, history: [{ eventId: "older-event", kind: "user-decision" as const,
+      requestId: "another-packet", decision: { action: "approve" as const, userId: "approver-fixture", reason: null,
+        decidedAt: "2026-11-05T00:00:00.000Z", sourceSnapshotSha256: sha } }] };
+  const parsed = parseDTO(current);
+  assert.equal(parsed.status, "ready");
+  if (parsed.status !== "ready") throw new Error("Expected packet history.");
+  assert.deepEqual(parsed.history, current.history);
+  const html = renderToStaticMarkup(createElement(Panel, { view: parsed, onApprove() {} }));
+  assert.match(html, /another-packet.*older-event.*approver-fixture.*2026-11-05/u);
+  assert.doesNotMatch(html, /결정 기록: approve/u);
+  assert.match(html, /type="button" disabled="">최종 검토 승인/u);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
@@ -168,7 +175,7 @@ test("browser keeps approve, request-changes and hold as distinct callbacks", as
     assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
     await page.setViewportSize({ width: 1440, height: 900 });
     assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
-    assert.match(await page.locator("body").innerText(), /최종 납품 승인과 별개/u);
+    assert.match(await page.locator("body").innerText(), /실제 고객 전달·배포와 별개/u);
   } finally {
     await browser?.close();
     await rm(temporary, { recursive: true, force: true });

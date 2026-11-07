@@ -242,8 +242,7 @@ export function parseIntegrationReviewDTO(value: unknown): IntegrationReviewDTO 
     integrationReviewReceipt: ready.integrationReviewReceipt as IntegrationReviewRunReceipt | null,
     approvalEligibility: Object.freeze({ status: eligibility.status as "eligible" | "blocked" | "unknown",
       ...(isText(eligibility.reason) ? { reason: eligibility.reason } : {}) }),
-    history: Object.freeze([...(ready.history as IntegrationReviewHistoryEntry[])]
-      .filter(event => event.requestId === (ready.snapshot as IntegrationReviewSnapshotDTO).packet.packetRevisionId)) });
+    history: Object.freeze([...(ready.history as IntegrationReviewHistoryEntry[])]) });
 }
 
 const STYLE = `
@@ -360,8 +359,8 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
   return <section className="sps-integration-review" aria-labelledby="sps-ir-title">
     <style>{STYLE}</style>
     <header className="sps-ir-header">
-      <div><h2 id="sps-ir-title">통합 결과 최종 검토</h2><p>현재 제품 납품 자료와 승인 근거를 확인합니다.</p></div>
-      <span className="sps-ir-badge">최종 납품 승인과 별개</span>
+      <div><h2 id="sps-ir-title">최종 검토·승인</h2><p>현재 납품 패키지와 승인 근거를 확인합니다.</p></div>
+      <span className="sps-ir-badge">실제 고객 전달·배포와 별개</span>
     </header>
     {error ? <p className="sps-ir-status" role="alert">최종 검토 자료를 불러오지 못했습니다.</p>
       : view.status === "loading" ? <p className="sps-ir-status" role="status">최종 검토 자료를 불러오는 중입니다.</p>
@@ -369,7 +368,7 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
       : view.status === "empty" ? <p className="sps-ir-status" role="status">현재 게시된 최종 검토 자료가 없습니다.</p>
       : <>
         <section className="sps-ir-section" aria-label="최종 패킷 식별">
-          <h3>승인 요청 패킷 및 증거 상태</h3>
+          <h3>검토 대상 패킷 및 증거 상태</h3>
           {ready!.approvalEligibility.status !== "eligible" && <p className="sps-ir-status" role="status">
             {ready!.approvalEligibility.status === "unknown" ? "현재 Final Packet reader 또는 근거 권위를 확인할 수 없어 승인 차단 상태입니다."
               : "현재 승인 조건을 충족하지 못해 승인 차단 상태입니다."}
@@ -429,7 +428,8 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
         <section className="sps-ir-section" aria-label="검토 요청과 결정">
           <h3>검토 요청 · 결정 이력</h3>{ready!.history.length
             ? <ol className="sps-ir-list">{[...ready!.history].reverse().map(event => <li key={event.eventId}>
-              {event.kind === "approval-request" ? "Main 검토 요청" : `사용자 ${event.decision?.action ?? "결정"}`} · {event.requestId} · {event.eventId}
+              {event.kind === "approval-request" ? "승인 요청" : `사용자 ${event.decision?.action ?? "결정"}`} · {event.requestId} · {event.eventId}
+              {event.decision ? ` · ${event.decision.userId} · ${event.decision.decidedAt}` : ""}
               {event.decision?.reason ? ` · ${event.decision.reason}` : ""}
             </li>)}</ol>
             : <p className="sps-ir-status">검토 요청 이력이 없습니다.</p>}

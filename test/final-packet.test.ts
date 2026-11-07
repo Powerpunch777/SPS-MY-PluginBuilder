@@ -15,7 +15,7 @@ const REVIEW_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
 const stateKey = (key: SpsStateKey) => JSON.stringify([key.scopeKind, key.scopeId, key.namespace, key.stateKey]);
 
-function fixture() {
+function fixture(packetRevisionId = "packet-rev-1", usageRevisionId = "doc-r2") {
   const values = new Map<string, JsonValue>();
   const state: RevisionState = {
     async get(key) { return structuredClone(values.get(stateKey(key)) ?? null); },
@@ -45,13 +45,13 @@ function fixture() {
   const commitSha = createHash("sha1").update(commitHeader).update(commitObjectBytes).digest("hex");
   const outputBytes = Buffer.from("verified package bytes");
   const content = {
-    packetId: "packet-1", packetRevisionId: "packet-rev-1", baseline: pin("baseline", "base-r1"),
+    packetId: "packet-1", packetRevisionId, baseline: pin("baseline", "base-r1"),
     uiRevision: pin("ui", "ui-r1"), manifest: pin("manifest", "manifest-r1"),
     integration: { branch: "release/1", commitSha, build: pin("build", "build-r1"),
       ciEvidence: [pin("ci", "ci-r1")], e2eEvidence: [pin("e2e", "e2e-r1")] },
     files: [{ path: "dist/plugin.js", classification: "program", size: outputBytes.byteLength, sha256: sha(outputBytes.toString()) }],
     documents: [{ kind: "installation-guide" as const, pin: pin("install-guide", "doc-r1") },
-      { kind: "user-guide" as const, pin: pin("user-guide", "doc-r2") }],
+      { kind: "user-guide" as const, pin: pin("user-guide", usageRevisionId) }],
     qaEvidence: [pin("qa-report", "qa-r1")], g6Evidence: [pin("g6", "g6-r1")], g7Evidence: [pin("g7", "g7-r1")],
     limits: ["Host runtime source authority is externally verified"],
     changeHistory: [pin("change-history", "changes-r1")],
@@ -244,6 +244,57 @@ test("registered review exposes no bytes or approval eligibility from historical
   f.setLeadSelectionRevision(1);
   const recorded = await action({ ...decision, action: "hold", reason: "Wait" }, ctx) as { status: string };
   assert.equal(recorded.status, "recorded");
+});
+
+test("a changed delivery guide needs a new packet approval without erasing the prior decision", async () => {
+  const f = fixture();
+  let snapshot = f.snapshot;
+  const journal = createRevisionJournal(COMPANY, COMPANY, f.state, { prefix: "final-delivery",
+    parse: value => value as FinalPacketJournalEvent, revisionId: event => event.eventId });
+  const store = f.store(async () => ({ status: "available", value: snapshot }), async input => {
+    const result = await journal.publish({ expectedBaseRevisionId: input.expectedJournalRevisionId, revision: input.decision });
+    assert.equal(result.status, "published");
+    return { status: "published", sequence: result.sequence };
+  });
+  const sessions = { workspaceId: COMPANY, selectionRevision: 1, agentId: AGENT,
+    sessions: { main: MAIN_SESSION, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": REVIEW_SESSION } };
+  await store.attestFinalPacket({ eventId: "attestation", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.publishApprovalRequest({ eventId: "request", requestId: "packet-rev-1", expectedBaseRevisionId: "attestation",
+    attestationEventId: "attestation" }, f.reviewContext, f.platform);
+  const approved = await store.respond({ eventId: "approved", requestId: "packet-rev-1", expectedBaseRevisionId: "request", action: "approve" },
+    { companyId: COMPANY, actor: { type: "user", companyId: COMPANY, userId: "user-7" }, state: f.state });
+  assert.equal(approved.status, "recorded");
+
+  snapshot = fixture("packet-rev-1", "doc-r3").snapshot;
+  const conflict = await readFinalReview(store, sessions, f.platform);
+  assert.equal(conflict.status, "ready");
+  if (conflict.status !== "ready") throw new Error("Expected immutable history.");
+  assert.equal(conflict.snapshot.packet.packetSha256, f.snapshot.packet.packetSha256);
+  assert.equal(conflict.decision, null);
+  assert.equal(conflict.approvalEligibility.status, "unknown");
+
+  snapshot = fixture("packet-rev-2", "doc-r3").snapshot;
+  const next = await readFinalReview(store, sessions, f.platform);
+  assert.equal(next.status, "ready");
+  if (next.status !== "ready") throw new Error("Expected the new candidate.");
+  assert.equal(next.snapshot.packet.packetRevisionId, "packet-rev-2");
+  assert.equal(next.snapshot.packet.documents.find(document => document.kind === "user-guide")?.pin.revisionId, "doc-r3");
+  for (const key of ["approvalRequest", "mainAttestation", "decision", "mainReceipt", "integrationReviewReceipt"] as const) {
+    assert.equal(next[key], null);
+  }
+  assert.equal(next.approvalEligibility.status, "blocked");
+  assert.deepEqual(next.history.find(event => event.eventId === "approved")?.decision, approved.decision);
+  assert.equal((await journal.current())?.revision.eventId, "approved");
+
+  await store.attestFinalPacket({ eventId: "attestation-2", requestId: "packet-rev-2", expectedBaseRevisionId: "approved" }, f.runContext, f.platform);
+  await store.publishApprovalRequest({ eventId: "request-2", requestId: "packet-rev-2", expectedBaseRevisionId: "attestation-2",
+    attestationEventId: "attestation-2" }, f.reviewContext, f.platform);
+  const pending = await readFinalReview(store, sessions, f.platform);
+  assert.equal(pending.status, "ready");
+  if (pending.status !== "ready") throw new Error("Expected a newly eligible request.");
+  assert.equal(pending.approvalEligibility.status, "eligible");
+  assert.equal(pending.approvalRequest?.eventId, "request-2");
+  assert.equal(pending.decision, null);
 });
 
 test("Integration Review cannot post an attestation from a prior Lead selection", async () => {
