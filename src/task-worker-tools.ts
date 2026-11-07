@@ -114,7 +114,7 @@ async function assertTaskDecisionScopeCurrent(context: TaskWorkerToolContext, pa
 }
 
 function currentActiveRun(value: unknown, context: TaskWorkerToolContext) {
-  const row = exactToolRecord(value, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output"]);
+  const row = exactToolRecord(value, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing"]);
   if (row.runId !== context.runId || row.status !== "running" || row.cancellationRequested !== false
     || row.termination !== "not_applicable") throw new Error("Task file tools require the active uncancelled Worker/QA Run.");
 }

@@ -123,6 +123,32 @@ test("Workspace-only Worker context prepares without a Core Project and passes e
   assert.deepEqual(f.effects, { reads: 1, writes: 1, deletes: 1 });
 });
 
+test("registered Worker file tools accept optional Host timing without borrowing execution authority", async () => {
+  const f = await taskFixture();
+  const originalGetRun = f.f.platform.agents.sessions.getRun;
+  let unrelatedField = false;
+  Object.assign(f.f.platform.agents.sessions, {
+    async getRun(sessionId: string, companyId: string, runId: string) {
+      const run = await originalGetRun(sessionId, companyId, runId);
+      return sessionId === SESSION ? { ...run,
+        timing: { createdAt: now, startedAt: now, finishedAt: null },
+        ...(unrelatedField ? { callerApproved: true } : {}),
+      } : run;
+    },
+  });
+  const platform = createBuilderPlatform();
+  const read = platform.tools.find(tool => tool.name === "builder.read-task-source-file")!;
+  const call = () => read.handler({ relativePath: "src/feature.ts" }, f.context as never, f.f.platform);
+  assert.equal(((await call()).data as { text: string }).text, "original");
+  assert.equal(f.effects.reads, 1);
+  unrelatedField = true;
+  await assert.rejects(Promise.resolve().then(call), /Invalid Builder tool fields/u);
+  unrelatedField = false;
+  f.cancel();
+  await assert.rejects(Promise.resolve().then(call), /uncancelled/u);
+  assert.deepEqual(f.effects, { reads: 1, writes: 0, deletes: 0 });
+});
+
 test("registered Worker submit and CTO receipt bind the same commit, deny other actors and detect Task drift", async () => {
   const f = await taskFixture();
   const platform = createBuilderPlatform();
