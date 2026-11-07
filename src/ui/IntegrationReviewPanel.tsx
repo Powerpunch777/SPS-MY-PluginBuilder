@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
+import { parseDeliveryFileVersion, parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
 import { parseMainG7Review, type MainG7Review } from "../domain/main-g7-review.ts";
 
 export type IntegrationReviewPin = Readonly<{ sourceId: string; revisionId: string; sha256: string }>;
@@ -12,7 +12,7 @@ export type IntegrationReviewPacket = Readonly<{
   manifest: IntegrationReviewPin;
   integration: Readonly<{ branch: string; commitSha: string; build: IntegrationReviewPin;
     ciEvidence: readonly IntegrationReviewPin[]; e2eEvidence: readonly IntegrationReviewPin[]; regressionEvidence?: readonly IntegrationReviewPin[] }>;
-  files: readonly Readonly<{ path: string; classification: string; size: number; sha256: string }>[];
+  files: readonly Readonly<{ path: string; classification: string; size: number; sha256: string; version?: string }>[];
   documents: readonly Readonly<{ kind: "installation-guide" | "user-guide" | "other"; pin: IntegrationReviewPin }>[];
   qaEvidence: readonly IntegrationReviewPin[];
   g6Evidence: readonly IntegrationReviewPin[];
@@ -165,10 +165,13 @@ function validPacket(value: unknown): boolean {
     || Object.hasOwn(integration, "regressionEvidence") && !validPins(integration.regressionEvidence)) return false;
   const filePaths = new Set<string>();
   if (!row.files.every(fileValue => {
-    const file = exact(fileValue, ["path", "classification", "size", "sha256"]);
+    const file = exact(fileValue, ["path", "classification", "size", "sha256"], ["version"]);
     if (!file || !isText(file.path) || file.path.startsWith("/") || file.path.includes("\\")
       || file.path.split("/").some(part => !part || part === "..") || !isText(file.classification)
       || !Number.isSafeInteger(file.size) || (file.size as number) < 0 || !isDigest(file.sha256) || filePaths.has(file.path)) return false;
+    if (Object.hasOwn(file, "version")) {
+      try { parseDeliveryFileVersion(file.version); } catch { return false; }
+    }
     filePaths.add(file.path);
     return true;
   })) return false;
@@ -445,10 +448,9 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
         </section>
         <section className="sps-ir-section" aria-label="납품 파일">
           <h3>납품 파일 · 정확 경로와 SHA-256</h3>
-          <p className="sps-ir-status">현재 packet schema는 파일별 version, 접근 권한, 포함 사유를 제공하지 않습니다. 아래 revision은 파일 개별 버전이 아니라 포함된 패킷 revision입니다.</p>
-          <div className="sps-ir-table-wrap"><table className="sps-ir-table"><thead><tr><th>경로</th><th>분류</th><th>크기</th><th>포함 패킷 revision</th><th>SHA-256</th></tr></thead>
+          <div className="sps-ir-table-wrap"><table className="sps-ir-table"><thead><tr><th>경로</th><th>분류</th><th>파일 버전</th><th>크기</th><th>포함 패킷 revision</th><th>SHA-256</th></tr></thead>
             <tbody>{ready!.snapshot.packet.files.map(file => <tr key={file.path}><td className="sps-ir-mono">{file.path}</td><td>{file.classification}</td>
-              <td>{formatBytes(file.size)}</td><td className="sps-ir-mono">{ready!.snapshot.packet.packetRevisionId}</td><td className="sps-ir-mono">{file.sha256}</td></tr>)}</tbody>
+              <td>{file.version ?? "미기록"}</td><td>{formatBytes(file.size)}</td><td className="sps-ir-mono">{ready!.snapshot.packet.packetRevisionId}</td><td className="sps-ir-mono">{file.sha256}</td></tr>)}</tbody>
           </table></div>
         </section>
         <section className="sps-ir-section" aria-label="설치법과 사용법 문서">

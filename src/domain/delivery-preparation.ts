@@ -39,6 +39,11 @@ function path(value: unknown) {
   return result;
 }
 
+/** A producer-declared file version, not inferred from a package or content hash. */
+export function parseDeliveryFileVersion(value: unknown): string {
+  return text(value, 200);
+}
+
 /** Main-authored delivery declarations, never a QA verdict or execution grant. */
 export function parseDeliveryPreparation(value: unknown): DeliveryPreparation {
   const row = record(value, ["packageVersion", "targets", "limitationStatement", "limitations", "changeNotes"]);

@@ -5,7 +5,7 @@ import { readProtectedOutputArtifactBytes } from "../protected-test-output-artif
 import { readCurrentIntegrationPacket } from "./integration-packet.ts";
 import { readIntegrationCandidate, integrationCandidateEvidenceDigest } from "./integration-candidate.ts";
 import { readDeliverySourceSnapshot } from "./source-snapshot.ts";
-import { finalPacketPinsDigest, sealFinalPacket, type FinalEvidenceReader, type FinalPacketPin } from "./final-packet.ts";
+import { finalPacketPinsDigest, sealFinalPacket, type FinalEvidenceReader, type FinalPacketFile, type FinalPacketPin } from "./final-packet.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const bytesHash = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -31,6 +31,7 @@ export function createCurrentFinalEvidenceReader(workspaceId: string, platform: 
         return unknown("current-build-artifact-bytes-unavailable");
       }
       const files = evidence.files;
+      if (files.some(file => !file.version)) return unknown("delivery-file-version-unavailable");
       const declaredTargets = new Set(preparation.targets.map(item => item.target));
       if (new Set(files.map(file => file.target)).size !== declaredTargets.size || files.some(file => !declaredTargets.has(file.target))) {
         return unknown("delivery-preparation-targets-do-not-match-inventory");
@@ -58,14 +59,16 @@ export function createCurrentFinalEvidenceReader(workspaceId: string, platform: 
         if (!data || data.bytes.byteLength !== file.byteLength || bytesHash(data.bytes) !== file.sha256) return unknown("delivery-file-bytes-disagree");
         fileBytes.push({ path: file.path, bytes: data.bytes });
       }
-      const packetFiles = files.map(file => ({ path: file.path, classification: file.classification, size: file.byteLength, sha256: file.sha256 }));
+      const packetFiles: FinalPacketFile[] = files.map(file => ({ path: file.path, classification: file.classification,
+        size: file.byteLength, sha256: file.sha256, version: file.version! }));
       for (const document of docs.documents) {
         const bytes = new TextEncoder().encode(document.body), existing = packetFiles.find(file => file.path.toLowerCase() === document.path.toLowerCase());
         if (existing && (existing.path !== document.path || existing.sha256 !== document.bodySha256 || existing.size !== bytes.byteLength)) {
           return unknown("delivery-document-file-disagrees");
         }
         if (!existing) {
-          packetFiles.push({ path: document.path, classification: document.classification, size: bytes.byteLength, sha256: document.bodySha256 });
+          packetFiles.push({ path: document.path, classification: document.classification, size: bytes.byteLength,
+            sha256: document.bodySha256, version: docs.revisionId });
           fileBytes.push({ path: document.path, bytes });
         }
       }

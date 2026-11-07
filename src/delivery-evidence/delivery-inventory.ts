@@ -5,11 +5,12 @@ import type { ApprovedSpecRevision, DeliveryTarget } from "../domain/specificati
 import { exactToolRecord } from "../lead-tool-authority.ts";
 import { integrationCandidateEvidenceDigest, readIntegrationCandidate } from "./integration-candidate.ts";
 import { parseDeliverySourcePath, readDeliverySourceSnapshot } from "./source-snapshot.ts";
+import { parseDeliveryFileVersion } from "../domain/delivery-preparation.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const MAX_FILES = 128;
 type DeclaredFile = Readonly<{ path: string; source: "git" | "ci-output"; classification: string; target: DeliveryTarget;
-  requirementIds: readonly string[] }>;
+  requirementIds: readonly string[]; version?: string }>;
 type ObservedFile = DeclaredFile & Readonly<{ byteLength: number; sha256: string; objectId: string | null; artifactId: string | null }>;
 
 function readManifest(bytes: Uint8Array, spec: ApprovedSpecRevision): readonly DeclaredFile[] {
@@ -21,7 +22,7 @@ function readManifest(bytes: Uint8Array, spec: ApprovedSpecRevision): readonly D
   }
   const paths = new Set<string>(), targets = new Set<string>(), requirements = new Set(spec.requirements.map(item => item.id));
   const files = manifest.files.map(value => {
-    const row = exactToolRecord(value, ["path", "source", "classification", "target", "requirementIds"]);
+    const row = exactToolRecord(value, ["path", "source", "classification", "target", "requirementIds"], ["version"]);
     const path = parseDeliverySourcePath(row.path), folded = path.toLocaleLowerCase("en-US");
     if (path.length > 200 || folded.split("/").includes(".git") || paths.has(folded)
       || row.source !== "git" && row.source !== "ci-output"
@@ -36,7 +37,8 @@ function readManifest(bytes: Uint8Array, spec: ApprovedSpecRevision): readonly D
     paths.add(folded);
     targets.add(row.target);
     return Object.freeze({ path, source: row.source, classification: row.classification, target: row.target as DeliveryTarget,
-      requirementIds: Object.freeze(row.requirementIds as string[]) });
+      requirementIds: Object.freeze(row.requirementIds as string[]),
+      ...(Object.hasOwn(row, "version") ? { version: parseDeliveryFileVersion(row.version) } : {}) });
   });
   if (spec.targets.some(target => !targets.has(target))) throw new TypeError("Delivery inventory omits an approved target.");
   return Object.freeze(files);

@@ -15,11 +15,12 @@ const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).diges
 const objectId = (type: string, bytes: Buffer) =>
   createHash("sha1").update(`${type} ${bytes.length}\0`, "ascii").update(bytes).digest("hex");
 const manifestPath = "inventory.json";
-const file = { path: "app.js", source: "git", classification: "source-launcher", target: "desktop", requirementIds: ["REQ-1"] };
-const output = { path: "bundle.bin", source: "ci-output", classification: "build-bundle", target: "desktop", requirementIds: ["REQ-1"] };
+const file = { path: "app.js", source: "git", classification: "source-launcher", target: "desktop", requirementIds: ["REQ-1"], version: "launcher-v1" };
+const output = { path: "bundle.bin", source: "ci-output", classification: "build-bundle", target: "desktop", requirementIds: ["REQ-1"], version: "bundle-v2" };
 
 // Exact Git object bytes and protected Run/Artifact DTOs, not live Core or CI.
-async function setup(files = [file, output], includeArtifact = true, withRegression = true, leadReviewSession?: string) {
+async function setup(files: Array<Omit<typeof file, "version"> & { version?: string }> = [file, output],
+  includeArtifact = true, withRegression = true, leadReviewSession?: string) {
   const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, files }));
   const launcher = Buffer.from("export const ready = true;\n");
   const blobs = [[file.path, launcher], [manifestPath, manifest]] as const;
@@ -85,6 +86,7 @@ test("inventory refuses unknown targets, path collisions and unproven CI outputs
   for (const [label, files, includeArtifact, reason] of [
     ["foreign target", [{ ...file, target: "web-api" }], true, "delivery-inventory-manifest-invalid-or-unconfirmed"],
     ["case collision", [file, { ...output, path: file.path.toUpperCase() }], true, "delivery-inventory-manifest-invalid-or-unconfirmed"],
+    ["invalid file version", [{ ...file, version: " " }, output], true, "delivery-inventory-manifest-invalid-or-unconfirmed"],
     ["missing artifact", [output], false, "delivery-inventory-ci-artifact-unconfirmed"],
   ] as const) await t.test(label, async () => {
     const { read } = await setup([...files], includeArtifact);
@@ -240,6 +242,7 @@ test("registered Main attests only a byte-checked current package and user appro
   const { f } = await setup(), platform = f.f.platform;
   const documents = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides, preparation }, ctx(), platform);
   assert.equal(documents.status, "published", JSON.stringify(documents));
+  if (documents.status !== "published") throw new Error("Missing delivery document revision");
   const handoff = (await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null },
     f.managerContext, platform) as any).data;
   assert.equal(handoff.status, "published");
@@ -249,6 +252,8 @@ test("registered Main attests only a byte-checked current package and user appro
   if (snapshot.status !== "available") throw new Error("Missing current snapshot");
   assert.deepEqual(snapshot.value.packet.preparation, preparation);
   assert.equal(snapshot.value.packet.integration.regressionEvidence?.length, 1);
+  assert.equal(snapshot.value.packet.files.find(file => file.path === "bundle.bin")?.version, "bundle-v2");
+  assert.equal(snapshot.value.packet.files.find(file => file.path === "docs/install.md")?.version, documents.revision.revisionId);
   assert.equal(snapshot.value.fileBytes.length, 4);
   assert.ok(snapshot.value.fileBytes.some(file => file.path === "bundle.bin" && Buffer.from(file.bytes).toString() === "ci bundle bytes"));
   const ui = await mainTool().handler({}, ctx(), platform) as any;
@@ -280,6 +285,18 @@ test("missing preparation and unproven entry paths never become a current final 
     assert.equal(result.status, "published");
     assert.equal((await createCurrentFinalEvidenceReader(W, platform)()).status, "unknown");
   }
+});
+
+test("an inventory without producer file versions stays readable but cannot become a final approval candidate", async () => {
+  const { version: _v1, ...legacyFile } = file;
+  const { version: _v2, ...legacyOutput } = output;
+  const { f, read } = await setup([legacyFile, legacyOutput]), platform = f.f.platform;
+  assert.equal((await read()).status, "observed", "historical inventory is not rewritten or assigned guessed versions");
+  assert.equal((await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null,
+    documents: guides, preparation }, ctx(), platform)).status, "published");
+  assert.equal(((await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId,
+    expectedBaseRevisionId: null }, f.managerContext, platform) as any).data).status, "published");
+  assert.deepEqual(await createCurrentFinalEvidenceReader(W, platform)(), { status: "unknown", reason: "delivery-file-version-unavailable" });
 });
 
 test("current final reader rejects altered Artifact bytes instead of retaining an older successful snapshot", async () => {

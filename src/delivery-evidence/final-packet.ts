@@ -3,7 +3,7 @@ import type { SpsActionContext, SpsPlatformInvocationContext } from "@sonparkser
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionJobWake, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
 import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB, integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
-import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
+import { parseDeliveryFileVersion, parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
 import { parseDeliverySourcePath } from "./source-snapshot.ts";
 import { parseMainG7Review, type MainG7Review } from "../domain/main-g7-review.ts";
 
@@ -21,7 +21,7 @@ const freeze = <T>(value: T): T => {
 
 export type FinalPacketPin = Readonly<{ sourceId: string; revisionId: string; sha256: string }>;
 export type FinalPacketDocument = Readonly<{ kind: "installation-guide" | "user-guide" | "other"; pin: FinalPacketPin }>;
-export type FinalPacketFile = Readonly<{ path: string; classification: string; size: number; sha256: string }>;
+export type FinalPacketFile = Readonly<{ path: string; classification: string; size: number; sha256: string; version?: string }>;
 export type FinalPacket = Readonly<{
   packetId: string;
   packetRevisionId: string;
@@ -118,10 +118,11 @@ function packet(value: unknown): FinalPacket {
   if (!Array.isArray(row.files) || !row.files.length || !Array.isArray(row.documents) || !Array.isArray(row.limits)
     || !Array.isArray(row.changeHistory)) throw new TypeError("Final Packet contents are incomplete.");
   const files = row.files.map(item => {
-    const file = record(item, ["path", "classification", "size", "sha256"]);
+    const file = exactToolRecord(item, ["path", "classification", "size", "sha256"], ["version"]);
     const path = parseDeliverySourcePath(file.path);
     if (!Number.isSafeInteger(file.size) || (file.size as number) < 0) throw new TypeError("Invalid file size.");
-    return Object.freeze({ path, classification: id(file.classification, "file classification"), size: file.size as number, sha256: digest(file.sha256, "file sha256") });
+    return Object.freeze({ path, classification: id(file.classification, "file classification"), size: file.size as number, sha256: digest(file.sha256, "file sha256"),
+      ...(Object.hasOwn(file, "version") ? { version: parseDeliveryFileVersion(file.version) } : {}) });
   });
   if (new Set(files.map(file => file.path.toLocaleLowerCase("en-US"))).size !== files.length) throw new TypeError("Final Packet file paths must be unique.");
   const documents = row.documents.map(item => {

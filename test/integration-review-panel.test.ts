@@ -27,7 +27,7 @@ function fixture(eligible: "eligible" | "blocked" | "unknown" = "eligible"): Ext
     baseline: pin("baseline", "base-r7"), uiRevision: pin("ui", "ui-r4"), manifest: pin("manifest", "manifest-r3"),
     integration: { branch: "release/fixture", commitSha: "abc123fixture", build: pin("build", "build-r2"),
       ciEvidence: [pin("ci", "ci-r9")], e2eEvidence: [pin("e2e", "e2e-r2")] },
-    files: [{ path: "dist/plugin.mjs", classification: "plugin", size: 2048, sha256: sha }],
+    files: [{ path: "dist/plugin.mjs", classification: "plugin", size: 2048, sha256: sha, version: "plugin-file-v3" }],
     documents: [{ kind: "installation-guide" as const, pin: pin("install", "doc-r2") },
       { kind: "user-guide" as const, pin: pin("usage", "doc-r5") }],
     qaEvidence: [pin("qa", "qa-r2")], g6Evidence: [pin("g6", "g6-r1")], g7Evidence: [pin("g7", "g7-r1")],
@@ -226,6 +226,7 @@ test("browser keeps approve, request-changes and hold as distinct callbacks", as
     await page.evaluate(view => (window as unknown as { mountReview: (value: unknown) => void }).mountReview(view), browserView);
     assert.match(await page.getByRole("region", { name: "지원 환경과 의존성" }).innerText(), /Windows 11 x64/u);
     assert.match(await page.locator("body").innerText(), /승인 설계 대조/u);
+    assert.match(await page.locator("body").innerText(), /plugin-file-v3/u);
     assert.match(await page.locator("body").innerText(), /Fixture Main comparison for validation-and-limits/u);
     await page.getByRole("button", { name: "최종 검토 승인" }).click();
     await page.getByLabel("수정 요청 또는 보류 사유").fill("설치 안내를 갱신하세요");

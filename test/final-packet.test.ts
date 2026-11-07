@@ -103,6 +103,11 @@ test("final packet keeps bounded preparation prose and portable guide paths with
   assert.throws(() => sealFinalPacket({ ...content, limits: ["x".repeat(2049)] }));
   assert.throws(() => sealFinalPacket({ ...content, files: [{ ...content.files[0]!, path: "docs/../outside" }] }));
   assert.throws(() => sealFinalPacket({ ...content, files: [content.files[0]!, { ...content.files[0]!, path: content.files[0]!.path.toUpperCase() }] }));
+  const versioned = sealFinalPacket({ ...content, files: [{ ...content.files[0]!, version: "file-v1" }] });
+  assert.equal(versioned.files[0]?.version, "file-v1");
+  assert.notEqual(versioned.packetSha256, sealFinalPacket(content).packetSha256);
+  assert.notEqual(versioned.packetSha256, sealFinalPacket({ ...content, files: [{ ...content.files[0]!, version: "file-v2" }] }).packetSha256);
+  assert.throws(() => sealFinalPacket({ ...content, files: [{ ...content.files[0]!, version: " " }] }));
 });
 
 test("missing or mismatched commit/file bytes block Main attestation even when status fields claim pass", async () => {
@@ -255,7 +260,7 @@ test("registered review exposes no bytes or approval eligibility from historical
   const action = contract.actions.find(item => item.key === "builder.final-review-decision")!.handler;
   const ctx = { ...f.platform, companyId: COMPANY, actor: { type: "user" as const, companyId: COMPANY, userId: "user-7" } };
   const decision = { eventId: "user-decision-1", requestId: "packet-rev-1", expectedBaseRevisionId: "request-packet-r1" };
-  await assert.rejects(async () => action({ ...decision, action: "approve" }, ctx), /not eligible/);
+  await assert.rejects(async () => action({ ...decision, action: "approve" }, ctx), /Atomic final approval is unsupported/);
   f.setLeadSelectionRevision(2);
   await assert.rejects(async () => action({ ...decision, action: "hold", reason: "Wait" }, ctx), /receipts could not be verified/);
   f.setLeadSelectionRevision(1);
