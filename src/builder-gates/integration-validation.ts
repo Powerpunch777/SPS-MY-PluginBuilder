@@ -48,6 +48,11 @@ function technicalOutcome(run: ReturnType<typeof parseProtectedRun>): "pending" 
     && receipt.timedOut === false && receipt.cancelled === false && receipt.outputLimit === false ? "passed" : "failed";
 }
 
+function completionIdentity(run: ReturnType<typeof parseProtectedRun>) {
+  const digest = run.receipt && typeof run.receipt === "object" ? Object.getOwnPropertyDescriptor(run.receipt, "digest")?.value : null;
+  return JSON.stringify([run.id, run.status, run.termination, run.pins, digest]);
+}
+
 /** Observation never enqueues. A passed finite technical recipe is not authored
  * QA, complete G6/G7 coverage, a Final Packet, or user delivery approval. */
 export async function readIntegrationValidationRuns(attempts: readonly IntegrationAttempt[], platform: SpsPlatformInvocationContext) {
@@ -63,18 +68,26 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
         try {
           const raw = await api.getRunV1(attempt.scope.workspaceId, reference.runId, reference.subjectKeySha256);
           if (raw !== null) {
-            status = technicalOutcome(matchesRun(raw, attempt, reference));
-            if (typeof folders?.readWorkspaceSourceGitTipV1 !== "function") status = "unknown";
-            else {
-              const tip = exactToolRecord(await folders.readWorkspaceSourceGitTipV1(attempt.effect.sourceId, attempt.effect.folderKey, attempt.effect.branch),
+            const run = matchesRun(raw, attempt, reference);
+            status = technicalOutcome(run);
+            const observedCompletion = completionIdentity(run);
+            const tipCurrent = async () => {
+              const tip = exactToolRecord(await folders!.readWorkspaceSourceGitTipV1!(attempt.effect.sourceId, attempt.effect.folderKey, attempt.effect.branch),
                 ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
-              if (tip.status !== "current" || tip.sourceId !== attempt.effect.sourceId || tip.folderKey !== attempt.effect.folderKey
-                || tip.branch !== attempt.effect.branch || tip.commitSha !== reference.commitSha || tip.treeSha !== reference.treeSha) status = "stale";
-            }
+              return tip.status === "current" && tip.sourceId === attempt.effect.sourceId && tip.folderKey === attempt.effect.folderKey
+                && tip.branch === attempt.effect.branch && tip.commitSha === reference.commitSha && tip.treeSha === reference.treeSha;
+            };
+            if (typeof folders?.readWorkspaceSourceGitTipV1 !== "function") status = "unknown";
+            else if (!await tipCurrent()) status = "stale";
             if (status === "passed" && reference.approvalId) outputs = await readProtectedOutputArtifacts({
               workspaceId: attempt.scope.workspaceId, runId: reference.runId, subjectKey: reference.subjectKey,
               approvalId: reference.approvalId, sourceId: attempt.effect.sourceId, commitSha: reference.commitSha,
               treeSha: reference.treeSha, planSha256: reference.planSha256 }, platform);
+            if (status === "passed") {
+              const latest = matchesRun(await api.getRunV1(attempt.scope.workspaceId, reference.runId, reference.subjectKeySha256), attempt, reference);
+              if (technicalOutcome(latest) !== "passed" || completionIdentity(latest) !== observedCompletion) { status = "unknown"; outputs = null; }
+              else if (!await tipCurrent()) { status = "stale"; outputs = null; }
+            }
           }
         } catch {
           status = "unknown";

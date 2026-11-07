@@ -102,9 +102,8 @@ test("in-place completion receipt mutation during Artifact read is detected by t
     return [f.artifact];
   } } });
   const validation = await observe(f);
-  assert.equal(validation.status, "passed");
-  assert.equal(validation.outputs.status, "unknown");
-  assert.equal(validation.outputs.qaVerdict, "not-established");
+  assert.equal(validation.status, "unknown");
+  assert.equal(validation.outputs, null);
 });
 
 test("fresh Core read after Artifact retrieval detects a revoked terminal run", async () => {
@@ -115,10 +114,9 @@ test("fresh Core read after Artifact retrieval detects a revoked terminal run", 
     return structuredClone(reads >= 3 ? { ...f.run, status: "cancelled" } : f.run);
   };
   const validation = await observe(f);
-  assert.equal(reads, 3);
-  assert.equal(validation.status, "passed");
-  assert.equal(validation.outputs.status, "unknown");
-  assert.equal(validation.outputs.qaVerdict, "not-established");
+  assert.equal(reads, 4);
+  assert.equal(validation.status, "unknown");
+  assert.equal(validation.outputs, null);
 });
 
 test("in-place run pin mutation during Artifact read cannot survive the completion snapshot", async () => {
@@ -128,9 +126,8 @@ test("in-place run pin mutation during Artifact read cannot survive the completi
     return [f.artifact];
   };
   const validation = await observe(f);
-  assert.equal(validation.status, "passed");
-  assert.equal(validation.outputs.status, "unknown");
-  assert.equal(validation.outputs.qaVerdict, "not-established");
+  assert.equal(validation.status, "unknown");
+  assert.equal(validation.outputs, null);
 });
 
 test("Core run pins are rechecked before output lookup and mismatches cannot trigger Artifact reads", async () => {

@@ -96,3 +96,13 @@ test("a denied current Git observation never preserves an earlier technical pass
   assert.equal(f.reads, 0);
   assert.equal(f.enqueueCalls, 1);
 });
+
+test("source drift during Artifact lookup invalidates the current candidate observation", async () => {
+  const f = await fixture(), platform = f.f.platform as any;
+  const list = platform.artifacts.list;
+  platform.artifacts.list = async (input: unknown) => { const rows = await list(input); f.moveCandidate(); return rows; };
+  const observed = await progressTool().handler({ workstreamId: "ws-1", eventId: f.eventId }, f.managerContext, f.f.platform) as any;
+  assert.equal(observed.data.technicalValidation[0].status, "stale");
+  assert.equal(observed.data.technicalValidation[0].outputs, null);
+  assert.equal(f.enqueueCalls, 1);
+});
