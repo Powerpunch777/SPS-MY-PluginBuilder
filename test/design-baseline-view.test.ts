@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { createEmptyBuilderSnapshot } from "../src/domain/snapshot.ts";
 import { projectDesignBaseline } from "../src/domain/design-baseline-view.ts";
+import { resolveDocumentReference } from "../src/domain/document-reference-navigation.ts";
 
 const workspace = "project-1";
 const digest = "a".repeat(64);
@@ -44,6 +46,8 @@ function view(overrides: Record<string, unknown> = {}) {
   return { workspaceId: workspace, projectId: workspace, sequence: 1, baseline: baseline(), ...overrides };
 }
 
+const baselineDigest = () => createHash("sha256").update(JSON.stringify(baseline()), "utf8").digest("hex");
+
 test("adds the scoped baseline as an interpreted document without changing graph or activity state", () => {
   const snapshot = createEmptyBuilderSnapshot(workspace);
   snapshot.actors.push({ id: "lead", role: "lead", label: "Lead", parentActorId: null, agentId: null, sessionId: null, status: "idle" });
@@ -51,7 +55,7 @@ test("adds the scoped baseline as an interpreted document without changing graph
   snapshot.activity.push({ id: "activity-1", actorId: "lead", label: "Existing activity", createdAt: "2026-11-02T00:00:00.000Z", evidenceRef: null });
   const untouched = structuredClone({ actors: snapshot.actors, graph: snapshot.graph, activity: snapshot.activity, messages: snapshot.messages });
 
-  const projected = projectDesignBaseline(snapshot, view());
+  const projected = projectDesignBaseline(snapshot, view({ baselineDigest: baselineDigest() }));
   assert.equal(projected.documents.length, 1);
   assert.equal(projected.documents[0]?.id, "design-baseline:baseline-r01");
   assert.equal(projected.documents[0]?.title, "설계 기준 · Lead 해석 기록");
@@ -60,6 +64,8 @@ test("adds the scoped baseline as an interpreted document without changing graph
   assert.equal(projected.documents[0]?.category, "design");
   assert.equal(projected.documents[0]?.approvalStatus, "unknown");
   assert.equal(projected.documents[0]?.freshnessStatus, "unknown");
+  assert.deepEqual(projected.documents[0]?.sourcePins?.[0], { sourceId: projected.documents[0]?.id,
+    revisionId: projected.documents[0]?.revisionId, sha256: baselineDigest() });
   assert.deepEqual(projected.documents[0]?.relatedIds, ["draft-r01", "spec-r01", "graph-r01", "REQ-1"]);
   assert.deepEqual({ actors: projected.actors, graph: projected.graph, activity: projected.activity, messages: projected.messages }, untouched);
   const text = JSON.parse(projected.documents[0]!.text) as { notice: string; projectId: string; graph: { entities: unknown[] } };
@@ -69,6 +75,31 @@ test("adds the scoped baseline as an interpreted document without changing graph
   assert.equal(projectDesignBaseline(snapshot, null), snapshot);
 });
 
+test("adds a navigable self pin only for the exact server-provided canonical Baseline digest", () => {
+  const snapshot = createEmptyBuilderSnapshot(workspace);
+  const digestValue = baselineDigest();
+  const baselineDocument = projectDesignBaseline(snapshot, view({ baselineDigest: digestValue })).documents[0]!;
+  const consumers = ["workstream:WS-1", "technology-decisions:TECH-1"].map((id, index) => ({
+    id, title: id, revisionId: `consumer-r${index + 1}`, text: "", createdAt: baseline().createdAt,
+    sourcePins: [{ sourceId: baselineDocument.id, revisionId: baselineDocument.revisionId, sha256: digestValue }],
+  }));
+  for (const consumer of consumers) {
+    assert.deepEqual(resolveDocumentReference([consumer, baselineDocument], consumer.id,
+      { kind: "source-pin", sourceId: baselineDocument.id, revisionId: baselineDocument.revisionId, sha256: digestValue }),
+    { status: "linked", targetId: baselineDocument.id, targetTitle: baselineDocument.title });
+  }
+  const stale = { ...consumers[0]!, sourcePins: [{ ...consumers[0]!.sourcePins[0]!, sha256: "b".repeat(64) }] };
+  assert.deepEqual(resolveDocumentReference([stale, baselineDocument], stale.id,
+    { kind: "source-pin", ...stale.sourcePins[0]! }), { status: "unlinked" });
+  const wrongTargetDigest = projectDesignBaseline(snapshot, view({ baselineDigest: "c".repeat(64) })).documents[0]!;
+  assert.deepEqual(resolveDocumentReference([consumers[0]!, wrongTargetDigest], consumers[0]!.id,
+    { kind: "source-pin", ...consumers[0]!.sourcePins[0]! }), { status: "unlinked" });
+  const legacy = projectDesignBaseline(snapshot, view()).documents[0]!;
+  assert.equal(legacy.sourcePins?.some(pin => pin.sourceId === legacy.id && pin.revisionId === legacy.revisionId), false);
+  assert.deepEqual(resolveDocumentReference([consumers[0]!, legacy], consumers[0]!.id,
+    { kind: "source-pin", ...consumers[0]!.sourcePins[0]! }), { status: "unlinked" });
+});
+
 test("rejects foreign scopes, unsafe sequences, extra fields and accessors", () => {
   const snapshot = createEmptyBuilderSnapshot(workspace);
   assert.throws(() => projectDesignBaseline(snapshot, view({ workspaceId: "other" })), /cross-scope/);
@@ -76,6 +107,7 @@ test("rejects foreign scopes, unsafe sequences, extra fields and accessors", () 
   assert.throws(() => projectDesignBaseline(snapshot, view({ sequence: 0 })), /cross-scope/);
   assert.throws(() => projectDesignBaseline(snapshot, view({ sequence: Number.MAX_SAFE_INTEGER + 1 })), /cross-scope/);
   assert.throws(() => projectDesignBaseline(snapshot, view({ approved: true })), /fields/);
+  assert.throws(() => projectDesignBaseline(snapshot, view({ baselineDigest: "A".repeat(64) })), /digest/u);
 
   const withSymbol = view();
   Object.defineProperty(withSymbol, Symbol("extra"), { value: true, enumerable: true });

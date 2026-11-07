@@ -1487,7 +1487,7 @@ export function createBuilderPlatform() {
       if (typeof params.projectId !== "string") throw new TypeError("A Builder project ID is required.");
       const current = await readDesignBaseline(companyId, params.projectId, platform);
       return current && { workspaceId: companyId, projectId: params.projectId, sequence: current.sequence,
-        baseline: current.revision } as unknown as JsonValue;
+        baseline: current.revision, baselineDigest: createHash("sha256").update(JSON.stringify(current.revision), "utf8").digest("hex") } as unknown as JsonValue;
     } }, { key: "builder.baseline-document", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       const source = createBaselineBodySource(companyId, companyId, platform.state);

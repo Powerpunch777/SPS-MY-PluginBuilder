@@ -23,17 +23,25 @@ function exactRecord(value: unknown, keys: readonly string[]): Record<string, un
 
 export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown): BuilderSnapshot {
   if (value === null) return snapshot;
-  const row = exactRecord(value, ["workspaceId", "projectId", "sequence", "baseline"]);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid design baseline view.");
+  const hasDigest = Object.hasOwn(value, "baselineDigest");
+  const row = exactRecord(value, hasDigest
+    ? ["workspaceId", "projectId", "sequence", "baseline", "baselineDigest"]
+    : ["workspaceId", "projectId", "sequence", "baseline"]);
   if (row.workspaceId !== snapshot.workspaceId || row.projectId !== snapshot.workspaceId
     || typeof row.sequence !== "number" || !Number.isSafeInteger(row.sequence) || row.sequence < 1) {
     throw new TypeError("Invalid or cross-scope design baseline view.");
   }
+  if (hasDigest && (typeof row.baselineDigest !== "string" || !/^[a-f0-9]{64}$/u.test(row.baselineDigest))) {
+    throw new TypeError("Invalid design baseline digest.");
+  }
 
   const baseline: DesignBaseline = parseDesignBaseline(row.baseline, snapshot.workspaceId);
+  const baselineId = `design-baseline:${baseline.revisionId}`;
   return {
     ...snapshot,
     documents: [...snapshot.documents, {
-      id: `design-baseline:${baseline.revisionId}`,
+      id: baselineId,
       title: "설계 기준 · Lead 해석 기록",
       revisionId: baseline.revisionId,
       createdAt: baseline.createdAt,
@@ -43,8 +51,12 @@ export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown)
       }, null, 2),
       category: "design", sourceKind: "design-baseline", approvalStatus: "unknown", freshnessStatus: "unknown",
       bodyAvailable: true,
-      sourcePins: [{ sourceId: `design-draft:${baseline.sourceDraftRevisionId}`, revisionId: baseline.sourceDraftRevisionId,
-        sha256: baseline.draftDigest }],
+      sourcePins: [
+        ...(typeof row.baselineDigest === "string" ? [{ sourceId: baselineId, revisionId: baseline.revisionId,
+          sha256: row.baselineDigest }] : []),
+        { sourceId: `design-draft:${baseline.sourceDraftRevisionId}`, revisionId: baseline.sourceDraftRevisionId,
+          sha256: baseline.draftDigest },
+      ],
       relatedIds: [baseline.sourceDraftRevisionId, baseline.specification.revisionId, baseline.graph.graphRevisionId,
         ...baseline.specification.requirements.map(requirement => requirement.id)],
     }],

@@ -95,6 +95,7 @@ test("Main Baseline publication produces a pinned body and the registered read p
 
   const baselineRead = contract.data.find(row => row.key === "builder.design-baseline").handler;
   const previous = await baselineRead({ companyId: workspace, projectId: workspace }, f.platform);
+  assert.equal(previous.baselineDigest, hash(JSON.stringify(previous.baseline)));
   const followup = await propose({ projectId: workspace, expectedDraftRevisionId: "draft-1",
     expectedReviewHeadRevisionId: approved.revision.revisionId,
     pack: { packId: "doc-check", version: "2", applicability: {}, rules: [{ id: "doc-rule-v2", requirementIds: ["REQ-1"],
