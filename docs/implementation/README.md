@@ -510,6 +510,25 @@
   초기 입력·시험용 전송 어댑터와 HTTP 기대값 오류, 수정 전 실패, 수동 활성화를 포함한
   이전 통과와 이를 제거한 후속 통과를 각각 보존했다. 제품 SDK pin·설치본은 그대로다.
 
+### 2026-11-08 Worker 실제 Source 인계 연결
+
+- `586ff0a`·`29fd4de`는 Host Run의 선택적 `timing`을 Worker 파일 도구·CTO 인수·보호 QA에서
+  허용한다. 실행 ID·취소·권한·Task 핀 검사는 유지하고 알 수 없는 필드는 계속 거부한다.
+  고정 SDK 별도 사본의 관련 39개와 타입 검사, 정확한 `29fd4de`·후보 SDK `578d15c`
+  사본의 타입·빌드·관련 36개가 통과했다. 제품 SDK pin과 설치본은 변경하지 않았다.
+- 임시 Core와 같은 후보 산출물을 연결한 무모델 시험에서 서명된 수동 Node 요청이
+  실제 Worker IPC를 거쳐 지정 Source 파일을 읽고 수정하고 Git Commit/Tree를 제출했다.
+  범위 밖 쓰기는 거부됐으며 CTO 인수 handler가 동일 Commit의 수신 기록을 저장했다.
+  같은 전송 요청 재생은 Commit을 추가하지 않았다. Builder Worker 프로세스를 종료·재시작한
+  뒤 새 전송 요청도 기존 Session/Run의 같은 제출을 반환했고 Commit과 Node 명령은 각 1건이었다.
+- 상류 CTO 실행·사용자 승인 자료는 합성 입력이며 Node 클라이언트는 수동 시험용이다.
+  실제 모델 수행·CLI 세션 복구·OS 격리·보호 테스트·QA 합격·Manager 통합 성공을 뜻하지 않는다.
+  대기 중인 Core Run은 모델 성공으로 꾸미지 않고 취소했으며 Worker 종료와 잔여 프로세스
+  부재를 확인했다. 수정 전 실패와 후보별 산출물·SDK 해시는 별도 증거로 보존했다.
+- `586ff0a`와 동등한 고정 SDK 시험 소스의 전체 회귀는 1,209개 통과·1개 실패였다.
+  실패한 G5 배정 시험은 새 결정 검증에 필요한 Baseline 원본이 없어 차단됐다.
+  이 결과를 전체 통과로 표시하지 않으며 원본 연결을 갖춘 시험으로 보완 중이다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)
