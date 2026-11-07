@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { assertProtectedOutputMetadata, PROTECTED_OUTPUT_RECEIPT_FIELDS } from "../protected-test-output-metadata.ts";
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext } from "../lead-tool-authority.ts";
 import { parseProtectedRun } from "../task-protected-qa.ts";
@@ -36,7 +37,8 @@ function technicalOutcome(run: ReturnType<typeof parseProtectedRun>): "pending" 
   if (run.termination !== "confirmed" || run.receipt === null) return "unknown";
   const receipt = exactToolRecord(run.receipt, ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes",
     "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
-    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"]);
+    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"], PROTECTED_OUTPUT_RECEIPT_FIELDS);
+  assertProtectedOutputMetadata(receipt);
   if (typeof receipt.digest !== "string" || !/^[a-f0-9]{64}$/u.test(receipt.digest)
     || receipt.appContainerVerified !== true || receipt.capabilitiesCount !== 0 || receipt.childTerminationConfirmed !== true
     || receipt.jobEmpty !== true || receipt.profileCleanupSucceeded !== true || receipt.sandboxCleanupSucceeded !== true

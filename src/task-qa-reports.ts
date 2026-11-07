@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { assertProtectedOutputMetadata, PROTECTED_OUTPUT_RECEIPT_FIELDS } from "./protected-test-output-metadata.ts";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState, type RevisionPublicationGuard } from "./solution-revision-store.ts";
@@ -120,7 +121,8 @@ export async function publishTaskQaReport(params: unknown, runContext: unknown, 
   }
   const receipt = exactToolRecord(core.receipt, ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes",
     "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
-    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"]);
+    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"], PROTECTED_OUTPUT_RECEIPT_FIELDS);
+  assertProtectedOutputMetadata(receipt);
   if (typeof receipt.digest !== "string" || !sha.test(receipt.digest) || receipt.appContainerVerified !== true
     || receipt.capabilitiesCount !== 0 || receipt.childTerminationConfirmed !== true || receipt.jobEmpty !== true
     || receipt.profileCleanupSucceeded !== true || receipt.sandboxCleanupSucceeded !== true || receipt.fixtureMustBeRetained !== false

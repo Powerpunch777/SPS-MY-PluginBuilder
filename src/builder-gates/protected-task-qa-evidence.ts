@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { assertProtectedOutputMetadata, PROTECTED_OUTPUT_RECEIPT_FIELDS } from "../protected-test-output-metadata.ts";
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext } from "../lead-tool-authority.ts";
 import { taskPacketRecordDigest } from "../domain/task-packets.ts";
@@ -55,7 +56,8 @@ function parseCoreRun(value: unknown): ProtectedTaskQaCoreRun {
     "manifestSha256", "inputTreeSha256", "nodeSha256", "subjectKeySha256", "timeoutMs"]);
   const receipt = exactToolRecord(row.receipt, ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes",
     "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
-    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"]);
+    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"], PROTECTED_OUTPUT_RECEIPT_FIELDS);
+  assertProtectedOutputMetadata(receipt);
   if (row.schemaVersion !== 1 || row.kind !== "protected-node-test-v1" || typeof row.id !== "string"
     || !["queued", "claimed", "running", "cancelling", "succeeded", "failed", "cancelled"].includes(String(row.status))
     || !["not_applicable", "pending", "confirmed"].includes(String(row.termination))
