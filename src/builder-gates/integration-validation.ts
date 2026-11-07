@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { assertProtectedOutputMetadata, PROTECTED_OUTPUT_RECEIPT_FIELDS } from "../protected-test-output-metadata.ts";
+import { readProtectedOutputArtifacts, type ProtectedOutputRead } from "../protected-test-output-artifacts.ts";
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext } from "../lead-tool-authority.ts";
 import { parseProtectedRun } from "../task-protected-qa.ts";
@@ -57,6 +58,7 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
       const reference = attempt.validationRuns?.[phase];
       if (!reference) continue;
       let status: "pending" | "passed" | "failed" | "unknown" | "stale" = "unknown";
+      let outputs: ProtectedOutputRead | null = null;
       if (reference.runId && typeof api?.getRunV1 === "function") {
         try {
           const raw = await api.getRunV1(attempt.scope.workspaceId, reference.runId, reference.subjectKeySha256);
@@ -69,11 +71,15 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
               if (tip.status !== "current" || tip.sourceId !== attempt.effect.sourceId || tip.folderKey !== attempt.effect.folderKey
                 || tip.branch !== attempt.effect.branch || tip.commitSha !== reference.commitSha || tip.treeSha !== reference.treeSha) status = "stale";
             }
+            if (status === "passed" && reference.approvalId) outputs = await readProtectedOutputArtifacts({
+              workspaceId: attempt.scope.workspaceId, runId: reference.runId, subjectKey: reference.subjectKey,
+              approvalId: reference.approvalId, sourceId: attempt.effect.sourceId, commitSha: reference.commitSha,
+              treeSha: reference.treeSha, planSha256: reference.planSha256 }, platform);
           }
         } catch { /* Missing or changed Core authority is not a test pass. */ }
       }
       results.push({ taskId: attempt.scope.taskId, phase, runId: reference.runId, commitSha: reference.commitSha,
-        treeSha: reference.treeSha, status, qaVerdict: "not-established" as const });
+        treeSha: reference.treeSha, status, outputs, qaVerdict: "not-established" as const });
     }
   }
   return results;
