@@ -29,6 +29,7 @@ type ReadResult = Readonly<{
   matchesCurrentBaseline: boolean;
   approvalRevisionId: string | null;
   approval: Record<string, unknown> | null;
+  confirmable: boolean;
   pinKey: string;
 }>;
 
@@ -115,10 +116,13 @@ function readData(value: unknown): ReadResult | null {
       || !Number.isSafeInteger(approval.user.selectionRevision) || typeof approval.user.approvedAt !== "string") return null;
     approvalRevisionId = approval.revisionId;
   }
+  const sourceIds = proposal.sourceRefs.map((pin: Record<string, unknown>) => pin.sourceId);
+  const confirmable = sourceIds.length > 0 && new Set(sourceIds).size === 1
+    && typeof sourceIds[0] === "string" && sourceIds[0].startsWith("lead-turn:");
   return Object.freeze({ sequence: current.sequence as number, revision: proposal,
     currentBaselineRevisionId: baselineRevisionId, currentBaselineSequence: baselineSequence as number,
     matchesCurrentBaseline: row.matchesCurrentBaseline,
-    approvalRevisionId, approval,
+    approvalRevisionId, approval, confirmable,
     pinKey: JSON.stringify([proposal.revisionId, baselineRevisionId, baselineSequence, approvalRevisionId]) });
 }
 
@@ -138,7 +142,7 @@ export function CurrentBaselinePackReviewPanel({ view, onConfirm, onRefresh }: C
 
   useEffect(() => { setAttempt("idle"); }, [key]);
 
-  const canConfirm = Boolean(current && data && pack && onConfirm && !busy && attempt === "idle");
+  const canConfirm = Boolean(current && data?.confirmable && pack && onConfirm && !busy && attempt === "idle");
   async function confirm() {
     if (!canConfirm || !data || !pack || !onConfirm) return;
     setBusy(true);
@@ -166,6 +170,9 @@ export function CurrentBaselinePackReviewPanel({ view, onConfirm, onRefresh }: C
       : <>
         {(view.status === "stale" || !current) && <p className="sps-cbpr-state sps-cbpr-warning" role="status">
           제안 또는 Baseline 핀이 바뀌었습니다. 이 내용은 읽기만 가능하며 다시 불러오기 전까지 확인할 수 없습니다.
+        </p>}
+        {current && !data.confirmable && <p className="sps-cbpr-state sps-cbpr-warning" role="status">
+          현재 제안은 follow-up 확인이 요구하는 Main 사용자 결정 출처에 연결되지 않아 확인할 수 없습니다.
         </p>}
         <section className="sps-cbpr-section" aria-label="현재 기준선과 제안">
           <h3>현재 핀</h3>
@@ -228,6 +235,11 @@ export function CurrentBaselinePackReviewPanel({ view, onConfirm, onRefresh }: C
             <Item label="확인 시각" value={String(plain(existingApproval.user) ? existingApproval.user.approvedAt : "확인 불가")} />
           </div>
         </section>}
+        <details className="sps-cbpr-section">
+          <summary>전체 제안·모델·source pin 데이터</summary>
+          <pre className="sps-cbpr-quote">{shown({ pack: data.revision.pack, rulesManifest: data.revision.rulesManifest,
+            sourceRefs: data.revision.sourceRefs, designModel: data.revision.designModel ?? null })}</pre>
+        </details>
         {attempt === "submitted" && <p className="sps-cbpr-state" role="status">확인 action이 접수됐습니다. 최신 기록을 다시 읽어 결과를 확인하세요.</p>}
         {attempt === "changed" && <p className="sps-cbpr-state sps-cbpr-warning" role="status">제안 또는 확인 head가 바뀌었습니다. 자동 재시도하지 않았습니다.</p>}
         {attempt === "unknown" && <p className="sps-cbpr-state sps-cbpr-danger" role="alert">저장 결과를 확인할 수 없습니다. 기존 확인을 보존해 표시하며 재전송하지 않았습니다.</p>}
