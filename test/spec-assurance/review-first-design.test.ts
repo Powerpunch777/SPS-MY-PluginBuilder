@@ -335,12 +335,30 @@ test("the same review journal proposes and approves follow-up bundles pinned to 
   const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
   assert.equal(proposal.status, "published");
   if (proposal.status !== "published") throw new Error("Follow-up review proposal was not published.");
+  const impact = proposal.revision.followUpImpact;
+  assert(impact, "new follow-up proposals bind a server-derived pre-approval impact projection");
+  assert.equal(impact.sourceIdentity.priorBaselineRevisionId, first.revision.revisionId);
+  assert.equal(impact.sourceIdentity.pendingDraftRevisionId, proposal.revision.draftRevisionId);
+  assert.equal(impact.overallStatus, "UNKNOWN");
+  assert.equal(impact.dimensions.requirements.status, "NO_CANDIDATE_OBSERVED");
+  assert.equal(impact.dimensions.graph.status, "NO_CANDIDATE_OBSERVED");
+  for (const dimension of ["ui", "technology", "ctoWorkstreams", "tasks", "scheduleProductScope"] as const) {
+    assert.equal(impact.dimensions[dimension].status, "UNKNOWN");
+  }
+  assert.equal(impact.approvalCreated, false);
+  assert.equal(impact.baselinePublished, false);
+  assert.equal(impact.executionAuthorized, false);
+  assert.deepEqual(await readFirstDesignReviewBundle(WORKSPACE, PROJECT, f.state).then(bundle => bundle?.followUpImpact), impact);
+  await assert.rejects(proposeFirstDesignReview({ ...f.params, followUpImpact: impact }, f.runContext, f.platform),
+    /Invalid Builder tool fields/u);
   assert.deepEqual(proposal.revision.priorBaseline, { revisionId: first.revision.revisionId, sequence: first.sequence,
     digest: digest(JSON.stringify(first.revision)) });
   const approved = await approveFirstDesignReview({ projectId: PROJECT,
     expectedBundleRevisionId: proposal.revision.revisionId }, f.context);
   if (approved.status !== "published") throw new Error("Follow-up review approval was not published.");
   assert.equal(approved.revision.priorBaseline?.revisionId, first.revision.revisionId);
+  assert.deepEqual(approved.revision.followUpImpact, impact, "approval attests to the exact stored comparison projection");
+  assert.deepEqual((await readFirstDesignApprovalBinding(WORKSPACE, PROJECT, f.state))?.bundle.followUpImpact, impact);
 });
 
 test("follow-up review approval conflicts if its observed prior Baseline changes", async () => {
@@ -363,6 +381,28 @@ test("follow-up review approval conflicts if its observed prior Baseline changes
     ...first.revision, revisionId: "baseline-new", specification: { ...first.revision.specification, revisionId: "spec-new",
       approvalEvidenceRef: SOURCE_ID }, graph: { ...first.revision.graph, approvedSpecRevisionId: "spec-new", graphRevisionId: "graph-new" },
   } });
+  assert.deepEqual(await approveFirstDesignReview({ projectId: PROJECT,
+    expectedBundleRevisionId: proposal.revision.revisionId }, f.context), { status: "conflict" });
+});
+
+test("follow-up report readers suppress the projection when the current exact Draft drifts", async () => {
+  const f = fixture();
+  await f.published;
+  await publishTestBaseline(f);
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (proposal.status !== "published") throw new Error("Follow-up review proposal was not published.");
+  assert((await readFirstDesignReviewBundle(WORKSPACE, PROJECT, f.state))?.followUpImpact);
+
+  const current = await f.drafts.current();
+  assert(current);
+  const nextDraft = { ...current.revision, draft: { ...current.revision.draft,
+    revisionId: "draft-v2", specification: { ...current.revision.draft.specification, revisionId: "spec-v2",
+      requirements: [{ ...current.revision.draft.specification.requirements[0]!, description: "Changed after review proposal." }] },
+    graph: { ...current.revision.draft.graph, graphRevisionId: "graph-v2" } } };
+  const changed = await f.drafts.publish({ expectedBaseRevisionId: current.revision.draft.revisionId, revision: nextDraft });
+  assert.equal(changed.status, "published");
+  assert.equal(await readFirstDesignReviewBundle(WORKSPACE, PROJECT, f.state), null);
+  assert.equal(await readFirstDesignApprovalBinding(WORKSPACE, PROJECT, f.state), null);
   assert.deepEqual(await approveFirstDesignReview({ projectId: PROJECT,
     expectedBundleRevisionId: proposal.revision.revisionId }, f.context), { status: "conflict" });
 });

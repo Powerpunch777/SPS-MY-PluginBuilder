@@ -6,12 +6,14 @@ import { composeDomainPacks, type DomainPack } from "./evaluator.ts";
 import { readLeadUserSource } from "../lead-conversations.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { parseDesignDraft } from "../domain/design-drafts.ts";
+import { G5_DIMENSIONS, type G5Candidate, type G5Dimension } from "../domain/g5-change-impact.ts";
 import { parseLeadAgentBinding } from "../domain/lead-agent.ts";
 import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import type { AuthoredDesignDraft } from "../design-draft-store.ts";
 import { createRevisionJournal, type RevisionState } from "../solution-revision-store.ts";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
 import { parseDesignModelMaterial, type DesignModelMaterial } from "./design-model-material.ts";
+import { compareFollowUpDraftImpact, type FollowUpChangeImpactReport, type FollowUpDimensionResult } from "./follow-up-change-impact.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const ID = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= 160
@@ -42,6 +44,7 @@ export type FirstDesignReviewBundle = Readonly<{
   sourcePins: readonly FirstDesignSourcePin[];
   consultationClassifications?: readonly Readonly<{ sourceId: string; sourceDigest: string;
     classification: typeof CONSULTATION_CLASSIFICATIONS[number]; rationale: string }>[];
+  followUpImpact?: FollowUpChangeImpactReport;
   pack: DomainPack;
   designModel?: DesignModelMaterial;
   author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number; createdAt: string }>;
@@ -86,12 +89,13 @@ function validatePack(value: unknown, identity: DomainPack["identity"], requirem
   return freezeTree(pack);
 }
 
-function proposalFingerprint(bundle: Pick<FirstDesignReviewBundle, "workspaceId" | "projectId" | "priorBaseline" | "draftRevisionId" | "draftDigest" | "draft" | "sourcePins" | "pack" | "designModel" | "consultationClassifications" | "author">) {
+function proposalFingerprint(bundle: Pick<FirstDesignReviewBundle, "workspaceId" | "projectId" | "priorBaseline" | "draftRevisionId" | "draftDigest" | "draft" | "sourcePins" | "pack" | "designModel" | "consultationClassifications" | "followUpImpact" | "author">) {
   return hash([bundle.workspaceId, bundle.projectId, bundle.draftRevisionId, bundle.draftDigest, bundle.draft,
     bundle.sourcePins, bundle.pack, bundle.author.agentId, bundle.author.sessionId, bundle.author.runId, bundle.author.selectionRevision,
     ...(bundle.priorBaseline === null ? [] : [bundle.priorBaseline]),
     ...(bundle.consultationClassifications ? [bundle.consultationClassifications] : []),
-    ...(bundle.designModel ? [bundle.designModel] : [])]);
+    ...(bundle.designModel ? [bundle.designModel] : []),
+    ...(bundle.followUpImpact ? [bundle.followUpImpact] : [])]);
 }
 
 function baselineJournal(workspaceId: string, projectId: string, state: RevisionState) {
@@ -105,13 +109,117 @@ async function currentBaselinePin(workspaceId: string, projectId: string, contex
     digest: hash(current.revision) }) : null;
 }
 
+async function followUpImpactForDraft(workspaceId: string, projectId: string, priorBaseline: FirstDesignReviewBaselinePin,
+  draft: AuthoredDesignDraft["draft"], state: RevisionState): Promise<FollowUpChangeImpactReport> {
+  const exact = await baselineJournal(workspaceId, projectId, state).publishedRevision(priorBaseline.revisionId);
+  if (!exact || exact.sequence !== priorBaseline.sequence || hash(exact.revision) !== priorBaseline.digest) {
+    throw new Error("The exact prior Baseline bound to this follow-up review is unavailable or changed.");
+  }
+  return parseFollowUpImpact(compareFollowUpDraftImpact({ projectId, priorBaseline: exact.revision, pendingDraft: draft }),
+    projectId, priorBaseline, draft);
+}
+
+async function followUpImpactMatchesCurrent(bundle: FirstDesignReviewBundle, draft: AuthoredDesignDraft["draft"], state: RevisionState) {
+  if (!bundle.followUpImpact) return true;
+  if (!bundle.priorBaseline) return false;
+  try {
+    const current = await followUpImpactForDraft(bundle.workspaceId, bundle.projectId, bundle.priorBaseline, draft, state);
+    return JSON.stringify(current) === JSON.stringify(bundle.followUpImpact);
+  } catch { return false; }
+}
+
 function sameBaselinePin(left: FirstDesignReviewBaselinePin | null, right: FirstDesignReviewBaselinePin | null) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function boundedStringList(value: unknown, label: string, maximum: number): readonly string[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum
+    || Reflect.ownKeys(value).length !== value.length + 1) throw new TypeError(`${label} must be a bounded dense list.`);
+  return Object.freeze(Array.from({ length: value.length }, (_, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value") || !ID(descriptor.value)) {
+      throw new TypeError(`${label} must contain bounded identifiers.`);
+    }
+    return descriptor.value as string;
+  }));
+}
+
+function parseFollowUpImpact(value: unknown, projectId: string, priorBaseline: FirstDesignReviewBaselinePin,
+  draft: AuthoredDesignDraft["draft"]): FollowUpChangeImpactReport {
+  const row = exactToolRecord(value, ["projectId", "sourceIdentity", "overallStatus", "dimensions", "completeness",
+    "approvalCreated", "baselinePublished", "executionAuthorized"]);
+  const identity = exactToolRecord(row.sourceIdentity, ["priorBaselineRevisionId", "priorSpecRevisionId", "priorGraphRevisionId",
+    "pendingDraftRevisionId", "pendingSpecRevisionId", "pendingGraphRevisionId", "journalBinding"]);
+  if (row.projectId !== projectId || row.overallStatus !== "UNKNOWN" || row.approvalCreated !== false
+    || row.baselinePublished !== false || row.executionAuthorized !== false
+    || identity.priorBaselineRevisionId !== priorBaseline.revisionId || !ID(identity.priorSpecRevisionId) || !ID(identity.priorGraphRevisionId)
+    || identity.pendingDraftRevisionId !== draft.revisionId || identity.pendingSpecRevisionId !== draft.specification.revisionId
+    || identity.pendingGraphRevisionId !== draft.graph.graphRevisionId || identity.journalBinding !== "NOT_VERIFIED_BY_PURE_HELPER") {
+    throw new TypeError("Follow-up impact identity or non-authority markers are invalid.");
+  }
+  const rawDimensions = exactToolRecord(row.dimensions, G5_DIMENSIONS);
+  const dimensions = Object.create(null) as Record<G5Dimension, FollowUpDimensionResult>;
+  for (const dimension of G5_DIMENSIONS) {
+    const item = exactToolRecord(rawDimensions[dimension], ["status", "priorRevisionId", "pendingRevisionId", "candidates", "scope"]);
+    const supported = dimension === "requirements" || dimension === "graph";
+    const status = item.status;
+    if (status !== "CANDIDATES" && status !== "NO_CANDIDATE_OBSERVED" && status !== "UNKNOWN") {
+      throw new TypeError(`Invalid ${dimension} follow-up impact status.`);
+    }
+    if (supported) {
+      const expectedPrior = dimension === "requirements" ? identity.priorSpecRevisionId : identity.priorGraphRevisionId;
+      const expectedPending = dimension === "requirements" ? identity.pendingSpecRevisionId : identity.pendingGraphRevisionId;
+      if (item.priorRevisionId !== expectedPrior || item.pendingRevisionId !== expectedPending || item.scope !== "dimension-local"
+        || status === "UNKNOWN") throw new TypeError(`Invalid supported ${dimension} follow-up impact projection.`);
+    } else if (item.status !== "UNKNOWN" || item.priorRevisionId !== null || item.pendingRevisionId !== null
+      || item.scope !== "not-produced-for-pending-draft") {
+      throw new TypeError(`Unsupported ${dimension} follow-up impact must remain UNKNOWN.`);
+    }
+    if (!Array.isArray(item.candidates) || Object.getPrototypeOf(item.candidates) !== Array.prototype
+      || item.candidates.length > 20_000 || Reflect.ownKeys(item.candidates).length !== item.candidates.length + 1) {
+      throw new TypeError(`${dimension} follow-up candidates must be a bounded dense list.`);
+    }
+    const candidates: G5Candidate[] = Array.from({ length: item.candidates.length }, (_, index) => {
+      const descriptor = Object.getOwnPropertyDescriptor(item.candidates, String(index));
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Follow-up candidates must be dense data.");
+      const candidate = exactToolRecord(descriptor.value, ["dimension", "recordId", "basis", "via"]);
+      if (candidate.dimension !== dimension || !ID(candidate.recordId)
+        || candidate.basis !== "direct-revision-diff" && candidate.basis !== "derived-reference") {
+        throw new TypeError("Invalid follow-up impact candidate.");
+      }
+      return Object.freeze({ dimension, recordId: candidate.recordId as string, basis: candidate.basis,
+        via: boundedStringList(candidate.via, "candidate.via", 10_000) });
+    });
+    if (!supported && candidates.length !== 0 || supported && status === "NO_CANDIDATE_OBSERVED" && candidates.length !== 0
+      || supported && status === "CANDIDATES" && candidates.length === 0) {
+      throw new TypeError(`Candidate list does not match ${dimension} impact status.`);
+    }
+    dimensions[dimension] = Object.freeze({ status, priorRevisionId: item.priorRevisionId as string | null,
+      pendingRevisionId: item.pendingRevisionId as string | null, candidates: Object.freeze(candidates),
+      scope: item.scope as FollowUpDimensionResult["scope"] });
+  }
+  const completeness = exactToolRecord(row.completeness,
+    ["localComparisonsUseValidatedContent", "unsupportedDimensions", "noCandidateMeaning"]);
+  const unsupportedDimensions = boundedStringList(completeness.unsupportedDimensions, "unsupportedDimensions", G5_DIMENSIONS.length);
+  const expectedUnsupported = G5_DIMENSIONS.filter(dimension => dimension !== "requirements" && dimension !== "graph");
+  if (completeness.localComparisonsUseValidatedContent !== true || JSON.stringify(unsupportedDimensions) !== JSON.stringify(expectedUnsupported)
+    || completeness.noCandidateMeaning !== "NO_CANDIDATE_OBSERVED_IN_THIS_DIMENSION_ONLY_NOT_NO_IMPACT") {
+    throw new TypeError("Follow-up impact completeness markers are invalid.");
+  }
+  return freezeTree({ projectId, sourceIdentity: Object.freeze({
+    priorBaselineRevisionId: priorBaseline.revisionId, priorSpecRevisionId: identity.priorSpecRevisionId as string,
+    priorGraphRevisionId: identity.priorGraphRevisionId as string, pendingDraftRevisionId: draft.revisionId,
+    pendingSpecRevisionId: draft.specification.revisionId, pendingGraphRevisionId: draft.graph.graphRevisionId,
+    journalBinding: "NOT_VERIFIED_BY_PURE_HELPER" as const }), overallStatus: "UNKNOWN" as const,
+    dimensions: Object.freeze(dimensions), completeness: Object.freeze({ localComparisonsUseValidatedContent: true as const,
+      unsupportedDimensions: Object.freeze(expectedUnsupported),
+      noCandidateMeaning: "NO_CANDIDATE_OBSERVED_IN_THIS_DIMENSION_ONLY_NOT_NO_IMPACT" as const }),
+    approvalCreated: false as const, baselinePublished: false as const, executionAuthorized: false as const });
+}
+
 function parseBundle(value: unknown, workspaceId: string, projectId: string): FirstDesignReviewBundle {
   const row = exactToolRecord(value, ["status", "revisionId", "workspaceId", "projectId", "priorBaseline", "draftRevisionId", "draftDigest", "draft", "sourcePins", "pack", "author"],
-    ["approval", "designModel", "consultationClassifications"]);
+    ["approval", "designModel", "consultationClassifications", "followUpImpact"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision", "createdAt"]);
   let priorBaseline: FirstDesignReviewBaselinePin | null = null;
   if (row.priorBaseline !== null) {
@@ -131,6 +239,10 @@ function parseBundle(value: unknown, workspaceId: string, projectId: string): Fi
   if (!draft || draft.projectId !== projectId || draft.revisionId !== row.draftRevisionId || hash(draft) !== row.draftDigest) {
     throw new TypeError("Review bundle must contain the exact immutable DesignDraft and digest.");
   }
+  const followUpImpact = Object.hasOwn(row, "followUpImpact")
+    ? priorBaseline ? parseFollowUpImpact(row.followUpImpact, projectId, priorBaseline, draft)
+      : (() => { throw new TypeError("Follow-up impact requires an exact prior Baseline pin."); })()
+    : undefined;
   if (!Array.isArray(row.sourcePins) || Object.getPrototypeOf(row.sourcePins) !== Array.prototype
     || row.sourcePins.length === 0 || Reflect.ownKeys(row.sourcePins).length !== row.sourcePins.length + 1) {
     throw new TypeError("Requirement-to-original-source pins are required as a dense list.");
@@ -192,6 +304,7 @@ function parseBundle(value: unknown, workspaceId: string, projectId: string): Fi
   return freezeTree({ status: row.status, revisionId: row.revisionId, workspaceId, projectId, priorBaseline,
     draftRevisionId: row.draftRevisionId, draftDigest: row.draftDigest, draft, sourcePins: Object.freeze(sourcePins), pack,
     ...(consultationClassifications ? { consultationClassifications } : {}),
+    ...(followUpImpact ? { followUpImpact } : {}),
     ...(designModel ? { designModel } : {}),
     author: Object.freeze({ agentId: author.agentId as string, sessionId: author.sessionId as string,
       runId: author.runId as string, selectionRevision: author.selectionRevision as number, createdAt: author.createdAt as string }),
@@ -390,6 +503,8 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
   const sources = await verifiedDraftSources(draft.revision, workspaceId, sessions, guardedContext);
   const consultationClassifications = await readConsultationClassifications(input.consultationClassifications,
     workspaceId, sessions, guardedContext);
+  const followUpImpact = priorBaseline
+    ? await followUpImpactForDraft(workspaceId, projectId, priorBaseline, parsedDraft, guardedContext.state as RevisionState) : undefined;
   await assertDraftStillCurrent(workspaceId, projectId, draft, guardedContext);
   await assertBaselinePin(workspaceId, projectId, priorBaseline, guardedContext);
   const identity = Object.freeze({ workspaceId, projectId, specRevisionId: parsedDraft.specification.revisionId,
@@ -410,6 +525,7 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
   const base = { status: "PROPOSED" as const, workspaceId, projectId, priorBaseline,
     draftRevisionId: parsedDraft.revisionId, draftDigest: hash(parsedDraft), draft: parsedDraft,
     sourcePins, pack, ...(consultationClassifications ? { consultationClassifications } : {}),
+    ...(followUpImpact ? { followUpImpact } : {}),
     author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId,
       selectionRevision: authority.selectionRevision, createdAt: new Date().toISOString() } };
   const proposed = Object.hasOwn(input, "designModel") ? { ...base,
@@ -460,11 +576,20 @@ export async function approveFirstDesignReview(params: unknown, context: UserRev
     || draft.revision.author.agentId !== current.revision.author.agentId
     || draft.revision.draft.revisionId !== current.revision.draftRevisionId
     || hash(draft.revision.draft) !== current.revision.draftDigest) return { status: "conflict" as const };
+  if (!await followUpImpactMatchesCurrent(current.revision, draft.revision.draft, context.state as RevisionState)) {
+    return { status: "conflict" as const };
+  }
   const sources = await verifiedDraftSources(draft.revision, workspaceId, sessions, context);
   if (current.revision.sourcePins.some(pin => sources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return { status: "conflict" as const };
   if (!await consultationClassificationsAreCurrent(current.revision, workspaceId, sessions, context)) return { status: "conflict" as const };
   await assertDraftStillCurrent(workspaceId, projectId, draft, context);
   if (!await baselinePinIsCurrent(workspaceId, projectId, current.revision.priorBaseline, context)) return { status: "conflict" as const };
+  const latestDraftForImpact = await currentDraft(workspaceId, projectId, context);
+  if (latestDraftForImpact.draft.sequence !== draft.sequence
+    || JSON.stringify(latestDraftForImpact.draft.revision) !== JSON.stringify(draft.revision)
+    || !await followUpImpactMatchesCurrent(current.revision, latestDraftForImpact.draft.revision.draft, context.state as RevisionState)) {
+    return { status: "conflict" as const };
+  }
   const latest = await store.current();
   if (!latest || latest.revision.revisionId !== current.revision.revisionId || latest.revision.status !== "PROPOSED") return { status: "conflict" as const };
   const approval = Object.freeze({ userId, approvedAt: new Date().toISOString(), attestedBundleRevisionId: current.revision.revisionId });
@@ -532,6 +657,7 @@ export async function assertCurrentFirstDesignApproval(params: unknown, runConte
     || normalizedDraft.revisionId !== exact.revision.draftRevisionId
     || hash(normalizedDraft) !== exact.revision.draftDigest
     || JSON.stringify(normalizedDraft) !== JSON.stringify(exact.revision.draft)) return null;
+  if (!await followUpImpactMatchesCurrent(exact.revision, normalizedDraft, guardedContext.state as RevisionState)) return null;
   const sources = await verifiedDraftSources(draft.revision, workspaceId, sessions, guardedContext);
   if (exact.revision.sourcePins.some(pin => sources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return null;
   if (!await consultationClassificationsAreCurrent(exact.revision, workspaceId, sessions, guardedContext)) return null;
@@ -544,6 +670,7 @@ export async function assertCurrentFirstDesignApproval(params: unknown, runConte
   const latestSources = await verifiedDraftSources(latestDraft.draft.revision, workspaceId, latestDraft.sessions, guardedContext);
   if (exact.revision.sourcePins.some(pin => latestSources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return null;
   if (!await consultationClassificationsAreCurrent(exact.revision, workspaceId, latestDraft.sessions, guardedContext)) return null;
+  if (!await followUpImpactMatchesCurrent(exact.revision, latestDraft.draft.revision.draft, guardedContext.state as RevisionState)) return null;
   await assertBaselinePin(workspaceId, projectId, exact.revision.priorBaseline, guardedContext);
   await authority.check();
   const bundleDigest = hash(exact.revision);
@@ -555,7 +682,17 @@ export async function assertCurrentFirstDesignApproval(params: unknown, runConte
 
 /** Main integration may bind only this immutable approved record and must revalidate the current Draft and source bytes before publication. */
 export async function readFirstDesignReviewBundle(workspaceId: string, projectId: string, state: RevisionState) {
-  return (await createFirstDesignReviewStore(workspaceId, projectId, state).current())?.revision ?? null;
+  const bundle = (await createFirstDesignReviewStore(workspaceId, projectId, state).current())?.revision ?? null;
+  if (!bundle?.followUpImpact) return bundle;
+  if (!bundle.priorBaseline) return null;
+  const current = await currentDraft(workspaceId, projectId, { state } as ReviewContext);
+  if (current.draft.revision.selectionRevision !== bundle.author.selectionRevision
+    || current.draft.revision.author.agentId !== bundle.author.agentId
+    || current.draft.revision.draft.revisionId !== bundle.draftRevisionId
+    || hash(current.draft.revision.draft) !== bundle.draftDigest
+    || JSON.stringify(current.draft.revision.draft) !== JSON.stringify(bundle.draft)
+    || !await followUpImpactMatchesCurrent(bundle, current.draft.revision.draft, state)) return null;
+  return bundle;
 }
 
 export async function readFirstDesignApprovalBinding(workspaceId: string, projectId: string, state: RevisionState) {
@@ -563,6 +700,15 @@ export async function readFirstDesignApprovalBinding(workspaceId: string, projec
   if (!current || current.revision.status !== "APPROVED" || !current.revision.approval
     || !ID(current.revision.approval.attestedBundleRevisionId)
     || current.revision.approval.attestedBundleRevisionId === current.revision.revisionId) return null;
+  if (current.revision.followUpImpact) {
+    const draft = await currentDraft(workspaceId, projectId, { state } as ReviewContext);
+    if (draft.draft.revision.selectionRevision !== current.revision.author.selectionRevision
+      || draft.draft.revision.author.agentId !== current.revision.author.agentId
+      || draft.draft.revision.draft.revisionId !== current.revision.draftRevisionId
+      || hash(draft.draft.revision.draft) !== current.revision.draftDigest
+      || JSON.stringify(draft.draft.revision.draft) !== JSON.stringify(current.revision.draft)
+      || !await followUpImpactMatchesCurrent(current.revision, draft.draft.revision.draft, state)) return null;
+  }
   return Object.freeze({ workspaceId, projectId, reviewRevisionId: current.revision.revisionId,
     bundle: current.revision,
     draftRevisionId: current.revision.draftRevisionId, draftDigest: current.revision.draftDigest,
