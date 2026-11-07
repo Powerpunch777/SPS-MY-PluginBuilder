@@ -36,6 +36,29 @@ test("missing, self, and duplicate matches remain non-navigable", () => {
     { status: "ambiguous" });
 });
 
+test("shared Baseline dependency pins never turn consumer documents into source targets", () => {
+  const baselineId = "baseline-body:current";
+  const baselinePin = { sourceId: baselineId, revisionId: "baseline-r8", sha256: "f".repeat(64) };
+  const baseline: BuilderDocument = { id: baselineId, title: "Baseline body", revisionId: baselinePin.revisionId,
+    createdAt: "2026-11-07T00:00:00.000Z", text: "Baseline", sourcePins: [baselinePin] };
+  const workstream: BuilderDocument = { ...owner, id: "doc:workstream", title: "Workstream", sourcePins: [baselinePin] };
+  const decision: BuilderDocument = { ...owner, id: "doc:technology-decision", title: "Technology decision", sourcePins: [baselinePin] };
+  const reference = { kind: "source-pin" as const, ...baselinePin };
+  assert.deepEqual(resolveDocumentReference([workstream, decision], workstream.id, reference), { status: "unlinked" });
+  assert.deepEqual(resolveDocumentReference([workstream, decision, baseline], workstream.id, reference),
+    { status: "linked", targetId: baselineId, targetTitle: baseline.title });
+  assert.deepEqual(resolveDocumentReference([decision, workstream, baseline], decision.id, reference),
+    { status: "linked", targetId: baselineId, targetTitle: baseline.title });
+});
+
+test("duplicate target IDs are ambiguous even when only one duplicate has the exact self pin", () => {
+  const differentPin = { ...target, title: "Different pin", sourcePins: [
+    { sourceId: "doc:other", revisionId: "other-r1", sha256: "e".repeat(64) },
+  ] };
+  assert.deepEqual(resolveDocumentReference([owner, target, differentPin], owner.id, { kind: "source-pin", ...targetPin }),
+    { status: "ambiguous" });
+});
+
 test("accessors and malformed snapshot members return unknown without invoking getters", () => {
   let invoked = 0;
   const accessorReference = Object.defineProperty({ kind: "document-id" }, "documentId", {

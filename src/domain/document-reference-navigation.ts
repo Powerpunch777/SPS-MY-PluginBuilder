@@ -5,7 +5,8 @@ export type DocumentReference = Readonly<{ kind: "document-id"; documentId: stri
 export type DocumentReferenceResolution = Readonly<{ status: "linked"; targetId: string; targetTitle: string }>
   | Readonly<{ status: "unlinked" | "ambiguous" | "unknown" }>;
 
-type Identity = Readonly<{ id: string; title: string; pins: readonly Readonly<{ sourceId: string; revisionId: string; sha256: string }>[] }>;
+type Identity = Readonly<{ id: string; title: string; revisionId: string;
+  pins: readonly Readonly<{ sourceId: string; revisionId: string; sha256: string }>[] }>;
 type ReadResult = Readonly<{ ok: true; value: unknown }> | Readonly<{ ok: false }>;
 
 function plainRecord(value: unknown): value is Record<string, unknown> {
@@ -26,9 +27,10 @@ function optionalData(value: Record<string, unknown>, key: string): ReadResult {
 
 function identity(value: unknown): Identity | null {
   if (!plainRecord(value)) return null;
-  const id = ownData(value, "id"), title = ownData(value, "title"), pinsValue = optionalData(value, "sourcePins");
-  if (!id.ok || !title.ok || !pinsValue.ok || typeof id.value !== "string" || !id.value.trim()
-    || typeof title.value !== "string") return null;
+  const id = ownData(value, "id"), title = ownData(value, "title"), revisionId = ownData(value, "revisionId");
+  const pinsValue = optionalData(value, "sourcePins");
+  if (!id.ok || !title.ok || !revisionId.ok || !pinsValue.ok || typeof id.value !== "string" || !id.value.trim()
+    || typeof title.value !== "string" || typeof revisionId.value !== "string" || !revisionId.value.trim()) return null;
   const rawPins = pinsValue.value ?? [];
   if (!Array.isArray(rawPins)
     || Object.getPrototypeOf(rawPins) !== Array.prototype
@@ -45,7 +47,7 @@ function identity(value: unknown): Identity | null {
       || typeof sha256.value !== "string" || !/^[a-f0-9]{64}$/iu.test(sha256.value)) return null;
     pins.push({ sourceId: sourceId.value, revisionId: revisionId.value, sha256: sha256.value });
   }
-  return { id: id.value, title: title.value, pins };
+  return { id: id.value, title: title.value, revisionId: revisionId.value, pins };
 }
 
 function validReference(value: unknown): DocumentReference | null {
@@ -90,11 +92,17 @@ export function resolveDocumentReference(documents: readonly BuilderDocument[], 
     identities.push(parsed);
   }
   if (identities.filter(item => item.id === currentDocumentId).length !== 1) return { status: "unknown" };
-  const matches = identities.filter(item => item.id !== currentDocumentId && (reference.kind === "document-id"
-    ? item.id === reference.documentId
-    : item.pins.some(pin => pin.sourceId === reference.sourceId && pin.revisionId === reference.revisionId
-      && pin.sha256 === reference.sha256)));
-  if (matches.length > 1) return { status: "ambiguous" };
-  if (!matches.length) return { status: "unlinked" };
-  return { status: "linked", targetId: matches[0]!.id, targetTitle: matches[0]!.title };
+  if (reference.kind === "document-id") {
+    const matches = identities.filter(item => item.id === reference.documentId && item.id !== currentDocumentId);
+    if (matches.length > 1) return { status: "ambiguous" };
+    if (!matches.length) return { status: "unlinked" };
+    return { status: "linked", targetId: matches[0]!.id, targetTitle: matches[0]!.title };
+  }
+  const idMatches = identities.filter(item => item.id === reference.sourceId);
+  if (idMatches.length > 1) return { status: "ambiguous" };
+  const target = idMatches[0];
+  if (!target || target.id === currentDocumentId || target.revisionId !== reference.revisionId
+    || !target.pins.some(pin => pin.sourceId === target.id && pin.revisionId === target.revisionId
+      && pin.sha256 === reference.sha256)) return { status: "unlinked" };
+  return { status: "linked", targetId: target.id, targetTitle: target.title };
 }
