@@ -35,7 +35,8 @@ const requestKey = { scopeKind: "company" as const, scopeId: WORKSPACE, namespac
   stateKey: `verified-consumption.v1.${createHash("sha256").update(`${WORKSPACE}\0ws-1`, "utf8").digest("hex")}` };
 const taskKey = integrationManagerSessionTaskKey(WORKSPACE, WORKSPACE, MANAGER);
 
-function managerHost(options: { selectedAgentId?: string; profileStatus?: string; sessionStatus?: string; pauseReason?: string } = {}) {
+function managerHost(options: { selectedAgentId?: string; profileStatus?: string; sessionStatus?: string; pauseReason?: string;
+  contextState?: string; includeContext?: boolean } = {}) {
   const values = new Map<string, JsonValue>([
     [integrationManagerStateKey(WORKSPACE).stateKey, { schemaVersion: 1, workspaceId: WORKSPACE, revision: 2,
       selectedAgentId: options.selectedAgentId ?? MANAGER }],
@@ -61,7 +62,8 @@ function managerHost(options: { selectedAgentId?: string; profileStatus?: string
         ...(options.profileStatus === "paused" ? { pauseReason: options.pauseReason ?? "system" } : {}) }]; },
       sessions: {
         async list() { return [{ observationVersion: 1, sessionId: SESSION, agentId: MANAGER, companyId: WORKSPACE,
-          status: options.sessionStatus ?? "active", taskKey, closedAt: null, contextState: "valid", managedAgentOwnership: "owned" }]; },
+          status: options.sessionStatus ?? "active", taskKey, closedAt: null, contextState: options.contextState ?? "valid",
+          ...(options.includeContext ? { context: { projectId: WORKSPACE } } : {}), managedAgentOwnership: "owned" }]; },
         async describePolicySupport() { return { schemaVersion: 1, modes: ["plugin-tools-only-v1"],
           enforcement: "dispatch-and-run", readiness: "unknown", osIsolation: "not-certified" }; },
         async getRequest(_session: string, _workspace: string, id: string) {
@@ -109,6 +111,12 @@ test("Manager authority requires selected owned identity and a current independe
   await assert.rejects(resolveCurrentIntegrationManagerAuthority(WORKSPACE, inactive.host), /manager-session-not-current-owned-independent/u);
   const systemPaused = managerHost({ profileStatus: "paused", pauseReason: "system" });
   assert.deepEqual(await resolveCurrentIntegrationManagerAuthority(WORKSPACE, systemPaused.host), { agentId: MANAGER, sessionId: SESSION, taskKey });
+  const workspaceOnly = managerHost({ contextState: "none" });
+  assert.deepEqual(await resolveCurrentIntegrationManagerAuthority(WORKSPACE, workspaceOnly.host), { agentId: MANAGER, sessionId: SESSION, taskKey });
+  for (const options of [{ contextState: "unknown" }, { contextState: "none", includeContext: true }]) {
+    const invalidContext = managerHost(options);
+    await assert.rejects(resolveCurrentIntegrationManagerAuthority(WORKSPACE, invalidContext.host), /manager-session-not-current-owned-independent/u);
+  }
   const userPaused = managerHost({ profileStatus: "paused", pauseReason: "user" });
   await assert.rejects(resolveCurrentIntegrationManagerAuthority(WORKSPACE, userPaused.host), /manager-workspace-membership-unavailable/u);
 });

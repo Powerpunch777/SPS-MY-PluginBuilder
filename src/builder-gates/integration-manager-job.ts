@@ -656,9 +656,12 @@ export async function resolveCurrentIntegrationManagerAuthority(workspaceId: str
   const session = observations.filter(item => exactObject(item) && item.sessionId === sessionBinding.sessionId);
   if (session.length !== 1) throw new Error("manager-session-observation-not-unique");
   const observation = session[0]!;
+  const contextState = observation.contextState as string;
+  const explicitWorkspaceOnly = contextState === "none" && !Object.hasOwn(observation, "context");
   if (observation.observationVersion !== 1 || observation.agentId !== binding.selectedAgentId
     || observation.companyId !== workspaceId || observation.status !== "active" || observation.closedAt !== null
-    || observation.contextState !== "valid" || observation.managedAgentOwnership !== "owned"
+    || contextState !== "valid" && !explicitWorkspaceOnly || contextState === "none" && Object.hasOwn(observation, "context")
+    || observation.managedAgentOwnership !== "owned"
     || observation.taskKey !== sessionBinding.taskKey) throw new Error("manager-session-not-current-owned-independent");
   if (typeof platform.agents.sessions.describePolicySupport !== "function") throw new Error("manager-policy-support-api-unavailable");
   const support = await platform.agents.sessions.describePolicySupport(sessionBinding.sessionId, workspaceId);

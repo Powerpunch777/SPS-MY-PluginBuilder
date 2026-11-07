@@ -63,10 +63,11 @@ import { READ_CONSULTATION_ANALYSIS_TOOL } from "./tool-declarations.mjs";
 import { createBaselineBodySource } from "./project-documents/baseline-body-source.ts";
 import { proposeDeliveryDocuments, readCurrentDeliveryDocuments } from "./project-documents/delivery-documents.ts";
 import { PROPOSE_DELIVERY_DOCUMENTS_TOOL, READ_DELIVERY_DOCUMENTS_TOOL } from "./project-documents/tool-declarations.mjs";
-import { proposeSpecAssurancePack } from "./spec-assurance/pack-producer.ts";
+import { proposeSpecAssurancePack, confirmCurrentBaselineSpecAssurancePack } from "./spec-assurance/pack-producer.ts";
+import { readCurrentBaselinePackReview } from "./spec-assurance/current-baseline-pack-review.ts";
 import { createSpecAssurancePackStore } from "./spec-assurance/pack-store.ts";
 import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,
-  RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL } from "./spec-assurance/tool-declarations.mjs";
+  RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL, CONFIRM_CURRENT_BASELINE_SPEC_ASSURANCE_PACK_ACTION } from "./spec-assurance/tool-declarations.mjs";
 import { readCurrentSpecGaps, recordCurrentSpecGaps } from "./spec-assurance/gap-observations.ts";
 import { createUiContractStore } from "./ui-contracts/store.ts";
 import { parseUiApproval, parseUiRevision, revisionDigest, type UiApproval, type UiRevision } from "./ui-contracts/domain.ts";
@@ -904,6 +905,131 @@ async function notifyFinalReview(job: { companyId?: string; eventId?: string; tr
   });
 }
 
+const AGENT_SESSION_TERMINAL_EVENT = "agent.session.run.terminal";
+type AgentSessionTerminal = Readonly<{ runId: string; sessionId: string; requestId: string;
+  status: "succeeded" | "failed" | "cancelled"; resultSha256: string; finishedAt: string }>;
+
+function parseAgentSessionTerminal(job: unknown): AgentSessionTerminal | null {
+  if (!job || typeof job !== "object") return null;
+  const eventDescriptor = Object.getOwnPropertyDescriptor(job, "event");
+  if (!eventDescriptor || !eventDescriptor.enumerable || !Object.hasOwn(eventDescriptor, "value")) return null;
+  const event = exactToolRecord(eventDescriptor.value, ["eventType", "payload"]);
+  if (event.eventType !== AGENT_SESSION_TERMINAL_EVENT) return null;
+  const payload = exactToolRecord(event.payload, ["schemaVersion", "runId", "sessionId", "requestId", "status", "resultSha256", "finishedAt"]);
+  if (payload.schemaVersion !== 1 || typeof payload.runId !== "string" || !UUID.test(payload.runId)
+    || typeof payload.sessionId !== "string" || !UUID.test(payload.sessionId)
+    || typeof payload.requestId !== "string" || !UUID.test(payload.requestId)
+    || !["succeeded", "failed", "cancelled"].includes(payload.status as string)
+    || typeof payload.resultSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(payload.resultSha256)
+    || typeof payload.finishedAt !== "string" || !Number.isFinite(Date.parse(payload.finishedAt))
+    || new Date(payload.finishedAt).toISOString() !== payload.finishedAt) throw new TypeError("Invalid Agent Session terminal event payload.");
+  return payload as AgentSessionTerminal;
+}
+
+async function recordLeadSessionTerminal(channel: "main" | "integration-review", job: {
+  companyId?: string; eventId?: string; trigger: string; runId?: string }, payload: AgentSessionTerminal,
+  binding: Awaited<ReturnType<typeof readLeadAgentBinding>>, sessions: BuilderLeadSessions,
+  platform: SpsPlatformInvocationContext) {
+  if (job.trigger !== "event" || !job.companyId || !job.eventId || !job.runId
+    || payload.sessionId !== sessions.sessions[channel]) return { status: "ignored" as const, reason: "terminal-event-is-not-current-lead-session" };
+  const sessionRequest = await platform.agents.sessions.getRequest(payload.sessionId, job.companyId, payload.requestId);
+  if (!sessionRequest || sessionRequest.requestId !== payload.requestId || sessionRequest.state !== "submitted"
+    || sessionRequest.runId !== payload.runId) return { status: "ignored" as const, reason: "lead-terminal-request-receipt-mismatch" };
+  const sessionRun = await platform.agents.sessions.getRun(payload.sessionId, job.companyId, payload.runId);
+  if (!sessionRun || sessionRun.runId !== payload.runId || sessionRun.status !== payload.status
+    || !["succeeded", "failed", "cancelled"].includes(String(sessionRun.status))) {
+    return { status: "unknown" as const, reason: "lead-terminal-run-does-not-match-event" };
+  }
+  if (payload.status === "succeeded" && sessionRun.cancellationRequested !== false) {
+    return { status: "unknown" as const, reason: "successful-lead-run-is-cancellation-marked" };
+  }
+  const checked = await withConversation(job.companyId, platform, async store => {
+    const before = await store.inspectRequest(channel, payload.requestId);
+    if (!before.turn || before.turn.sessionId !== payload.sessionId || before.turn.runId !== payload.runId
+      || channel === "integration-review" && before.turn.inputKind !== "final-review-request") {
+      return { status: "ignored" as const, reason: "terminal-event-has-no-exact-current-handoff-turn" };
+    }
+    await store.refresh(channel);
+    const after = await store.inspectRequest(channel, payload.requestId);
+    if (!after.turn || after.turn.sessionId !== payload.sessionId || after.turn.runId !== payload.runId
+      || after.turn.state !== payload.status || after.turn.cancellationRequested && after.turn.termination !== "confirmed") {
+      return { status: "unknown" as const, reason: "terminal-turn-state-not-currently-confirmed" };
+    }
+    await assertLeadSelection(job.companyId!, binding, platform);
+    const currentSessions = await leadSessionsFor(job.companyId!, binding, platform);
+    if (currentSessions.sessions[channel] !== payload.sessionId) return { status: "stale" as const,
+      reason: "lead-session-binding-changed-during-terminal-read" };
+    const conversation = await store.page(channel);
+    if (conversation.active !== null) return { status: "waiting" as const, reason: "same-lead-session-has-another-active-turn" };
+    if (payload.status !== "succeeded") return { status: "failed" as const,
+      reason: `lead-session-run-${payload.status}; handoff-history-preserved-no-retry` };
+
+    const latest = (await currentFinalPacketStore(job.companyId!, platform).current()).revisions[0]?.revision;
+    if (!latest || latest.kind !== "main-attestation" || !latest.attestation) {
+      if (channel === "main") {
+        const packet = await readCurrentIntegrationPacket(job.companyId!, platform);
+        if (packet.status === "available") {
+          const packetRequestId = integrationPacketMainRequestId(job.companyId!, binding.revision, packet.eventId);
+          if (packetRequestId === payload.requestId && before.turn.inputKind === "integration-packet-request") {
+            return { status: "retry-packet" as const, eventId: packet.eventId };
+          }
+        }
+      }
+      return { status: "ignored" as const, reason: "no-current-main-attestation-handoff-to-review" };
+    }
+    const event = latest;
+    const author = event.attestation;
+    if (!author) return { status: "unknown" as const, reason: "current-attestation-author-unavailable" };
+    if (author.mainLeadAgentId !== binding.selectedAgentId || author.mainLeadSelectionRevision !== binding.revision
+      || author.mainLeadSessionId !== sessions.sessions.main) return { status: "stale" as const,
+      reason: "current-attestation-main-authority-changed" };
+    if (channel === "main" && (author.mainLeadRunId !== payload.runId || author.mainLeadSessionId !== payload.sessionId)) {
+      return { status: "ignored" as const, reason: "terminal-main-run-is-not-current-attestation-author" };
+    }
+    if (channel === "integration-review") {
+      const reviewRequestId = integrationPacketMainRequestId(job.companyId!, binding.revision, `review:${event.eventId}`);
+      if (reviewRequestId !== payload.requestId || before.turn.inputKind !== "final-review-request") return { status: "ignored" as const,
+        reason: "terminal-review-run-is-not-the-pending-attestation-handoff" };
+    }
+    await assertLeadSelection(job.companyId!, binding, platform);
+    const currentHead = await currentFinalPacketStore(job.companyId!, platform).headRevisionId();
+    if (currentHead !== event.eventId) return { status: "stale" as const, reason: "main-attestation-head-changed-before-review-handoff" };
+    return { status: "retry-final-review" as const, eventId: event.eventId };
+  });
+  if (checked.status === "retry-packet") {
+    const result = await notifyIntegrationPacket({ companyId: job.companyId, eventId: checked.eventId, trigger: "event" }, platform);
+    return result.status === "accepted" || result.status === "stale" ? result
+      : { status: "unknown" as const, reason: "current-packet-handoff-reconciliation-unconfirmed" };
+  }
+  if (checked.status === "retry-final-review") {
+    const result = await notifyFinalReview({ companyId: job.companyId, eventId: checked.eventId, trigger: "event" }, platform);
+    if (result.status === "accepted" || result.status === "stale") return result;
+    if (result.status === "unconfirmed") return { status: "waiting" as const, reason: "exact-review-request-receipt-not-yet-confirmed" };
+    return { status: "unknown" as const, reason: "final-review-handoff-result-unrecognized" };
+  }
+  return checked;
+}
+
+async function consumeWorkspaceSessionTerminalJob(job: {
+  jobKey: string; companyId?: string; runId?: string; eventId?: string; trigger: string; event?: unknown },
+  platform: SpsPlatformInvocationContext) {
+  if (job.jobKey !== MANAGER_SESSION_TERMINAL_JOB) return { status: "ignored" as const, reason: "unrelated-job-key" };
+  const payload = parseAgentSessionTerminal(job);
+  if (payload && (!job.eventId || !/^agent-session-terminal-v1:[a-f0-9]{64}$/u.test(job.eventId))) {
+    return { status: "unknown" as const, reason: "agent-session-terminal-event-id-invalid" };
+  }
+  if (!payload || !job.companyId) return consumeManagerSessionTerminalJob(job as never, platform);
+  try {
+    const binding = await readLeadAgentBinding(job.companyId, platform);
+    const sessions = await leadSessionsFor(job.companyId, binding, platform);
+    if (payload.sessionId === sessions.sessions.main) return recordLeadSessionTerminal("main", job, payload, binding, sessions, platform);
+    if (payload.sessionId === sessions.sessions["integration-review"]) {
+      return recordLeadSessionTerminal("integration-review", job, payload, binding, sessions, platform);
+    }
+  } catch { /* A non-Lead owned session is resolved by the Manager authority consumer. */ }
+  return consumeManagerSessionTerminalJob(job as never, platform);
+}
+
 async function firstDesignReviewView(companyId: string, platform: SpsPlatformInvocationContext) {
   const bundle = await readFirstDesignReviewBundle(companyId, companyId, platform.state);
   if (!bundle) return { status: "empty" as const };
@@ -937,9 +1063,9 @@ export function createBuilderPlatform() {
         || ["accepted", "stale", "ignored", "waiting"].includes(result.status)) return;
       if (result.status !== "accepted") throw new Error(`Workstream integration not admitted: ${result.reason}`);
     } }, { jobKey: MANAGER_SESSION_TERMINAL_JOB, handler: async (job, platform) => {
-      const result = await consumeManagerSessionTerminalJob(job, platform);
+      const result = await consumeWorkspaceSessionTerminalJob(job, platform);
       if (["accepted", "failed", "stale", "ignored", "waiting"].includes(result.status)) return;
-      throw new Error(`Manager terminal continuation unresolved: ${result.reason}`);
+      throw new Error(`Owned session terminal handoff unresolved: ${"reason" in result ? result.reason : "unconfirmed"}`);
     } }, { jobKey: INTEGRATION_PACKET_MAIN_JOB, handler: async (job, platform) => {
       if (unrelatedJobEvent(job, INTEGRATION_PACKET_EVENT)) return;
       const result = await notifyIntegrationPacket(job, platform);
@@ -1316,6 +1442,16 @@ export function createBuilderPlatform() {
       const current = await source.current();
       return current && { workspaceId: companyId, projectId: companyId,
         read: await source.read(current.revision.documentRevisionId) } as unknown as JsonValue;
+    } }, { key: "builder.current-baseline-spec-assurance-pack", handler: async (params, platform) => {
+      exactToolRecord(params, ["companyId"], ["projectId", "packId", "renderEnvironment"]);
+      const companyId = workspaceId(params.companyId);
+      const projectId = params.projectId === undefined ? companyId : params.projectId;
+      if (projectId !== companyId) throw new TypeError("Specification assurance review is limited to the authenticated Workspace project.");
+      if (params.packId === undefined || params.packId === null) return { status: "empty", workspaceId: companyId,
+        projectId: companyId, packId: null } as unknown as JsonValue;
+      if (typeof params.packId !== "string") throw new TypeError("An exact specification assurance pack ID is required.");
+      return await readCurrentBaselinePackReview({ workspaceId: companyId, projectId: companyId,
+        packId: params.packId, platform }) as unknown as JsonValue;
     } }, { key: "builder.consultation-analysis", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
       const current = await createConsultationAnalysisStore(companyId, platform.state as typeof platform.state & RevisionState).current();
@@ -1450,6 +1586,8 @@ export function createBuilderPlatform() {
       cancelLeadMessage(context.companyId, userActionInput(params, context), context) },
     { key: "builder.resume-prepared-lead-message", handler: async (params, context) =>
       resumePreparedLeadMessage(context.companyId, userActionInput(params, context), context) },
+    { key: CONFIRM_CURRENT_BASELINE_SPEC_ASSURANCE_PACK_ACTION.key, handler: async (params, context) =>
+      await confirmCurrentBaselineSpecAssurancePack(userActionInput(params, context), context) as unknown as JsonValue },
     { key: "builder.save-product-selection", handler: async (params, context) =>
       await saveProductSelectionAction(params, context) as unknown as JsonValue }],
   });
