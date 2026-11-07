@@ -35,6 +35,11 @@ const plain = (value: unknown): value is Record<string, unknown> => value !== nu
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= 4096;
 const digest = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+const consultationClasses = Object.freeze({
+  clarification: "확인 질문",
+  correction: "정정",
+  "change-request": "변경 요청",
+} as const);
 function predicate(value: unknown): boolean {
   return plain(value) && ["all", "any", "none"].every(key => value[key] === undefined
     || Array.isArray(value[key]) && (value[key] as unknown[]).every(text));
@@ -62,6 +67,26 @@ function readBundle(value: unknown): ReadableBundle | null {
       || !text(value.approval.approvedAt) || !text(value.approval.attestedBundleRevisionId)
       || value.approval.attestedBundleRevisionId === value.revisionId)
     || value.status === "PROPOSED" && value.approval !== undefined) return null;
+  if (Object.hasOwn(value, "consultationClassifications")) {
+    const classifications = value.consultationClassifications;
+    if (value.priorBaseline === null || !Array.isArray(classifications) || Object.getPrototypeOf(classifications) !== Array.prototype
+      || classifications.length < 1 || classifications.length > 32
+      || Reflect.ownKeys(classifications).length !== classifications.length + 1) return null;
+    const seen = new Set<string>();
+    for (let index = 0; index < classifications.length; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(classifications, String(index));
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value") || !plain(descriptor.value)) return null;
+      const item = descriptor.value;
+      if (Reflect.ownKeys(item).length !== 4 || !["classification", "rationale", "sourceDigest", "sourceId"]
+        .every(key => Object.hasOwn(item, key) && Object.getOwnPropertyDescriptor(item, key)?.enumerable
+          && Object.hasOwn(Object.getOwnPropertyDescriptor(item, key)!, "value")) || !text(item.sourceId)
+        || !/^consultation-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/iu.test(item.sourceId)
+        || seen.has(item.sourceId) || !digest(item.sourceDigest)
+        || typeof item.classification !== "string" || !Object.hasOwn(consultationClasses, item.classification)
+        || typeof item.rationale !== "string" || !item.rationale.trim() || item.rationale.length > 8192) return null;
+      seen.add(item.sourceId);
+    }
+  }
   if (value.draft.projectId !== value.projectId || value.draft.revisionId !== value.draftRevisionId
     || value.pack.identity.workspaceId !== value.workspaceId || value.pack.identity.projectId !== value.projectId
     || value.pack.identity.specRevisionId !== value.draft.specification.revisionId
@@ -259,6 +284,20 @@ export function FirstDesignReviewPanel({ view, onApprove }: FirstDesignReviewPan
               <strong>{item.acId}</strong><p>{item.text}</p><small className="sps-fdr-mono">{item.sourceId} · {item.sourceDigest}</small>
             </blockquote>)}
             <details><summary>Coverage·시나리오 전체 내용</summary><pre className="sps-fdr-pre">{shown(bundle!.designModel)}</pre></details>
+          </section>}
+          {bundle!.consultationClassifications && <section className="sps-fdr-section" aria-label="Main 상담 분류 및 근거">
+            <h3>Main의 상담 분류와 근거</h3>
+            {view.status === "stale" || !current
+              ? <p className="sps-fdr-warning" role="status">현재 제안과 일치하지 않아 분류 원문 핀을 최신 기록으로 확인할 수 없습니다.</p>
+              : <>
+                <p className="sps-fdr-muted">현재 읽을 수 있는 상담 원문에 대한 Main의 분류 기록입니다. 원문 수신 시점, 변경 승인 또는 Baseline 발행을 뜻하지 않습니다.</p>
+                <ul className="sps-fdr-list">{bundle!.consultationClassifications.map(item => <li className="sps-fdr-item" key={item.sourceId}>
+                  <strong>{consultationClasses[item.classification]}</strong>
+                  <small className="sps-fdr-mono">Source ID · {item.sourceId}</small>
+                  <small className="sps-fdr-mono">원문 SHA-256 · {item.sourceDigest}</small>
+                  <small>Main 근거</small><pre className="sps-fdr-pre">{item.rationale}</pre>
+                </li>)}</ul>
+              </>}
           </section>}
           {snapshot.issues.length > 0 && <div className="sps-fdr-section" role="status">
             <h3 className="sps-fdr-warning">미확인 또는 연결 누락</h3>

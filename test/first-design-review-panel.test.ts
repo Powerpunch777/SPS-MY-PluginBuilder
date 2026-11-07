@@ -144,6 +144,70 @@ test("follow-up review renders the exact prior Baseline revision, sequence, and 
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
+test("renders exact Main consultation classifications and source pins before approval without implying receipt or change approval", async () => {
+  const { Panel, temporary } = await loadPanel();
+  try {
+    const ready = fixture();
+    const sourceId = "consultation-55555555-5555-4555-8555-555555555555";
+    const sourceDigest = "d".repeat(64);
+    const rationale = "Main 근거: 요청 문구를 기존 Baseline 조건과 대조했습니다.";
+    const classified = { ...ready, bundle: { ...ready.bundle,
+      priorBaseline: { revisionId: "baseline-fixture-r8", sequence: 8, digest: "f".repeat(64) },
+      consultationClassifications: [
+        { sourceId, sourceDigest, classification: "clarification" as const, rationale },
+        { sourceId: "consultation-66666666-6666-4666-8666-666666666666", sourceDigest,
+          classification: "correction" as const, rationale },
+        { sourceId: "consultation-77777777-7777-4777-8777-777777777777", sourceDigest,
+          classification: "change-request" as const, rationale },
+      ],
+    } };
+    const html = renderToStaticMarkup(createElement(Panel, { view: classified, onApprove() {} }));
+    assert.match(html, /Main의 상담 분류와 근거/u);
+    assert.ok(html.includes("확인 질문"));
+    assert.ok(html.includes("정정"));
+    assert.ok(html.includes("변경 요청"));
+    assert.ok(html.includes(sourceId));
+    assert.ok(html.includes(sourceDigest));
+    assert.ok(html.includes(rationale));
+    assert.match(html, /원문 수신 시점, 변경 승인 또는 Baseline 발행을 뜻하지 않습니다/u);
+    assert.ok(html.indexOf("Main의 상담 분류와 근거") < html.indexOf("정확한 제안 승인"));
+    assert.match(html, /<button[^>]*>정확한 제안 승인/u);
+
+    const stale = { ...classified, status: "stale" as const };
+    const staleHtml = renderToStaticMarkup(createElement(Panel, { view: stale, onApprove() {} }));
+    assert.match(staleHtml, /현재 제안과 일치하지 않아 분류 원문 핀을 최신 기록으로 확인할 수 없습니다/u);
+    assert.doesNotMatch(staleHtml, new RegExp(sourceDigest, "u"));
+    assert.match(staleHtml, /<button[^>]*disabled=""/u);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("legacy bundles remain readable while malformed or initial-Baseline classifications fail closed", async () => {
+  const { Panel, temporary } = await loadPanel();
+  try {
+    const legacyHtml = renderToStaticMarkup(createElement(Panel, { view: fixture(), onApprove() {} }));
+    assert.match(legacyHtml, /<button[^>]*>정확한 제안 승인/u);
+    assert.doesNotMatch(legacyHtml, /Main의 상담 분류와 근거/u);
+
+    const ready = fixture();
+    const classification = { sourceId: "consultation-55555555-5555-4555-8555-555555555555",
+      sourceDigest: "d".repeat(64), classification: "clarification", rationale: "Main 근거" };
+    const invalidBundles = [
+      { ...ready.bundle, priorBaseline: null, consultationClassifications: [classification] },
+      { ...ready.bundle, priorBaseline: { revisionId: "baseline-r1", sequence: 1, digest: "f".repeat(64) },
+        consultationClassifications: [{ ...classification, sourceDigest: "not-a-digest" }] },
+      { ...ready.bundle, priorBaseline: { revisionId: "baseline-r1", sequence: 1, digest: "f".repeat(64) },
+        consultationClassifications: [{ ...classification, classification: "approved" }] },
+      { ...ready.bundle, priorBaseline: { revisionId: "baseline-r1", sequence: 1, digest: "f".repeat(64) },
+        consultationClassifications: [{ ...classification, rationale: "  " }] },
+    ];
+    for (const bundle of invalidBundles) {
+      const html = renderToStaticMarkup(createElement(Panel, { view: { ...ready, bundle }, onApprove() {} }));
+      assert.match(html, /제안 구조가 올바르지 않아 검토와 승인을 차단했습니다/u);
+      assert.doesNotMatch(html, /<button\b[^>]*>정확한 제안 승인<\/button>/u);
+    }
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
 test("stale proposals, mismatched IDs, missing pins, and absent callback stay non-approvable", async () => {
   const { Panel, temporary } = await loadPanel();
   try {
