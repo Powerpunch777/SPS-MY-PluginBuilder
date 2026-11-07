@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createCurrentFinalEvidenceReader } from "./current-final-evidence.ts";
 import { readCurrentIntegrationPacket } from "./integration-packet.ts";
+import { parseLeadAgentBinding } from "../domain/lead-agent.ts";
+import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import { createFinalPacketStore, finalPacketPinsDigest, type FinalAtomicApprovalCommitter,
   type FinalEvidenceReader, type FinalEvidenceSnapshot, type FinalPacketJournalEvent } from "./final-packet.ts";
 import type { RevisionPublicationGuard, RevisionState } from "../solution-revision-store.ts";
@@ -127,6 +129,41 @@ function pointerRevisionId(value: unknown): string | null {
   return descriptor.value;
 }
 
+async function verifyCurrentReviewAuthority(platform: SpsPlatformInvocationContext, workspaceId: string,
+  request: NonNullable<FinalPacketJournalEvent["request"]>, attestation: NonNullable<FinalPacketJournalEvent["attestation"]>) {
+  const key = (stateKey: string) => ({ scopeKind: "company" as const, scopeId: workspaceId,
+    namespace: "sonpark.my-builder", stateKey });
+  const binding = parseLeadAgentBinding(await platform.state.get(key("lead-agent.v1")), workspaceId);
+  if (!binding.selectedAgentId || binding.revision !== attestation.mainLeadSelectionRevision
+    || binding.selectedAgentId !== attestation.mainLeadAgentId) throw new Error("The Main attestation is not from the current Lead selection.");
+  const sessions = parseLeadSessions(await platform.state.get(key(`lead-sessions.v1.${binding.revision}`)), workspaceId);
+  const mainSession = sessions.sessions.main;
+  const reviewSession = sessions.sessions["integration-review"];
+  if (sessions.agentId !== binding.selectedAgentId || sessions.selectionRevision !== binding.revision
+    || !mainSession || !reviewSession || mainSession === reviewSession
+    || attestation.mainLeadSessionId !== mainSession
+    || request.mainLeadAgentId !== binding.selectedAgentId || request.mainLeadSelectionRevision !== binding.revision
+    || request.mainLeadRunId !== attestation.mainLeadRunId || request.mainLeadSessionId !== mainSession
+    || request.integrationReviewAgentId !== binding.selectedAgentId || request.integrationReviewSessionId !== reviewSession
+    || !attestation.mainReview) throw new Error("The approval request does not match the current Lead Main and Integration Review authority.");
+
+  const [mainRun, reviewRun] = await Promise.all([
+    platform.agents.sessions.getRun(mainSession, workspaceId, attestation.mainLeadRunId),
+    platform.agents.sessions.getRun(reviewSession, workspaceId, request.integrationReviewRunId),
+  ]);
+  const succeeded = (run: typeof mainRun, runId: string) => run.runId === runId && run.status === "succeeded"
+    && !run.cancellationRequested && run.termination === "not_applicable";
+  if (!succeeded(mainRun, attestation.mainLeadRunId) || !succeeded(reviewRun, request.integrationReviewRunId)) {
+    throw new Error("The exact Main or Integration Review author run is not a successful immutable Core terminal run.");
+  }
+
+  // Re-read through the tracker so selection/session drift during Core run inspection is rejected.
+  const currentBinding = parseLeadAgentBinding(await platform.state.get(key("lead-agent.v1")), workspaceId);
+  const currentSessions = parseLeadSessions(await platform.state.get(key(`lead-sessions.v1.${currentBinding.revision}`)), workspaceId);
+  if (currentBinding.revision !== binding.revision || currentBinding.selectedAgentId !== binding.selectedAgentId
+    || !equal(currentSessions, sessions)) throw new Error("Lead selection or sessions changed during approval authority verification.");
+}
+
 function createTrackedPlatform(platform: SpsPlatformInvocationContext, workspaceId: string,
   finalHeadKey: string, guardsByIdentity: Map<string, RevisionPublicationGuard>): SpsPlatformInvocationContext {
   const state = platform.state as typeof platform.state & RevisionState;
@@ -207,6 +244,7 @@ export function createFinalPacketAtomicApprovalCommitter(workspaceId: string, pr
       || attestation.attestation.snapshotSha256 !== latest.request.snapshotSha256
       || attestation.attestation.currentPinsSha256 !== rawEvidence.value.currentPinsSha256
       || attestation.attestation.packet.packetSha256 !== rawEvidence.value.packet.packetSha256) return { status: "stale" };
+    await verifyCurrentReviewAuthority(trackedPlatform, workspaceId, latest.request, attestation.attestation);
 
     const managerEvent = history.revisions.find(item => item.revision.kind === "manager-packet"
       && item.revision.eventId === managerPins.eventId)?.revision;

@@ -11,6 +11,10 @@ import { mainG7ReviewFixture } from "./fixtures/main-g7-review-fixture.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const SOURCE = "22222222-2222-4222-8222-222222222222";
+const LEAD_AGENT = "33333333-3333-4333-8333-333333333333";
+const FOREIGN_AGENT = "44444444-4444-4444-8444-444444444444";
+const MAIN_SESSION = "55555555-5555-4555-8555-555555555555";
+const REVIEW_SESSION = "66666666-6666-4666-8666-666666666666";
 const NOW = "2026-11-07T10:00:00.000Z";
 const HOST_SUPPORT = { state: "reported", contractVersion: "1.0", operations: ["state.guardedGitRefCompareAndSetV1"] };
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -18,7 +22,7 @@ const json = (value: unknown) => JSON.stringify(value);
 const keyString = (key: SpsStateKey) => JSON.stringify([key.scopeKind, key.scopeId, key.namespace ?? "default", key.stateKey]);
 const stateKey = (value: string) => ({ scopeKind: "company" as const, scopeId: WORKSPACE, namespace: "sonpark.my-builder", stateKey: value });
 
-function evidenceFixture() {
+function evidenceFixture(options: { requestReviewAgentId?: string; mainRunStatus?: string; reviewRunStatus?: string } = {}) {
   const values = new Map<string, JsonValue>();
   let plainHeadWrites = 0;
   const state: RevisionState & { guardedGitRefCompareAndSetV1?: (input: any) => Promise<any> } = {
@@ -68,14 +72,14 @@ function evidenceFixture() {
   const attestationEvent: FinalPacketJournalEvent = { eventId: "main-attestation-r1", expectedBaseRevisionId: managerEventId,
     kind: "main-attestation", requestId: packet.packetRevisionId,
     attestation: { packet, snapshotSha256, currentPinsSha256: snapshot.currentPinsSha256, attestedAt: NOW,
-      mainLeadAgentId: "main-agent", mainLeadSelectionRevision: 1, mainLeadRunId: "main-run", mainLeadSessionId: "main-session", mainReview },
+      mainLeadAgentId: LEAD_AGENT, mainLeadSelectionRevision: 1, mainLeadRunId: "main-run", mainLeadSessionId: MAIN_SESSION, mainReview },
     request: null, decision: null };
   const approvalRequest: FinalPacketJournalEvent = { eventId: "approval-request-r1", expectedBaseRevisionId: attestationEvent.eventId,
     kind: "approval-request", requestId: packet.packetRevisionId, attestation: null,
     request: { packet, snapshotSha256, currentPinsSha256: snapshot.currentPinsSha256, requestedAt: NOW,
-      attestationEventId: attestationEvent.eventId, mainLeadAgentId: "main-agent", mainLeadSelectionRevision: 1,
-      mainLeadRunId: "main-run", mainLeadSessionId: "main-session", integrationReviewAgentId: "review-agent",
-      integrationReviewRunId: "review-run", integrationReviewSessionId: "review-session" }, decision: null };
+      attestationEventId: attestationEvent.eventId, mainLeadAgentId: LEAD_AGENT, mainLeadSelectionRevision: 1,
+      mainLeadRunId: "main-run", mainLeadSessionId: MAIN_SESSION, integrationReviewAgentId: options.requestReviewAgentId ?? LEAD_AGENT,
+      integrationReviewRunId: "review-run", integrationReviewSessionId: REVIEW_SESSION }, decision: null };
   const managerEvent: FinalPacketJournalEvent = { eventId: managerEventId, expectedBaseRevisionId: null, kind: "manager-packet",
     requestId: managerRequestId, managerPacket: managerRead.packet, attestation: null, request: null, decision: null };
   const journal = createRevisionJournal<FinalPacketJournalEvent>(WORKSPACE, WORKSPACE, state,
@@ -88,13 +92,30 @@ function evidenceFixture() {
   };
   values.set(keyString(stateKey("evidence.mutable-head")), { revision: 1 });
   values.set(keyString(stateKey("manager.mutable-head")), { revision: 1 });
+  values.set(keyString(stateKey("lead-agent.v1")), { workspaceId: WORKSPACE, revision: 1, selectedAgentId: LEAD_AGENT });
+  values.set(keyString(stateKey("lead-sessions.v1.1")), { workspaceId: WORKSPACE, selectionRevision: 1, agentId: LEAD_AGENT,
+    sessions: { main: MAIN_SESSION, "ui-design": "77777777-7777-4777-8777-777777777777",
+      background: "88888888-8888-4888-8888-888888888888", "cto-inbox": "99999999-9999-4999-8999-999999999999",
+      decisions: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "integration-review": REVIEW_SESSION } });
   const currentSource = { sourceId: SOURCE, folderKey: "project-source", branch: packet.integration.branch, commitSha, treeSha };
   const calls: any[] = [];
+  const runObservations: Array<{ sessionId: string; runId: string }> = [];
   let changeEvidenceAfterRead = false;
   let changeGitAfterRead = false;
-  const platform = { state } as unknown as SpsPlatformInvocationContext;
+  let changeLeadBeforeCas = false;
+  const platform = { state, agents: { sessions: { async getRun(sessionId: string, _workspaceId: string, runId: string) {
+    runObservations.push({ sessionId, runId });
+    return { runId, status: runId === "main-run" ? options.mainRunStatus ?? "succeeded" : options.reviewRunStatus ?? "succeeded",
+      cancellationRequested: false, termination: "not_applicable" };
+  } } } } as unknown as SpsPlatformInvocationContext;
   state.guardedGitRefCompareAndSetV1 = async input => {
     calls.push(structuredClone(input));
+    if (changeLeadBeforeCas) {
+      values.set(keyString(stateKey("lead-agent.v1")), { workspaceId: WORKSPACE, revision: 2, selectedAgentId: FOREIGN_AGENT });
+      values.set(keyString(stateKey("lead-sessions.v1.2")), { workspaceId: WORKSPACE, selectionRevision: 2, agentId: FOREIGN_AGENT,
+        sessions: { main: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "ui-design": null, background: null, "cto-inbox": null,
+          decisions: null, "integration-review": "cccccccc-cccc-4ccc-8ccc-cccccccccccc" } });
+    }
     if (json({ sourceId: input.sourceId, folderKey: input.folderKey, branch: input.branch,
       commitSha: input.expectedCommit, treeSha: input.expectedTree }) !== json(currentSource)) {
       return { status: "conflict", reason: "git-pin-changed" };
@@ -130,9 +151,10 @@ function evidenceFixture() {
     kind: "user-decision", requestId: packet.packetRevisionId, attestation: null, request: null,
     decision: { action: "approve", userId: "authenticated-user", reason: null, decidedAt: NOW, sourceSnapshotSha256: snapshotSha256 } } as FinalPacketJournalEvent;
   return { values, state, platform, plainHeadWrites: () => plainHeadWrites, snapshot, snapshotSha256, managerRead, approvalRequest,
-    approval, committer, calls, currentSource, seed,
+    approval, committer, calls, currentSource, runObservations, seed,
     changeEvidenceDuringRead: () => { changeEvidenceAfterRead = true; },
-    changeGitDuringRead: () => { changeGitAfterRead = true; } };
+    changeGitDuringRead: () => { changeGitAfterRead = true; },
+    changeLeadBeforeCas: () => { changeLeadBeforeCas = true; } };
 }
 
 test("approves only the current raw snapshot and commits the same final-delivery head through guarded Core Git CAS", async () => {
@@ -148,7 +170,11 @@ test("approves only the current raw snapshot and commits the same final-delivery
   assert.equal(f.calls[0].branch, f.currentSource.branch);
   assert.equal(f.calls[0].expectedCommit, f.currentSource.commitSha);
   assert.equal(f.calls[0].expectedTree, f.currentSource.treeSha);
-  assert.equal(f.calls[0].guards.length, 2);
+  assert.equal(f.calls[0].guards.length, 4);
+  assert.deepEqual(f.runObservations, [{ sessionId: MAIN_SESSION, runId: "main-run" },
+    { sessionId: REVIEW_SESSION, runId: "review-run" }]);
+  assert.ok(f.calls[0].guards.some((guard: any) => guard.stateKey === "lead-agent.v1"));
+  assert.ok(f.calls[0].guards.some((guard: any) => guard.stateKey === "lead-sessions.v1.1"));
   assert.equal("actor" in f.calls[0], false, "actor identity must stay invocation-held in Core");
   assert.equal(f.plainHeadWrites(), 0, "the final-delivery head never uses plain CAS");
   const current = await createFinalPacketStore(WORKSPACE, WORKSPACE, f.state).current();
@@ -167,6 +193,58 @@ test("unknown or unadvertised Host support leaves atomic approval unavailable", 
   assert.equal(malformedSupport, undefined);
   assert.equal(otherOperation, undefined);
   assert.equal(f.calls.length, 0, "support discovery never executes the writer");
+});
+
+test("current Lead selection, both author runs, and request author identity are required", async () => {
+  const foreignLead = evidenceFixture();
+  await foreignLead.seed();
+  foreignLead.values.set(keyString(stateKey("lead-agent.v1")), { workspaceId: WORKSPACE, revision: 2, selectedAgentId: FOREIGN_AGENT });
+  await assert.rejects(foreignLead.committer({ workspaceId: WORKSPACE, projectId: WORKSPACE, requestId: foreignLead.approval.requestId,
+    expectedJournalRevisionId: foreignLead.approvalRequest.eventId, requestSnapshotSha256: foreignLead.snapshotSha256,
+    currentSnapshotSha256: foreignLead.snapshotSha256, decision: foreignLead.approval }), /current Lead selection/u);
+  assert.equal(foreignLead.calls.length, 0);
+  assert.deepEqual(foreignLead.runObservations, []);
+
+  const wrongCurrentSessions = evidenceFixture();
+  await wrongCurrentSessions.seed();
+  wrongCurrentSessions.values.set(keyString(stateKey("lead-sessions.v1.1")), { workspaceId: WORKSPACE, selectionRevision: 1,
+    agentId: LEAD_AGENT, sessions: { main: FOREIGN_AGENT, "ui-design": "77777777-7777-4777-8777-777777777777",
+      background: "88888888-8888-4888-8888-888888888888", "cto-inbox": "99999999-9999-4999-8999-999999999999",
+      decisions: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "integration-review": REVIEW_SESSION } });
+  await assert.rejects(wrongCurrentSessions.committer({ workspaceId: WORKSPACE, projectId: WORKSPACE,
+    requestId: wrongCurrentSessions.approval.requestId, expectedJournalRevisionId: wrongCurrentSessions.approvalRequest.eventId,
+    requestSnapshotSha256: wrongCurrentSessions.snapshotSha256, currentSnapshotSha256: wrongCurrentSessions.snapshotSha256,
+    decision: wrongCurrentSessions.approval }), /current Lead Main and Integration Review authority/u);
+  assert.equal(wrongCurrentSessions.calls.length, 0);
+
+  const wrongReviewAuthor = evidenceFixture({ requestReviewAgentId: FOREIGN_AGENT });
+  await wrongReviewAuthor.seed();
+  await assert.rejects(wrongReviewAuthor.committer({ workspaceId: WORKSPACE, projectId: WORKSPACE,
+    requestId: wrongReviewAuthor.approval.requestId, expectedJournalRevisionId: wrongReviewAuthor.approvalRequest.eventId,
+    requestSnapshotSha256: wrongReviewAuthor.snapshotSha256, currentSnapshotSha256: wrongReviewAuthor.snapshotSha256,
+    decision: wrongReviewAuthor.approval }), /current Lead Main and Integration Review authority/u);
+  assert.equal(wrongReviewAuthor.calls.length, 0);
+
+  for (const options of [{ mainRunStatus: "cancelled" }, { reviewRunStatus: "failed" }]) {
+    const badRun = evidenceFixture(options);
+    await badRun.seed();
+    await assert.rejects(badRun.committer({ workspaceId: WORKSPACE, projectId: WORKSPACE, requestId: badRun.approval.requestId,
+      expectedJournalRevisionId: badRun.approvalRequest.eventId, requestSnapshotSha256: badRun.snapshotSha256,
+      currentSnapshotSha256: badRun.snapshotSha256, decision: badRun.approval }), /successful immutable Core terminal run/u);
+    assert.equal(badRun.calls.length, 0);
+  }
+});
+
+test("Lead selection changed at the guarded effect boundary conflicts atomically", async () => {
+  const f = evidenceFixture();
+  await f.seed();
+  f.changeLeadBeforeCas();
+  const result = await f.committer({ workspaceId: WORKSPACE, projectId: WORKSPACE, requestId: f.approval.requestId,
+    expectedJournalRevisionId: f.approvalRequest.eventId, requestSnapshotSha256: f.snapshotSha256,
+    currentSnapshotSha256: f.snapshotSha256, decision: f.approval });
+  assert.deepEqual(result, { status: "stale" });
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.plainHeadWrites(), 0);
 });
 
 test("reconciles an exact committed event after a lost Core response and never retries the Core write", async () => {
