@@ -146,14 +146,14 @@ function parseDocument(value: unknown, index: number): BuilderDocument {
   }
   const docId = id(row.id, `${label}.id`);
   const sourceKind = row.sourceKind === undefined ? "builder-document" : oneOf(row.sourceKind,
-    ["builder-document", "baseline-body", "design-baseline", "design-draft", "technology-decision", "workstream", "lead-memory", "consultation-source", "reuse-candidate"] as const,
+    ["builder-document", "baseline-body", "design-baseline", "design-draft", "technology-decision", "workstream", "lead-memory", "consultation-source", "reuse-candidate", "delivery-document"] as const,
     `${label}.sourceKind`);
   const categoryForSource = { "builder-document": "unclassified", "baseline-body": "design", "design-baseline": "design",
     "design-draft": "design", "technology-decision": "technical-research", workstream: "development", "lead-memory": "unclassified",
-    "consultation-source": "consultation", "reuse-candidate": "technical-research" } as const;
+    "consultation-source": "consultation", "reuse-candidate": "technical-research", "delivery-document": "delivery" } as const;
   const expectedPrefix = { "builder-document": null, "baseline-body": "baseline-body:", "design-baseline": "design-baseline:",
     "design-draft": "draft:", "technology-decision": "technology-decisions:", workstream: "workstream:", "lead-memory": "lead-memory:",
-    "consultation-source": "consultation-source:", "reuse-candidate": "reuse-first:" } as const;
+    "consultation-source": "consultation-source:", "reuse-candidate": "reuse-first:", "delivery-document": "delivery-document:" } as const;
   if (expectedPrefix[sourceKind] !== null && !docId.startsWith(expectedPrefix[sourceKind]!)) {
     throw new TypeError(`${label}.sourceKind does not match its source identity.`);
   }
@@ -161,15 +161,16 @@ function parseDocument(value: unknown, index: number): BuilderDocument {
     : oneOf(row.category, ["consultation", "design", "ui-design", "validation", "technical-research", "development",
       "change-history", "test-qa", "delivery", "unclassified"] as const, `${label}.category`);
   if (category !== categoryForSource[sourceKind]) throw new TypeError(`${label}.category conflicts with the authoritative source mapping.`);
-  const approvalStatus = row.approvalStatus === undefined ? sourceKind === "design-draft" ? "unapproved" : "unknown"
+  const draftSource = sourceKind === "design-draft" || sourceKind === "delivery-document";
+  const approvalStatus = row.approvalStatus === undefined ? draftSource ? "unapproved" : "unknown"
     : oneOf(row.approvalStatus, ["approved", "unapproved", "unknown"] as const, `${label}.approvalStatus`);
   if (approvalStatus === "approved") throw new TypeError(`${label}.approvalStatus cannot be inferred from a document projection.`);
-  if (sourceKind === "design-draft" && approvalStatus !== "unapproved") throw new TypeError(`${label}.approvalStatus conflicts with a draft source.`);
-  if (sourceKind !== "design-draft" && approvalStatus !== "unknown") throw new TypeError(`${label}.approvalStatus is unsupported for this source.`);
+  if (draftSource && approvalStatus !== "unapproved") throw new TypeError(`${label}.approvalStatus conflicts with a draft source.`);
+  if (!draftSource && approvalStatus !== "unknown") throw new TypeError(`${label}.approvalStatus is unsupported for this source.`);
   const freshnessStatus = row.freshnessStatus === undefined ? "unknown"
     : oneOf(row.freshnessStatus, ["current", "stale", "review-required", "unknown"] as const, `${label}.freshnessStatus`);
-  if (sourceKind !== "baseline-body" && freshnessStatus !== "unknown"
-    || sourceKind === "baseline-body" && freshnessStatus === "review-required") {
+  const currentSource = sourceKind === "baseline-body" || sourceKind === "delivery-document";
+  if (!currentSource && freshnessStatus !== "unknown" || currentSource && freshnessStatus === "review-required") {
     throw new TypeError(`${label}.freshnessStatus is unsupported for this source.`);
   }
   const textValue = text(row.text, `${label}.text`, MAX_DOCUMENT_TEXT, true);

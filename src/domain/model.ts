@@ -56,7 +56,7 @@ export interface BuilderDocument {
 export type DocumentCategory = "consultation" | "design" | "ui-design" | "validation" | "technical-research"
   | "development" | "change-history" | "test-qa" | "delivery" | "unclassified";
 export type DocumentSourceKind = "builder-document" | "baseline-body" | "design-baseline" | "design-draft"
-  | "technology-decision" | "workstream" | "lead-memory" | "consultation-source" | "reuse-candidate";
+  | "technology-decision" | "workstream" | "lead-memory" | "consultation-source" | "reuse-candidate" | "delivery-document";
 export type DocumentApprovalStatus = "approved" | "unapproved" | "unknown";
 export type DocumentFreshnessStatus = "current" | "stale" | "review-required" | "unknown";
 export type BuilderDocumentPin = Readonly<{ sourceId: string; revisionId: string; sha256: string }>;

@@ -36,6 +36,25 @@ test("source mapping rejects unsupported categories and invented approval/freshn
   }
 });
 
+test("delivery drafts keep their dedicated source, unapproved state and observed freshness in existing filters", () => {
+  const base = createEmptyBuilderSnapshot(workspaceId);
+  const delivery = doc({ id: "delivery-document:guide-1", title: "Installation draft", revisionId: "delivery-guide-r1",
+    text: "Install the reviewed candidate.", category: "delivery", sourceKind: "delivery-document", approvalStatus: "unapproved" });
+  for (const freshnessStatus of ["current", "stale", "unknown"] as const) {
+    const parsed = parseBuilderSnapshot({ ...base, documents: [{ ...delivery, freshnessStatus }] }, workspaceId);
+    const view = selectProjectDocuments(parsed, { category: "delivery", sourceKind: "delivery-document",
+      approvalStatus: "unapproved", freshnessStatus });
+    assert.equal(view.total, 1);
+    assert.equal(view.items[0]?.text, delivery.text);
+    assert.equal(view.facets.categories.delivery, 1);
+    assert.equal(view.facets.approvalStatuses.approved, 0);
+  }
+  for (const patch of [{ approvalStatus: "approved" }, { approvalStatus: "unknown" },
+    { category: "design" }, { id: "draft:wrong-source" }, { freshnessStatus: "review-required" }]) {
+    assert.throws(() => parseBuilderSnapshot({ ...base, documents: [{ ...delivery, ...patch }] }, workspaceId));
+  }
+});
+
 test("local selector searches, filters, sorts and exposes truthful facets", () => {
   const documents = [doc(), doc({ id: "draft:draft-1", title: "Draft plan", revisionId: "draft-r2", text: "alpha design",
     createdAt: "2026-11-06T00:00:00.000Z", sourceKind: "design-draft", approvalStatus: "unapproved", freshnessStatus: "unknown",

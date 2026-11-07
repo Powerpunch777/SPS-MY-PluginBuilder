@@ -55,6 +55,7 @@ const SOURCE_LABELS: Record<DocumentSourceKind, string> = {
   "design-draft": "설계 초안", "technology-decision": "기술 결정", workstream: "Workstream", "lead-memory": "Lead 기억",
   "consultation-source": "상담 원문",
   "reuse-candidate": "재사용 후보",
+  "delivery-document": "납품 문서 초안",
 };
 const APPROVAL_LABELS = { approved: "승인됨", unapproved: "미승인", unknown: "미확인" } as const;
 const FRESHNESS_LABELS: Record<DocumentFreshnessStatus, string> = {

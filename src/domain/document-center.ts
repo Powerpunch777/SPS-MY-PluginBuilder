@@ -12,7 +12,7 @@ const CATEGORIES: readonly DocumentCategory[] = ["consultation", "design", "ui-d
 const APPROVAL: readonly DocumentApprovalStatus[] = ["approved", "unapproved", "unknown"];
 const FRESHNESS: readonly DocumentFreshnessStatus[] = ["current", "stale", "review-required", "unknown"];
 const SOURCES: readonly DocumentSourceKind[] = ["builder-document", "baseline-body", "design-baseline", "design-draft",
-  "technology-decision", "workstream", "lead-memory", "consultation-source", "reuse-candidate"];
+  "technology-decision", "workstream", "lead-memory", "consultation-source", "reuse-candidate", "delivery-document"];
 const SORTS = ["createdAt", "title", "sourceKind", "revisionId"] as const;
 export type DocumentSort = typeof SORTS[number];
 
