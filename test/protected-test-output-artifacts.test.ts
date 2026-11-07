@@ -89,7 +89,7 @@ test("missing APIs, legacy receipts, permission failures and changed authority r
 
 test("a denied current Git observation never preserves an earlier technical pass", async () => {
   const f = await fixture();
-  (f.f.platform.localFolders as any).readWorkspaceSourceGitTipV1 = async () => { throw new Error("Source permission revoked"); };
+  (f.f.platform as any).localFolders.readWorkspaceSourceGitTipV1 = async () => { throw new Error("Source permission revoked"); };
   const observed = await progressTool().handler({ workstreamId: "ws-1", eventId: f.eventId }, f.managerContext, f.f.platform) as any;
   assert.equal(observed.data.technicalValidation[0].status, "unknown");
   assert.equal(observed.data.technicalValidation[0].outputs, null);
