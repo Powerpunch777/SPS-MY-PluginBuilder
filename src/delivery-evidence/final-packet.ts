@@ -340,7 +340,8 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
       return result.status === "published" ? Object.freeze({ status: "published" as const, sequence: result.sequence, request: event })
         : Object.freeze({ status: "conflict" as const, actualRevisionId: result.actualBaseRevisionId });
     },
-    async respond(input: unknown, context: Pick<SpsActionContext, "companyId" | "actor"> & { state: RevisionState }) {
+    async respond(input: unknown, context: Pick<SpsActionContext, "companyId" | "actor"> & { state: RevisionState },
+      authorizeNewDecision?: () => Promise<void>) {
       if (context.actor.type !== "user" || context.actor.companyId !== context.companyId || !context.actor.userId?.trim()
         || context.companyId !== workspaceId) throw new Error("Final Packet decisions require an authenticated Workspace user action.");
       if (context.state !== state) throw new Error("Final Packet action state does not match the Workspace-bound journal.");
@@ -349,6 +350,20 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
       const expected = row.expectedBaseRevisionId === null ? null : id(row.expectedBaseRevisionId, "expected base revision");
       if (row.action !== "approve" && row.action !== "request-changes" && row.action !== "hold") throw new TypeError("Invalid user decision.");
       const reason = row.reason === undefined || row.reason === null ? null : id(row.reason, "decision reason");
+      if (row.action !== "approve" && reason === null) throw new TypeError("A reason is required for changes or hold.");
+      const prior = await journal.publishedRevision(eventId);
+      if (prior) {
+        const { revision, sequence } = prior;
+        const decision = revision.decision;
+        if (revision.kind !== "user-decision" || !decision || revision.requestId !== requestId
+          || revision.expectedBaseRevisionId !== expected || decision.userId !== context.actor.userId
+          || decision.action !== row.action || decision.reason !== reason) {
+          throw new Error("The decision event ID is already bound to different immutable content.");
+        }
+        // A receipt for an existing write is not a fresh approval or eligibility check.
+        return Object.freeze({ status: "recorded" as const, sequence, decision, replayed: true as const });
+      }
+      await authorizeNewDecision?.();
       const request = await currentRequest(requestId);
       if (!request?.request) throw new Error("The exact immutable approval request is not currently published.");
       const history = await journal.recent(50);

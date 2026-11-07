@@ -171,6 +171,45 @@ test("a claimed atomic approval receipt is insufficient without the exact journa
   { companyId: COMPANY, actor: { type: "user", companyId: COMPANY, userId: "user-7" }, state: f.state }), /did not match the stored user decision/);
 });
 
+test("lost approval response replays only the exact stored decision after restart, even if evidence changed", async () => {
+  const f = fixture();
+  let evidenceReads = 0, commitCalls = 0, admitted = 0;
+  const journal = createRevisionJournal(COMPANY, COMPANY, f.state, { prefix: "final-delivery",
+    parse: value => value as FinalPacketJournalEvent, revisionId: event => event.eventId });
+  const store = f.store(async () => {
+    evidenceReads++;
+    return { status: "available" as const, value: f.snapshot };
+  }, async input => {
+    commitCalls++;
+    const result = await journal.publish({ expectedBaseRevisionId: input.expectedJournalRevisionId, revision: input.decision });
+    assert.equal(result.status, "published");
+    throw new Error("response lost after publication");
+  });
+  await store.attestFinalPacket({ eventId: "attestation", requestId: "packet-rev-1", expectedBaseRevisionId: null }, f.runContext, f.platform);
+  await store.publishApprovalRequest({ eventId: "request", requestId: "packet-rev-1", expectedBaseRevisionId: "attestation",
+    attestationEventId: "attestation" }, f.reviewContext, f.platform);
+  const input = { eventId: "decision", requestId: "packet-rev-1", expectedBaseRevisionId: "request", action: "approve" };
+  const context = { companyId: COMPANY, actor: { type: "user" as const, companyId: COMPANY, userId: "user-7" }, state: f.state };
+  await assert.rejects(store.respond(input, context, async () => { admitted++; }), /response lost/);
+  const readCount = evidenceReads;
+  const restarted = f.store(async () => { evidenceReads++; return { status: "unknown", reason: "source-changed" }; });
+  const forbiddenAdmission = async () => { throw new Error("must not start a new decision"); };
+  const saved = await journal.publishedRevision(input.eventId);
+  const replay = await restarted.respond(input, context, forbiddenAdmission);
+  assert.deepEqual(replay, { status: "recorded", sequence: saved?.sequence, decision: saved?.revision.decision, replayed: true });
+  assert.equal(evidenceReads, readCount);
+  assert.equal(commitCalls, 1);
+  assert.equal(admitted, 1);
+  assert.equal((await journal.current())?.sequence, 3);
+  for (const altered of [{ ...input, requestId: "other" }, { ...input, expectedBaseRevisionId: null },
+    { ...input, action: "hold", reason: "Changed" }, { ...input, reason: "Different" }]) {
+    await assert.rejects(restarted.respond(altered, context, forbiddenAdmission), /different immutable content/);
+  }
+  await assert.rejects(restarted.respond(input, { ...context, actor: { ...context.actor, userId: "user-8" } }, forbiddenAdmission),
+    /different immutable content/);
+  await assert.rejects(restarted.respond({ ...input, eventId: "new" }, context, forbiddenAdmission), /must not start a new decision/);
+});
+
 test("registered review exposes no bytes or approval eligibility from historical evidence", async () => {
   const f = fixture();
   const reader = async () => ({ status: "available" as const, value: f.snapshot });
@@ -203,7 +242,8 @@ test("registered review exposes no bytes or approval eligibility from historical
   f.setLeadSelectionRevision(2);
   await assert.rejects(async () => action({ ...decision, action: "hold", reason: "Wait" }, ctx), /receipts could not be verified/);
   f.setLeadSelectionRevision(1);
-  assert.equal((await action({ ...decision, action: "hold", reason: "Wait" }, ctx) as { status: string }).status, "recorded");
+  const recorded = await action({ ...decision, action: "hold", reason: "Wait" }, ctx) as { status: string };
+  assert.equal(recorded.status, "recorded");
 });
 
 test("Integration Review cannot post an attestation from a prior Lead selection", async () => {
