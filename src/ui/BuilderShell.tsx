@@ -311,7 +311,7 @@ function LeadView({ props, messages, actor, drawerOpen, onDrawerClose, onDrawerT
       {!readOnly && <ConversationControls channel={channel} props={props} />}
       {!readOnly && channel === "main" && props.consultationAnalysis}
       {!readOnly && channel === "main" && firstDesignReview && <details className="builder-first-design-review">
-        <summary>최초 설계 검토</summary>{firstDesignReview}
+        <summary>설계 검토</summary>{firstDesignReview}
       </details>}
       {!readOnly && channel === "ui-design" && props.uiReview && <div className="builder-ui-review-surface">{props.uiReview}</div>}
       <MessageList actor={actor} messages={messages} followLatest={Boolean(actor) || !props.conversationHasNewer} />

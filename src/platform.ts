@@ -823,8 +823,13 @@ async function firstDesignReviewView(companyId: string, platform: SpsPlatformInv
   const current = Boolean(draft && bundle.draftRevisionId === draft.revision.draft.revisionId
     && bundle.draftDigest === createHash("sha256").update(JSON.stringify(draft.revision.draft)).digest("hex")
     && bundle.author.selectionRevision === binding.revision && bundle.author.agentId === binding.selectedAgentId);
+  const prior = bundle.priorBaseline as null | Readonly<{ revisionId: string; sequence: number; digest: string }>;
+  const priorMatches = prior === null ? baseline === null : Boolean(baseline && prior.revisionId === baseline.revision.revisionId
+    && prior.sequence === baseline.sequence && prior.digest === createHash("sha256").update(JSON.stringify(baseline.revision)).digest("hex"));
+  const applied = Boolean(bundle.status === "APPROVED" && baseline
+    && baseline.revision.userDecision.sourceId === `first-design-review:${bundle.revisionId}`);
   await assertLeadSelection(companyId, binding, platform);
-  return { status: current && (!baseline || bundle.status === "APPROVED") ? "ready" as const : "stale" as const,
+  return { status: current && (priorMatches || applied) ? "ready" as const : "stale" as const,
     bundle, proposalRevisionId: bundle.revisionId, expectedHead: bundle.revisionId };
 }
 
