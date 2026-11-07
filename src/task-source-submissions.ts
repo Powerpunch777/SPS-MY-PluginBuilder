@@ -186,6 +186,23 @@ function claimStateKey(kind: "intent" | "outcome", id: string) {
   return { scopeKind: "company" as const, scopeId: "", namespace: "sonpark.my-builder", stateKey: `task-source-${kind}.v2.${id}` };
 }
 
+/** JSONB may reorder object keys; immutable pin values and array order may not change. */
+export function taskSourcePinsMatch(sourceValue: unknown, dependencyValue: unknown,
+  expected: Pick<TaskSourceSubmissionBinding, "source" | "dependencyPins">): boolean {
+  const source = exactRecord(sourceValue, ["sourceId", "folderKey", "branch", "expectedHead"], "Task source pins");
+  if (Object.keys(source).some(key => source[key] !== expected.source[key as keyof typeof expected.source])) return false;
+  if (!Array.isArray(dependencyValue) || dependencyValue.length !== expected.dependencyPins.length
+    || Reflect.ownKeys(dependencyValue).length !== dependencyValue.length + 1) return false;
+  for (let index = 0; index < dependencyValue.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(dependencyValue, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Task dependency pins must be own values.");
+    const pin = exactRecord(descriptor.value, ["taskId", "revision", "recordSha256"], "Task dependency pins");
+    const known = expected.dependencyPins[index]!;
+    if (pin.taskId !== known.taskId || pin.revision !== known.revision || pin.recordSha256 !== known.recordSha256) return false;
+  }
+  return true;
+}
+
 function parseStoredSubmission(value: unknown, expected: Readonly<{ binding: TaskSourceSubmissionBinding; paths: readonly string[];
   submissionId: string; producerRunId: string }>): TaskSourceSubmission {
   const baseFields = ["schemaVersion", "submissionId", "workspaceId", "projectId", "ctoId", "workstreamId", "taskId",
@@ -200,8 +217,8 @@ function parseStoredSubmission(value: unknown, expected: Readonly<{ binding: Tas
     || row.projectId !== binding.projectId || row.ctoId !== binding.ctoId || row.workstreamId !== binding.workstreamId
     || row.taskId !== binding.taskId || row.packetRevision !== binding.packetRevision || row.packetRecordSha256 !== binding.packetRecordSha256
     || row.role !== binding.role || producer.agentId !== binding.agentId || producer.sessionId !== binding.sessionId
-    || producer.runId !== expected.producerRunId || JSON.stringify(row.dependencyPins) !== JSON.stringify(binding.dependencyPins)
-    || JSON.stringify(source) !== JSON.stringify(binding.source) || typeof row.commitSha !== "string" || !SHA.test(row.commitSha)
+    || producer.runId !== expected.producerRunId || !taskSourcePinsMatch(source, row.dependencyPins, binding)
+    || typeof row.commitSha !== "string" || !SHA.test(row.commitSha)
     || typeof row.treeSha !== "string" || !SHA.test(row.treeSha)
     || (row.coreStatus !== "committed" && row.coreStatus !== "committed_index_reconciliation_required")
     || (row.authorityAfterCommit !== "current" && row.authorityAfterCommit !== "changed")

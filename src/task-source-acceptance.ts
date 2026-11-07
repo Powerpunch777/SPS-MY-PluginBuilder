@@ -4,7 +4,7 @@ import { parseTaskWorkerRegistry, taskWorkerRegistryKey, type TaskWorkerRecord }
 import { taskPacketRecordDigest, type TaskPacketRecord } from "./domain/task-packets.ts";
 import { exactToolRecord, parseLeadToolContext } from "./lead-tool-authority.ts";
 import { resolveCtoTaskAuthority } from "./task-packet-tools.ts";
-import { readTaskSourceClaim, readTaskSourceSubmission, type TaskSourceSubmission, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
+import { readTaskSourceClaim, readTaskSourceSubmission, taskSourcePinsMatch, type TaskSourceSubmission, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "./task-worker-runtime.ts";
 import type { RevisionState } from "./solution-revision-store.ts";
 
@@ -236,8 +236,7 @@ export function parseCtoTaskSourceAcceptance(value: unknown, submission: TaskSou
     || row.workspaceId !== submission.workspaceId || row.projectId !== submission.projectId || row.ctoId !== submission.ctoId
     || row.workstreamId !== submission.workstreamId || row.taskId !== submission.taskId
     || row.packetRevision !== submission.packetRevision || row.packetRecordSha256 !== submission.packetRecordSha256
-    || JSON.stringify(row.dependencyPins) !== JSON.stringify(submission.dependencyPins)
-    || JSON.stringify(row.source) !== JSON.stringify(submission.source) || row.commitSha !== submission.commitSha
+    || !taskSourcePinsMatch(row.source, row.dependencyPins, submission) || row.commitSha !== submission.commitSha
     || row.treeSha !== submission.treeSha || JSON.stringify(row.changedPaths) !== JSON.stringify(submission.changedPaths)
     || ![receivedBy.agentId, receivedBy.sessionId, receivedBy.runId].every(item => typeof item === "string"
       && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(item))

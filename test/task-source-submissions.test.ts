@@ -3,7 +3,7 @@ import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { parseTaskPacket } from "../src/domain/task-packets.ts";
-import { readTaskSourceClaim, readTaskSourceSubmission, submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "../src/task-source-submissions.ts";
+import { readTaskSourceClaim, readTaskSourceSubmission, submitTaskSourceFiles, taskSourcePinsMatch, type TaskSourceSubmissionBinding } from "../src/task-source-submissions.ts";
 
 const W = "10000000-0000-4000-8000-000000000001";
 const P = "20000000-0000-4000-8000-000000000002";
@@ -127,6 +127,36 @@ test("CTO discovers the exact submission by binding; legacy unbound receipts rem
   f.rows.set(`sonpark.my-builder/task-source-outcome.v1.${result.submission.submissionId}`, legacyState as JsonValue);
   assert.deepEqual(await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: result.submission.submissionId }),
     { status: "ineligible", reason: "legacy-receipt-unbound-paths" });
+});
+
+function jsonbOrder(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map(jsonbOrder);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => [key, jsonbOrder(item)]));
+  return value;
+}
+
+test("source submission remains readable after JSONB changes nested object key order", async () => {
+  const f = fixture(), first = await f.submit();
+  assert.equal(first.status, "submitted");
+  if (first.status !== "submitted") return;
+  for (const [key, row] of f.rows) f.rows.set(key, jsonbOrder(row));
+  const { runId: _runId, ...base } = binding();
+  const read = await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: first.submission.submissionId });
+  assert.equal(read.status, "submitted");
+  if (read.status === "submitted") assert.deepEqual(read.submission, first.submission);
+  assert.equal(f.commits, 1);
+});
+
+test("pin comparison ignores only key order, not changed values, extra fields or getters", () => {
+  const expected = binding();
+  const source = jsonbOrder(expected.source as JsonValue), pins = jsonbOrder(expected.dependencyPins as unknown as JsonValue);
+  assert.equal(taskSourcePinsMatch(source, pins, expected), true);
+  assert.equal(taskSourcePinsMatch({ ...expected.source, branch: "other" }, pins, expected), false);
+  assert.equal(taskSourcePinsMatch(source, [{ ...expected.dependencyPins[0], revision: 99 }], expected), false);
+  assert.throws(() => taskSourcePinsMatch({ ...expected.source, extra: true }, pins, expected));
+  const field = Object.defineProperty({}, "taskId", { enumerable: true, get() { throw new Error("Getter invoked"); } });
+  assert.throws(() => taskSourcePinsMatch(source, [field], expected), /data|fields|invalid/i);
 });
 
 test("different path subsets share one durable claim and the first exact receipt", async () => {

@@ -75,6 +75,22 @@ test("CTO records receipt of the exact immutable commit once and replay is idemp
   assert.equal(f.writes, 1);
 });
 
+test("persisted CTO acceptance tolerates JSONB key order without changing any pins", async () => {
+  const f = fixture(), first = await f.accept();
+  assert.equal(first.status, "accepted");
+  for (const [key, value] of f.rows) {
+    const row = value as Record<string, JsonValue>;
+    const source = row.source as Record<string, JsonValue>;
+    const pins = row.dependencyPins as Record<string, JsonValue>[];
+    f.rows.set(key, { ...row, source: Object.fromEntries(Object.entries(source).reverse()),
+      dependencyPins: pins.map(pin => Object.fromEntries(Object.entries(pin).reverse())) });
+  }
+  const replay = await f.accept();
+  assert.equal(replay.status, "existing");
+  assert.deepEqual(replay.acceptance, first.acceptance);
+  assert.equal(f.writes, 1);
+});
+
 test("wrong Workspace, project, CTO, session or Run cannot accept", async t => {
   for (const [label, override] of [
     ["workspace", { workspaceId: "99999999-9999-4999-8999-999999999999" }],
