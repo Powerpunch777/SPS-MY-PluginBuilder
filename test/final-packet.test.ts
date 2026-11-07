@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
-import { createFinalPacketStore, type FinalAtomicApprovalCommitter, type FinalEvidenceSnapshot, type FinalPacketJournalEvent } from "../src/delivery-evidence/final-packet.ts";
+import { createFinalPacketStore, sealFinalPacket, type FinalAtomicApprovalCommitter, type FinalEvidenceSnapshot, type FinalPacketJournalEvent } from "../src/delivery-evidence/final-packet.ts";
 import { createRevisionJournal, type RevisionState } from "../src/solution-revision-store.ts";
 import { readFinalReview, resolveFinalReviewDeliveryDocuments } from "../src/delivery-evidence/final-review.ts";
 import type { DeliveryDocumentsRead } from "../src/project-documents/delivery-documents.ts";
@@ -88,6 +88,18 @@ test("unregistered evidence reader and UNKNOWN gates never publish a Main attest
   const unknown = await f.store(async () => ({ status: "available", value: { ...f.snapshot, g6: "UNKNOWN" } }))
     .attestFinalPacket(input, f.runContext, f.platform);
   assert.equal(unknown.status, "blocked");
+});
+
+test("final packet keeps bounded preparation prose and portable guide paths without treating them as short IDs", () => {
+  const { packetSha256: _sha, ...content } = fixture().snapshot.packet;
+  const longLimit = "A known limitation requiring additional operational context. ".repeat(9);
+  const path = `docs/${"long-guide-name-".repeat(15)}installation.md`;
+  const parsed = sealFinalPacket({ ...content, limits: [longLimit], files: [{ ...content.files[0]!, path }] });
+  assert.equal(parsed.limits[0], longLimit);
+  assert.equal(parsed.files[0]?.path, path);
+  assert.throws(() => sealFinalPacket({ ...content, limits: ["x".repeat(2049)] }));
+  assert.throws(() => sealFinalPacket({ ...content, files: [{ ...content.files[0]!, path: "docs/../outside" }] }));
+  assert.throws(() => sealFinalPacket({ ...content, files: [content.files[0]!, { ...content.files[0]!, path: content.files[0]!.path.toUpperCase() }] }));
 });
 
 test("missing or mismatched commit/file bytes block Main attestation even when status fields claim pass", async () => {

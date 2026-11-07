@@ -4,6 +4,7 @@ import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuth
 import { createRevisionJournal, type RevisionJobWake, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
 import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB, integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
 import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
+import { parseDeliverySourcePath } from "./source-snapshot.ts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const ID = /^[^\u0000-\u001f\u007f]{1,200}$/u;
@@ -86,6 +87,10 @@ function id(value: unknown, label: string): string {
   if (typeof value !== "string" || !ID.test(value) || !value.trim()) throw new TypeError(`Invalid ${label}.`);
   return value;
 }
+function description(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 2048 || /[\p{Cc}\p{Cf}\ufffd]/u.test(value)) throw new TypeError(`Invalid ${label}.`);
+  return value;
+}
 function digest(value: unknown, label: string): string {
   if (typeof value !== "string" || !SHA256.test(value)) throw new TypeError(`Invalid ${label}.`);
   return value;
@@ -111,12 +116,11 @@ function packet(value: unknown): FinalPacket {
     || !Array.isArray(row.changeHistory)) throw new TypeError("Final Packet contents are incomplete.");
   const files = row.files.map(item => {
     const file = record(item, ["path", "classification", "size", "sha256"]);
-    const path = id(file.path, "file path");
-    if (path.startsWith("/") || path.includes("\\") || path.split("/").some(part => part === ".." || !part)) throw new TypeError("Final Packet file path must be relative and normalized.");
+    const path = parseDeliverySourcePath(file.path);
     if (!Number.isSafeInteger(file.size) || (file.size as number) < 0) throw new TypeError("Invalid file size.");
     return Object.freeze({ path, classification: id(file.classification, "file classification"), size: file.size as number, sha256: digest(file.sha256, "file sha256") });
   });
-  if (new Set(files.map(file => file.path)).size !== files.length) throw new TypeError("Final Packet file paths must be unique.");
+  if (new Set(files.map(file => file.path.toLocaleLowerCase("en-US"))).size !== files.length) throw new TypeError("Final Packet file paths must be unique.");
   const documents = row.documents.map(item => {
     const doc = record(item, ["kind", "pin"]);
     if (doc.kind !== "installation-guide" && doc.kind !== "user-guide" && doc.kind !== "other") throw new TypeError("Invalid delivery document kind.");
@@ -130,7 +134,7 @@ function packet(value: unknown): FinalPacket {
     commitSha: id(integration.commitSha, "integration commit"), build: pin(integration.build),
     ciEvidence: pins(integration.ciEvidence, "CI evidence"), e2eEvidence: pins(integration.e2eEvidence, "E2E evidence"),
     ...(Object.hasOwn(integration, "regressionEvidence") ? { regressionEvidence: pins(integration.regressionEvidence, "regression evidence") } : {}) });
-  const limits = row.limits.map(item => id(item, "known limit"));
+  const limits = row.limits.map(item => description(item, "known limit"));
   if (new Set(limits).size !== limits.length) throw new TypeError("Known limits must be unique.");
   const parsed = { packetId: id(row.packetId, "packetId"), packetRevisionId: id(row.packetRevisionId, "packetRevisionId"),
     packetSha256: digest(row.packetSha256, "packet sha256"), baseline: pin(row.baseline), uiRevision: pin(row.uiRevision),
