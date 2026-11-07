@@ -48,14 +48,14 @@ function view(overrides: Record<string, unknown> = {}) {
 
 const baselineDigest = () => createHash("sha256").update(JSON.stringify(baseline()), "utf8").digest("hex");
 
-test("adds the scoped baseline as an interpreted document without changing graph or activity state", () => {
+test("adds the scoped baseline as an interpreted document without changing graph or activity state", async () => {
   const snapshot = createEmptyBuilderSnapshot(workspace);
   snapshot.actors.push({ id: "lead", role: "lead", label: "Lead", parentActorId: null, agentId: null, sessionId: null, status: "idle" });
   snapshot.graph.entities.push({ id: "existing", kind: "feature", label: "Existing", ownerActorId: "lead", status: "planned", evidenceRefs: [] });
   snapshot.activity.push({ id: "activity-1", actorId: "lead", label: "Existing activity", createdAt: "2026-11-02T00:00:00.000Z", evidenceRef: null });
   const untouched = structuredClone({ actors: snapshot.actors, graph: snapshot.graph, activity: snapshot.activity, messages: snapshot.messages });
 
-  const projected = projectDesignBaseline(snapshot, view({ baselineDigest: baselineDigest() }));
+  const projected = await projectDesignBaseline(snapshot, view({ baselineDigest: baselineDigest() }));
   assert.equal(projected.documents.length, 1);
   assert.equal(projected.documents[0]?.id, "design-baseline:baseline-r01");
   assert.equal(projected.documents[0]?.title, "설계 기준 · Lead 해석 기록");
@@ -72,13 +72,13 @@ test("adds the scoped baseline as an interpreted document without changing graph
   assert.match(text.notice, /외부 계약 체결이나 코드 실행 권한이 아닙니다/);
   assert.equal(text.projectId, workspace);
   assert.equal(text.graph.entities.length, 1);
-  assert.equal(projectDesignBaseline(snapshot, null), snapshot);
+  assert.equal(await projectDesignBaseline(snapshot, null), snapshot);
 });
 
-test("adds a navigable self pin only for the exact server-provided canonical Baseline digest", () => {
+test("adds a navigable self pin only for the exact server-provided canonical Baseline digest", async () => {
   const snapshot = createEmptyBuilderSnapshot(workspace);
   const digestValue = baselineDigest();
-  const baselineDocument = projectDesignBaseline(snapshot, view({ baselineDigest: digestValue })).documents[0]!;
+  const baselineDocument = (await projectDesignBaseline(snapshot, view({ baselineDigest: digestValue }))).documents[0]!;
   const consumers = ["workstream:WS-1", "technology-decisions:TECH-1"].map((id, index) => ({
     id, title: id, revisionId: `consumer-r${index + 1}`, text: "", createdAt: baseline().createdAt,
     sourcePins: [{ sourceId: baselineDocument.id, revisionId: baselineDocument.revisionId, sha256: digestValue }],
@@ -91,40 +91,70 @@ test("adds a navigable self pin only for the exact server-provided canonical Bas
   const stale = { ...consumers[0]!, sourcePins: [{ ...consumers[0]!.sourcePins[0]!, sha256: "b".repeat(64) }] };
   assert.deepEqual(resolveDocumentReference([stale, baselineDocument], stale.id,
     { kind: "source-pin", ...stale.sourcePins[0]! }), { status: "unlinked" });
-  const wrongTargetDigest = projectDesignBaseline(snapshot, view({ baselineDigest: "c".repeat(64) })).documents[0]!;
-  assert.deepEqual(resolveDocumentReference([consumers[0]!, wrongTargetDigest], consumers[0]!.id,
-    { kind: "source-pin", ...consumers[0]!.sourcePins[0]! }), { status: "unlinked" });
-  const legacy = projectDesignBaseline(snapshot, view()).documents[0]!;
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ baselineDigest: "c".repeat(64) })),
+    /does not match the normalized baseline/u);
+  const legacy = (await projectDesignBaseline(snapshot, view())).documents[0]!;
   assert.equal(legacy.sourcePins?.some(pin => pin.sourceId === legacy.id && pin.revisionId === legacy.revisionId), false);
   assert.deepEqual(resolveDocumentReference([consumers[0]!, legacy], consumers[0]!.id,
     { kind: "source-pin", ...consumers[0]!.sourcePins[0]! }), { status: "unlinked" });
 });
 
-test("rejects foreign scopes, unsafe sequences, extra fields and accessors", () => {
+test("same Baseline ID and revision with changed content cannot reuse the previous digest or link", async () => {
   const snapshot = createEmptyBuilderSnapshot(workspace);
-  assert.throws(() => projectDesignBaseline(snapshot, view({ workspaceId: "other" })), /cross-scope/);
-  assert.throws(() => projectDesignBaseline(snapshot, view({ projectId: "other" })), /cross-scope/);
-  assert.throws(() => projectDesignBaseline(snapshot, view({ sequence: 0 })), /cross-scope/);
-  assert.throws(() => projectDesignBaseline(snapshot, view({ sequence: Number.MAX_SAFE_INTEGER + 1 })), /cross-scope/);
-  assert.throws(() => projectDesignBaseline(snapshot, view({ approved: true })), /fields/);
-  assert.throws(() => projectDesignBaseline(snapshot, view({ baselineDigest: "A".repeat(64) })), /digest/u);
+  const previousDigest = baselineDigest();
+  const changed = baseline();
+  changed.specification.requirements[0]!.description = "Changed without a new revision";
+  const consumer = { id: "workstream:WS-1", title: "Workstream", revisionId: "ws-r1", createdAt: baseline().createdAt,
+    text: "", sourcePins: [{ sourceId: "design-baseline:baseline-r01", revisionId: "baseline-r01", sha256: previousDigest }] };
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ baseline: changed, baselineDigest: previousDigest })),
+    /does not match the normalized baseline/u);
+  assert.deepEqual(resolveDocumentReference([consumer], consumer.id, { kind: "source-pin", ...consumer.sourcePins[0] }),
+    { status: "unlinked" });
+});
+
+test("legacy DTOs and unavailable WebCrypto remain readable without a Baseline self pin", async () => {
+  const snapshot = createEmptyBuilderSnapshot(workspace);
+  const legacy = (await projectDesignBaseline(snapshot, view())).documents[0]!;
+  assert.ok(legacy);
+  assert.equal(legacy.sourcePins?.some(pin => pin.sourceId === legacy.id && pin.revisionId === legacy.revisionId), false);
+
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    const unsupported = (await projectDesignBaseline(snapshot, view({ baselineDigest: baselineDigest() }))).documents[0]!;
+    assert.ok(unsupported);
+    assert.equal(unsupported.sourcePins?.some(pin => pin.sourceId === unsupported.id && pin.revisionId === unsupported.revisionId), false);
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "crypto", descriptor);
+    else Reflect.deleteProperty(globalThis, "crypto");
+  }
+});
+
+test("rejects foreign scopes, unsafe sequences, extra fields and accessors", async () => {
+  const snapshot = createEmptyBuilderSnapshot(workspace);
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ workspaceId: "other" })), /cross-scope/);
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ projectId: "other" })), /cross-scope/);
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ sequence: 0 })), /cross-scope/);
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ sequence: Number.MAX_SAFE_INTEGER + 1 })), /cross-scope/);
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ approved: true })), /fields/);
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ baselineDigest: "A".repeat(64) })), /digest/u);
 
   const withSymbol = view();
   Object.defineProperty(withSymbol, Symbol("extra"), { value: true, enumerable: true });
-  assert.throws(() => projectDesignBaseline(snapshot, withSymbol), /fields/);
+  await assert.rejects(() => projectDesignBaseline(snapshot, withSymbol), /fields/);
 
   let invoked = false;
   const withGetter = view();
   Object.defineProperty(withGetter, "baseline", { enumerable: true, get() { invoked = true; return baseline(); } });
-  assert.throws(() => projectDesignBaseline(snapshot, withGetter), /field/);
+  await assert.rejects(() => projectDesignBaseline(snapshot, withGetter), /field/);
   assert.equal(invoked, false);
 });
 
-test("validates the complete baseline schema and rejects invalid or cross-project baselines", () => {
+test("validates the complete baseline schema and rejects invalid or cross-project baselines", async () => {
   const snapshot = createEmptyBuilderSnapshot(workspace);
-  assert.throws(() => projectDesignBaseline(snapshot, view({ baseline: { ...baseline(), unexpected: true } })));
-  assert.throws(() => projectDesignBaseline(snapshot, view({ baseline: { ...baseline(), projectId: "other" } })));
-  assert.throws(() => projectDesignBaseline(snapshot, view({ baseline: {
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ baseline: { ...baseline(), unexpected: true } })));
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ baseline: { ...baseline(), projectId: "other" } })));
+  await assert.rejects(() => projectDesignBaseline(snapshot, view({ baseline: {
     ...baseline(), graph: { ...baseline().graph, entities: [{ id: "feature-a", kind: "feature", specRef: "REQ-404" }] },
   } })));
 });

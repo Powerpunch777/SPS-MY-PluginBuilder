@@ -21,7 +21,17 @@ function exactRecord(value: unknown, keys: readonly string[]): Record<string, un
   return row;
 }
 
-export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown): BuilderSnapshot {
+async function canonicalDigest(value: unknown): Promise<string | null> {
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle || typeof subtle.digest !== "function") return null;
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+    return [...digest].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  } catch { return null; }
+}
+
+export async function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown): Promise<BuilderSnapshot> {
   if (value === null) return snapshot;
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid design baseline view.");
   const hasDigest = Object.hasOwn(value, "baselineDigest");
@@ -32,11 +42,19 @@ export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown)
     || typeof row.sequence !== "number" || !Number.isSafeInteger(row.sequence) || row.sequence < 1) {
     throw new TypeError("Invalid or cross-scope design baseline view.");
   }
-  if (hasDigest && (typeof row.baselineDigest !== "string" || !/^[a-f0-9]{64}$/u.test(row.baselineDigest))) {
-    throw new TypeError("Invalid design baseline digest.");
+  let expectedDigest: string | undefined;
+  if (hasDigest) {
+    if (typeof row.baselineDigest !== "string" || !/^[a-f0-9]{64}$/u.test(row.baselineDigest)) {
+      throw new TypeError("Invalid design baseline digest.");
+    }
+    expectedDigest = row.baselineDigest;
   }
 
   const baseline: DesignBaseline = parseDesignBaseline(row.baseline, snapshot.workspaceId);
+  const digest = expectedDigest !== undefined ? await canonicalDigest(baseline) : null;
+  if (expectedDigest !== undefined && digest !== null && digest !== expectedDigest) {
+    throw new TypeError("Design baseline digest does not match the normalized baseline.");
+  }
   const baselineId = `design-baseline:${baseline.revisionId}`;
   return {
     ...snapshot,
@@ -52,8 +70,8 @@ export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown)
       category: "design", sourceKind: "design-baseline", approvalStatus: "unknown", freshnessStatus: "unknown",
       bodyAvailable: true,
       sourcePins: [
-        ...(typeof row.baselineDigest === "string" ? [{ sourceId: baselineId, revisionId: baseline.revisionId,
-          sha256: row.baselineDigest }] : []),
+        ...(digest !== null && expectedDigest !== undefined ? [{ sourceId: baselineId, revisionId: baseline.revisionId,
+          sha256: expectedDigest }] : []),
         { sourceId: `design-draft:${baseline.sourceDraftRevisionId}`, revisionId: baseline.sourceDraftRevisionId,
           sha256: baseline.draftDigest },
       ],

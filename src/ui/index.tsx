@@ -15,7 +15,7 @@ import type { ApproveUiProposalInput } from "./UiHtmlReview.tsx";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
 import { parseLeadAgentOptions } from "../domain/lead-agent.ts";
 import { parseLeadSessions } from "../domain/lead-sessions.ts";
-import type { LeadChannel } from "../domain/model.ts";
+import type { BuilderSnapshot, LeadChannel } from "../domain/model.ts";
 import { parseQuestionContext, type QuestionContext } from "../domain/question-context.ts";
 import { parseLeadConversationPage } from "../lead-conversations.ts";
 import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
@@ -75,6 +75,9 @@ export function BuilderPage() {
   const pendingAnalysis = useRef<{ workspaceId: string; revision: number; requestId: string } | null>(null);
   const pending = useRef<{ workspaceId: string; text: string; requestId: string } | null>(null);
   const pendingMessage = useRef<{ workspaceId: string; channel: LeadChannel; text: string; questionContext: QuestionContext | null; requestId: string } | null>(null);
+  const [baselineProjection, setBaselineProjection] = useState<{
+    workspaceId: string | null; data: unknown; sourceSnapshot: BuilderSnapshot | null; snapshot: BuilderSnapshot; error: string | null;
+  } | null>(null);
   const liveScope = useRef("");
   const current = useMemo(() => {
     if (!context.companyId) return null;
@@ -121,15 +124,34 @@ export function BuilderPage() {
     try { return { snapshot: projectLeadMemory(projected, memory.data), error: null }; }
     catch { return { snapshot: projected, error: "Lead 공유 기억을 확인하지 못했습니다. 새로고침해 주세요." }; }
   }, [current, projectCtos.data, projectCtos.loading, projectCtos.error, memory.data, memory.loading, memory.error]);
+  useEffect(() => {
+    let cancelled = false;
+    const sourceSnapshot = memoryView.snapshot;
+    const workspaceId = context.companyId;
+    const data = designBaseline.data;
+    const publish = (snapshot: BuilderSnapshot, error: string | null) => {
+      if (!cancelled) setBaselineProjection({ workspaceId, data, sourceSnapshot, snapshot, error });
+    };
+    if (!sourceSnapshot) return () => { cancelled = true; };
+    if (designBaseline.error) {
+      publish(sourceSnapshot, "설계 기준을 불러오지 못했습니다. 새로고침해 주세요.");
+    } else if (designBaseline.loading || data === null) {
+      publish(sourceSnapshot, null);
+    } else {
+      void projectDesignBaseline(sourceSnapshot, data).then(snapshot => publish(snapshot, null))
+        .catch(() => publish(sourceSnapshot, "설계 기준을 확인하지 못했습니다. 새로고침해 주세요."));
+    }
+    return () => { cancelled = true; };
+  }, [context.companyId, memoryView.snapshot, designBaseline.data, designBaseline.loading, designBaseline.error]);
   const baselineView = useMemo(() => {
     if (!memoryView.snapshot) return { snapshot: null, error: null };
     if (designBaseline.error) return { snapshot: memoryView.snapshot, error: "설계 기준을 불러오지 못했습니다. 새로고침해 주세요." };
-    if (designBaseline.loading || designBaseline.data === null) {
-      return { snapshot: memoryView.snapshot, error: null };
-    }
-    try { return { snapshot: projectDesignBaseline(memoryView.snapshot, designBaseline.data), error: null }; }
-    catch { return { snapshot: memoryView.snapshot, error: "설계 기준을 확인하지 못했습니다. 새로고침해 주세요." }; }
-  }, [memoryView, designBaseline.data, designBaseline.loading, designBaseline.error]);
+    if (designBaseline.loading || designBaseline.data === null) return { snapshot: memoryView.snapshot, error: null };
+    const current = baselineProjection;
+    if (!current || current.workspaceId !== context.companyId || current.data !== designBaseline.data
+      || current.sourceSnapshot !== memoryView.snapshot) return { snapshot: memoryView.snapshot, error: null };
+    return { snapshot: current.snapshot, error: current.error };
+  }, [context.companyId, memoryView.snapshot, designBaseline.data, designBaseline.loading, designBaseline.error, baselineProjection]);
   const technologyView = useMemo(() => {
     if (!baselineView.snapshot) return { snapshot: null, error: null };
     if (technology.error) return { snapshot: baselineView.snapshot, error: "기술 선정 명세를 불러오지 못했습니다. 새로고침해 주세요." };
