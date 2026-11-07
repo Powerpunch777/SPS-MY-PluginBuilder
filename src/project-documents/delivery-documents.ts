@@ -82,15 +82,18 @@ function parseDrafts(value: unknown): readonly DeliveryDocumentDraft[] {
     const row = record(item, ["kind", "path", "classification", "scope", "body"]);
     if (row.kind !== "installation-guide" && row.kind !== "user-guide" && row.kind !== "other") throw new TypeError("Unsupported delivery document kind.");
     const path = text(row.path, "Document path", 512);
-    if (path.startsWith("/") || path.includes("\\") || path.split("/").some(part => !part || part === "." || part === "..")) {
-      throw new TypeError("Document path must be relative and normalized.");
+    const segments = path.split("/");
+    if (path.startsWith("/") || segments.length > 64 || /[\\\p{Cc}\p{Cf}<>:"|?*]/u.test(path)
+      || segments.some(part => !part || part === "." || part === ".." || /[. ]$/u.test(part)
+        || /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?:\.|$)/iu.test(part))) {
+      throw new TypeError("Document path must be a normalized relative delivery path.");
     }
     return Object.freeze({ kind: row.kind, path, classification: text(row.classification, "Classification", 160),
       scope: text(row.scope, "Scope", 2048), body: text(row.body, "Document body", MAX_BODY_BYTES) });
   });
   if (documents.filter(item => item.kind === "installation-guide").length !== 1
     || documents.filter(item => item.kind === "user-guide").length !== 1
-    || new Set(documents.map(item => item.path)).size !== documents.length
+    || new Set(documents.map(item => item.path.toLocaleLowerCase("en-US"))).size !== documents.length
     || documents.reduce((total, item) => total + Buffer.byteLength(item.body, "utf8"), 0) > MAX_BODY_BYTES) {
     throw new TypeError("Delivery documents require unique paths/kinds, both substantive guides, and at most 192 KiB of text.");
   }
@@ -173,21 +176,17 @@ async function resolveCurrentPins(workspaceId: string, projectId: string, platfo
     const plan = await readCurrentIntegrationPlan(workspaceId, platform);
     if (!baseline || !ui || !plan) return { status: "unknown", reason: "Current Baseline, formal UI or Main integration plan is unavailable." };
     const baselineDigest = hash(json(baseline.revision)), uiDigest = revisionDigest(ui.revision), planDigest = hash(json(plan.revision));
-    const currentPins: CurrentPins = Object.freeze({
+    const designPins = {
       baseline: Object.freeze({ sourceId: `${workspaceId}/${projectId}`, revisionId: baseline.revision.revisionId,
         sha256: baselineDigest, sequence: baseline.sequence }),
       ui: Object.freeze({ sourceId: `${workspaceId}/${projectId}`, revisionId: ui.revision.revisionId, sha256: uiDigest }),
       integrationPlan: Object.freeze({ sourceId: `${workspaceId}/${projectId}`, revisionId: plan.revision.revisionId, sha256: planDigest }),
-      source: Object.freeze({ sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey, branch: plan.revision.baseBranch,
-        commitSha: plan.revision.baseCommit, treeSha: plan.revision.baseTree,
-        sha256: hash(json({ sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey, branch: plan.revision.baseBranch,
-          commitSha: plan.revision.baseCommit, treeSha: plan.revision.baseTree })) }),
-    });
+    };
     if (ui.revision.publication !== "formal" || ui.revision.approvalRevisionId === null
       || ui.revision.source.kind !== "baseline" || ui.revision.source.revisionId !== baseline.revision.revisionId
       || ui.revision.source.digest !== baselineDigest || plan.revision.baselineRevisionId !== baseline.revision.revisionId
       || plan.revision.baselineDigest !== baselineDigest || plan.revision.uiRevisionId !== ui.revision.revisionId
-      || plan.revision.uiDigest !== uiDigest) return { status: "stale", pins: currentPins,
+      || plan.revision.uiDigest !== uiDigest) return { status: "stale", pins: null,
         reason: "Current Baseline, formal UI and Main integration plan do not share exact source pins." };
     const api = (platform as SpsPlatformInvocationContext & { localFolders?: {
       matchWorkspaceSourceV1?: (folderKey: string, sourceId: string) => Promise<unknown>;
@@ -198,17 +197,41 @@ async function resolveCurrentPins(workspaceId: string, projectId: string, platfo
     }
     const root = exactToolRecord(await api.matchWorkspaceSourceV1(plan.revision.folderKey, plan.revision.sourceId),
       ["folderKey", "workspaceSourceId", "match"]);
-    const tip = exactToolRecord(await api.readWorkspaceSourceGitTipV1(plan.revision.sourceId,
-      plan.revision.folderKey, plan.revision.baseBranch), ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
-    if (root.folderKey !== plan.revision.folderKey || root.workspaceSourceId !== plan.revision.sourceId || root.match !== "same_root"
-      || tip.status !== "current" || tip.sourceId !== plan.revision.sourceId || tip.folderKey !== plan.revision.folderKey
-      || tip.branch !== plan.revision.baseBranch || typeof tip.commitSha !== "string" || !OID.test(tip.commitSha)
-      || typeof tip.treeSha !== "string" || !OID.test(tip.treeSha)
-      || typeof tip.observedAt !== "string" || !Number.isFinite(Date.parse(tip.observedAt))
-      || tip.commitSha !== plan.revision.baseCommit || tip.treeSha !== plan.revision.baseTree) {
-      return { status: "stale", pins: currentPins, reason: "The authorized Source Git tip no longer matches the current Main integration plan." };
+    if (root.folderKey !== plan.revision.folderKey || root.workspaceSourceId !== plan.revision.sourceId || root.match !== "same_root") {
+      return { status: "stale", pins: null, reason: "The current integration plan Source no longer resolves to its authorized Workspace root." };
     }
-    return { status: "current", pins: currentPins };
+    const readTip = async (branch: string) => exactToolRecord(await api.readWorkspaceSourceGitTipV1!(plan.revision.sourceId,
+      plan.revision.folderKey, branch), ["status"], ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt", "reason"]);
+    const baseTip = await readTip(plan.revision.baseBranch);
+    if (baseTip.status !== "current") return { status: "unknown", reason: "The current Main integration-plan base Source tip is unavailable." };
+    if (baseTip.sourceId !== plan.revision.sourceId || baseTip.folderKey !== plan.revision.folderKey
+      || baseTip.branch !== plan.revision.baseBranch || baseTip.commitSha !== plan.revision.baseCommit || baseTip.treeSha !== plan.revision.baseTree) {
+      return { status: "stale", pins: null, reason: "The exact current Main integration-plan base Source tip could not be confirmed." };
+    }
+    const candidate = await readTip(plan.revision.candidateBranch);
+    let selected: PublishedDeliveryDocuments["source"];
+    if (candidate.status === "denied" && candidate.reason === "branch_unavailable"
+      && [candidate.sourceId, candidate.folderKey, candidate.branch].every(value => value === undefined)
+      || candidate.status === "denied" && candidate.reason === "branch_unavailable"
+        && candidate.sourceId === plan.revision.sourceId && candidate.folderKey === plan.revision.folderKey
+        && candidate.branch === plan.revision.candidateBranch) {
+      selected = Object.freeze({ sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey, branch: plan.revision.baseBranch,
+        commitSha: plan.revision.baseCommit, treeSha: plan.revision.baseTree,
+        sha256: hash(json({ sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey, branch: plan.revision.baseBranch,
+          commitSha: plan.revision.baseCommit, treeSha: plan.revision.baseTree })) });
+    } else if (candidate.status === "current" && candidate.sourceId === plan.revision.sourceId
+      && candidate.folderKey === plan.revision.folderKey && candidate.branch === plan.revision.candidateBranch
+      && typeof candidate.commitSha === "string" && OID.test(candidate.commitSha)
+      && typeof candidate.treeSha === "string" && OID.test(candidate.treeSha)
+      && typeof candidate.observedAt === "string" && Number.isFinite(Date.parse(candidate.observedAt))) {
+      selected = Object.freeze({ sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey, branch: plan.revision.candidateBranch,
+        commitSha: candidate.commitSha, treeSha: candidate.treeSha,
+        sha256: hash(json({ sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey, branch: plan.revision.candidateBranch,
+          commitSha: candidate.commitSha, treeSha: candidate.treeSha })) });
+    } else {
+      return { status: "unknown", reason: "The candidate Source tip is neither current nor authoritatively unavailable." };
+    }
+    return { status: "current", pins: Object.freeze({ ...designPins, source: selected }) };
   } catch {
     return { status: "unknown", reason: "Current delivery source pins could not be verified." };
   }
@@ -234,7 +257,8 @@ export async function proposeDeliveryDocuments(params: unknown, runContext: unkn
   const documents = parseDrafts(input.documents);
   const resolution = await resolveCurrentPins(context.companyId, projectId, platform);
   if (resolution.status === "unsupported") return Object.freeze({ status: "unsupported" as const, reason: resolution.reason });
-  if (resolution.status !== "current") return Object.freeze({ status: "conflict" as const, reason: resolution.reason });
+  if (resolution.status === "unknown") return Object.freeze({ status: "unknown" as const, reason: resolution.reason });
+  if (resolution.status === "stale") return Object.freeze({ status: "conflict" as const, reason: resolution.reason });
   const documentRows = Object.freeze(documents.map(document => Object.freeze({ ...document, bodySha256: hash(document.body) })));
   const identity = { baseline: resolution.pins.baseline, ui: resolution.pins.ui,
     integrationPlan: resolution.pins.integrationPlan, source: resolution.pins.source, documents: documentRows };

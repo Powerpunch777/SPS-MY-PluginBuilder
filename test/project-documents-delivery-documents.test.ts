@@ -32,9 +32,15 @@ async function setup(withGit = true) {
   await createRevisionJournal<UiRevision>(W, W, f.state, { prefix: "ui-contracts", parse: value => parseUiRevision(value, W),
     revisionId: value => value.revisionId }).publish({ expectedBaseRevisionId: null, revision: ui });
   let commitSha = COMMIT, treeSha = TREE;
+  let candidate: { status: "missing" | "current" | "denied"; reason?: string; commitSha?: string; treeSha?: string } = { status: "missing" };
   const platform = { ...f.platform, localFolders: withGit ? {
     async matchWorkspaceSourceV1(folderKey: string, sourceId: string) { return { folderKey, workspaceSourceId: sourceId, match: "same_root" }; },
     async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
+      if (branch === "integration/candidate") return candidate.status === "missing"
+        ? { status: "denied", reason: "branch_unavailable", sourceId, folderKey, branch }
+        : candidate.status === "denied" ? { status: "denied", reason: candidate.reason, sourceId, folderKey, branch }
+          : { status: "current", sourceId, folderKey, branch, commitSha: candidate.commitSha, treeSha: candidate.treeSha,
+            observedAt: "2026-11-07T12:00:00.000Z" };
       return { status: "current", sourceId, folderKey, branch, commitSha, treeSha, observedAt: "2026-11-07T12:00:00.000Z" };
     },
   } : undefined } as unknown as SpsPlatformInvocationContext;
@@ -48,7 +54,9 @@ async function setup(withGit = true) {
     { kind: "installation-guide" as const, path: "docs/install.md", classification: "delivery-guide", scope: "Supported installation steps for this target", body: "# Installation\n\nInstall the package using the documented host workflow.\n" },
     { kind: "user-guide" as const, path: "docs/use.md", classification: "delivery-guide", scope: "User-facing operation for the current product scope", body: "# User guide\n\nOpen the application and use its documented workflow.\n" },
   ];
-  return { ...f, platform, plan, documents, setTip(commit: string, tree: string) { commitSha = commit; treeSha = tree; } };
+  return { ...f, platform, plan, documents, setTip(commit: string, tree: string) { commitSha = commit; treeSha = tree; },
+    setCandidate(commit: string, tree: string) { candidate = { status: "current", commitSha: commit, treeSha: tree }; },
+    denyCandidate(reason: string) { candidate = { status: "denied", reason }; } };
 }
 
 test("Main saves immutable guide drafts pinned to current Baseline, formal UI, plan and Host Source tip", async () => {
@@ -60,6 +68,7 @@ test("Main saves immutable guide drafts pinned to current Baseline, formal UI, p
   assert.equal(result.revision.status, "draft");
   assert.equal(result.revision.approvalStatus, "unapproved");
   assert.equal(result.revision.completeness.status, "unknown");
+  assert.equal(result.revision.source.branch, "main", "only an authoritative missing candidate permits the pinned base fallback");
   assert.equal(result.revision.baseline.revisionId, f.baseline.revisionId);
   assert.equal(result.revision.integrationPlan.revisionId, f.plan.revisionId);
   assert.deepEqual(result.revision.documents.map(document => document.kind), ["installation-guide", "user-guide"]);
@@ -123,6 +132,32 @@ test("a changed Source Git tip is stale and does not replace the immutable docum
   assert.equal(changed.status, "conflict");
 });
 
+test("a current integration candidate supersedes the base; candidate drift stales the prior draft", async () => {
+  const f = await setup();
+  f.setCandidate("5".repeat(40), "6".repeat(40));
+  const result = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: f.documents }, ctx(), f.platform);
+  assert.equal(result.status, "published");
+  if (result.status !== "published") return;
+  assert.equal(result.revision.source.branch, "integration/candidate");
+  assert.equal(result.revision.source.commitSha, "5".repeat(40));
+  assert.equal(result.revision.source.treeSha, "6".repeat(40));
+  assert.equal((await readCurrentDeliveryDocuments(W, f.platform)).source, "current");
+  f.setCandidate("7".repeat(40), "8".repeat(40));
+  const stale = await readCurrentDeliveryDocuments(W, f.platform);
+  assert.equal(stale.source, "stale");
+  assert.equal(stale.document?.revisionId, result.revision.revisionId);
+});
+
+test("candidate permission failure is unknown and never falls back to the plan base", async () => {
+  const f = await setup();
+  f.denyCandidate("permission_denied");
+  const before = f.writes;
+  const result = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: f.documents }, ctx(), f.platform);
+  assert.equal(result.status, "unknown");
+  assert.match(result.reason, /neither current nor authoritatively unavailable/u);
+  assert.equal(f.writes, before);
+});
+
 test("a lost response after the journal head CAS is recovered by replaying the same immutable revision", async () => {
   const f = await setup();
   let lost = false;
@@ -171,5 +206,22 @@ test("drafts require substantive installation and user guide bodies and Main aut
     documents: f.documents.map(item => item.kind === "user-guide" ? { ...item, body: "  " } : item) }, ctx(), f.platform), /non-empty/u);
   await assert.rejects(proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: f.documents },
     { ...ctx(), sessionId: C }, f.platform), /current Lead session|prepared current Lead session|Main/u);
+  assert.equal((await readCurrentDeliveryDocuments(W, f.platform)).status, "unavailable");
+});
+
+test("delivery document paths reject absolute, ADS, traversal, reserved and nonportable names before writing", async () => {
+  const f = await setup();
+  const before = f.writes;
+  const invalidPaths = ["C:/docs/install.md", "docs/install:stream.md", "docs\\install.md", "../install.md",
+    "docs/./install.md", "docs/CON.txt", "docs/NUL", "docs/name.", "docs/name ", "docs/hidden\u200f.md", "docs/control\u0001.md"];
+  for (const path of invalidPaths) {
+    const documents = f.documents.map(item => item.kind === "installation-guide" ? { ...item, path } : item);
+    await assert.rejects(proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents }, ctx(), f.platform),
+      /normalized relative delivery path|non-empty valid bounded text/u, path);
+  }
+  const duplicatePaths = f.documents.map((item, index) => ({ ...item, path: index === 0 ? "Docs/Guide.md" : "docs/guide.MD" }));
+  await assert.rejects(proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: duplicatePaths }, ctx(), f.platform),
+    /unique paths\/kinds/u);
+  assert.equal(f.writes, before);
   assert.equal((await readCurrentDeliveryDocuments(W, f.platform)).status, "unavailable");
 });
