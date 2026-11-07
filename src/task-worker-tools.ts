@@ -375,8 +375,8 @@ export async function dispatchPreparedTaskWorker(params: unknown, runContext: un
     }
   };
   const result = await dispatchTaskWorkerSession({ platform, binding: initial.binding, packet: initial.packet, assertCurrent });
-  const content = result.status === "submitted" ? "Dispatched one restricted Task Worker session Run. No implementation result, Git commit, protected test or QA pass is established."
-    : result.status === "existing" ? "The exact deterministic Task Worker request already exists; no duplicate Run was sent."
+  const content = result.status === "submitted" ? "Core accepted one restricted Task Worker request. Actual execution, implementation, Git commit, protected test and QA pass are not established by this receipt."
+    : result.status === "existing" ? "The exact deterministic Task Worker request already exists; no duplicate Run was sent. Read the Run separately to observe execution."
     : result.status === "unknown" ? "Dispatch state is uncertain. Reconcile the same request; do not retry automatically."
     : "Task Worker dispatch is unsupported by the current Host API. No fallback was used.";
   return { content, data: asJson({ ...result, packetRevision, taskId, role, completion: "not-established",

@@ -6,7 +6,7 @@ import { taskPacketRecordDigest, parseTaskPacket, type TaskPacketRecord } from "
 import type { TaskWorkerRecord } from "../src/domain/task-workers.ts";
 import { deriveTaskWorkerFileBinding, readTaskWorkerProtectedRun, readTaskWorkerSourceFile,
   writeTaskWorkerSourceFile, deleteTaskWorkerSourceFile, dispatchTaskWorkerSession, readTaskWorkerSessionRun,
-  TASK_WORKER_EXECUTION_POLICY } from "../src/task-worker-runtime.ts";
+  taskWorkerRequestId, TASK_WORKER_EXECUTION_POLICY } from "../src/task-worker-runtime.ts";
 
 const W = "10000000-0000-4000-8000-000000000001";
 const P = "20000000-0000-4000-8000-000000000002";
@@ -210,15 +210,59 @@ test("Worker dispatch uses the pinned session executionPolicy and one determinis
   const input = { platform, binding: fileBinding(), packet: record(), async assertCurrent() { validations += 1; } };
   const first = await dispatchTaskWorkerSession(input);
   assert.equal(first.status, "submitted");
+  assert.equal(first.requestState, "submitted");
   assert.equal(first.runId, RUN);
+  assert.equal(first.executionStarted, null);
   assert.equal(first.completion, "not-established");
   assert.equal(first.qaVerdict, "not-established");
   assert.equal(sendCalls, 1);
   const second = await dispatchTaskWorkerSession(input);
   assert.equal(second.status, "existing");
+  assert.equal(second.requestState, "submitted");
   assert.equal(second.runId, RUN);
+  assert.equal(second.executionStarted, null);
   assert.equal(sendCalls, 1);
   assert.equal(validations, 7);
+});
+
+test("existing admission is reconciled even when new dispatch support is unavailable", async () => {
+  const binding = fileBinding();
+  const requestId = taskWorkerRequestId(binding);
+  for (const receipt of [{ requestId, state: "pending", runId: null }, { requestId, state: "submitted", runId: RUN }]) {
+    const platform = { agents: { sessions: {
+      async getRequest() { return receipt; },
+      async sendMessage() { assert.fail("A prior request must not start another Run"); },
+    } } } as unknown as SpsPlatformInvocationContext;
+    const result = await dispatchTaskWorkerSession({ platform, binding, packet: record(), async assertCurrent() {} });
+    assert.equal(result.status, "existing");
+    assert.equal(result.requestState, receipt.state);
+    assert.equal(result.runId, receipt.runId);
+    assert.equal(result.executionStarted, null);
+  }
+});
+
+test("an unreadable or inconsistent request receipt never triggers a replacement dispatch or Run lookup", async () => {
+  const binding = fileBinding();
+  const requestId = taskWorkerRequestId(binding);
+  for (const getRequest of [
+    async () => { throw new Error("receipt transport failed"); },
+    async () => ({ requestId, state: "pending", runId: RUN }),
+    async () => ({ requestId, state: "submitted", runId: null }),
+    async () => ({ requestId: "different-request", state: "submitted", runId: RUN }),
+  ]) {
+    let unexpected = 0;
+    const platform = { agents: { sessions: { getRequest,
+      async sendMessage() { unexpected++; },
+      async getRun() { unexpected++; },
+    } } } as unknown as SpsPlatformInvocationContext;
+    const dispatch = await dispatchTaskWorkerSession({ platform, binding, packet: record(), async assertCurrent() {} });
+    assert.equal(dispatch.status, "unknown");
+    assert.equal(dispatch.executionStarted, null);
+    const observation = await readTaskWorkerSessionRun({ platform, binding, async assertCurrent() {} });
+    assert.equal(observation.status, "unknown");
+    assert.equal(observation.runId, null);
+    assert.equal(unexpected, 0);
+  }
 });
 
 test("Worker dispatch stays unsupported when only legacy alias-based file IO is available", async () => {
@@ -243,7 +287,7 @@ test("uncertain Worker dispatch is not retried and packet drift after admission 
     async describePolicySupport() { return { schemaVersion: 1, modes: ["plugin-tools-only-v1"], enforcement: "dispatch-and-run",
       readiness: "unknown", osIsolation: "not-certified" }; },
     async getRequest(_sessionId: string, _companyId: string, requestId: string) {
-      return sendCalls === 0 ? null : { requestId, state: "uncertain" as const, runId: RUN };
+      return sendCalls === 0 ? null : { requestId, state: "uncertain" as const, runId: null };
     },
     async sendMessage() { sendCalls += 1; throw new Error("transport lost after admission"); },
   } }, localFolders: localFolderFixture({ async readWorkspaceSourceTextV1() { return ""; },
@@ -251,9 +295,11 @@ test("uncertain Worker dispatch is not retried and packet drift after admission 
   const uncertain = await dispatchTaskWorkerSession({ platform, binding: fileBinding(), packet: record(), async assertCurrent() {} });
   assert.equal(uncertain.status, "unknown");
   assert.equal(uncertain.runId, null);
+  assert.equal(uncertain.executionStarted, null);
   assert.equal(sendCalls, 1);
   const reconciled = await dispatchTaskWorkerSession({ platform, binding: fileBinding(), packet: record(), async assertCurrent() {} });
   assert.equal(reconciled.status, "unknown");
+  assert.equal(reconciled.requestState, "uncertain");
   assert.equal(sendCalls, 1);
 
   const acceptedPlatform = ({ agents: { sessions: {
@@ -270,6 +316,7 @@ test("uncertain Worker dispatch is not retried and packet drift after admission 
   } });
   assert.equal(raced.status, "unknown");
   assert.equal(raced.runId, RUN);
+  assert.equal(raced.executionStarted, null);
   assert.equal(sendCalls, 2);
 });
 

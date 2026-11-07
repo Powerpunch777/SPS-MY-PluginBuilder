@@ -95,9 +95,7 @@ type TaskWorkerSessionClient = {
   describePolicySupport?: (sessionId: string, companyId: string) => Promise<unknown>;
   sendMessage?: (sessionId: string, companyId: string, input: { prompt: string; reason?: string; requestId?: string;
     executionPolicy?: typeof TASK_WORKER_EXECUTION_POLICY }) => Promise<{ runId: string }>;
-  getRequest?: (sessionId: string, companyId: string, requestId: string) => Promise<null | {
-    requestId: string; state: "pending" | "submitted" | "uncertain"; runId: string | null;
-  }>;
+  getRequest?: (sessionId: string, companyId: string, requestId: string) => Promise<unknown>;
   getRun?: (sessionId: string, companyId: string, runId: string) => Promise<unknown>;
 };
 
@@ -136,15 +134,34 @@ export function taskWorkerRequestId(binding: TaskWorkerFileBinding) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+type TaskWorkerRequest = Readonly<{ state: "submitted"; runId: string }>
+  | Readonly<{ state: "pending" | "uncertain"; runId: null }>;
+
+function parseTaskWorkerRequest(value: unknown, requestId: string): TaskWorkerRequest | null {
+  if (value === null) return null;
+  const row = plain(value, "Worker session request receipt");
+  if (row.requestId === requestId) {
+    if (row.state === "submitted" && typeof row.runId === "string" && UUID.test(row.runId)) {
+      return { state: row.state, runId: row.runId };
+    }
+    if ((row.state === "pending" || row.state === "uncertain") && row.runId === null) {
+      return { state: row.state, runId: null };
+    }
+  }
+  throw new TypeError("Invalid Worker session request receipt.");
+}
+
 export type TaskWorkerDispatchResult = Readonly<{
   status: "submitted" | "existing";
   requestId: string;
+  requestState: "pending" | "submitted";
   runId: string | null;
-  executionStarted: boolean;
+  executionStarted: null;
   completion: "not-established";
   qaVerdict: "not-established";
 }> | Readonly<{ status: "unsupported" | "unknown"; reason: string; requestId: string;
-  runId: string | null; executionStarted: boolean; completion: "not-established"; qaVerdict: "not-established" }>;
+  requestState: "not-attempted" | "unknown" | "uncertain"; runId: string | null;
+  executionStarted: false | null; completion: "not-established"; qaVerdict: "not-established" }>;
 
 /** Starts one exact Worker or QA session request, limited to registered Task source file tools. */
 export async function dispatchTaskWorkerSession(input: Readonly<{
@@ -154,11 +171,12 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   assertCurrent(): Promise<void>;
 }>): Promise<TaskWorkerDispatchResult> {
   const requestId = taskWorkerRequestId(input.binding);
-  const unknown = (reason: string, runId: string | null = null): TaskWorkerDispatchResult => Object.freeze({
-    status: "unknown", reason, requestId, runId, executionStarted: runId !== null, completion: "not-established", qaVerdict: "not-established",
+  const unknown = (reason: string, runId: string | null = null, requestState: "unknown" | "uncertain" = "unknown"): TaskWorkerDispatchResult => Object.freeze({
+    status: "unknown", reason, requestId, requestState, runId, executionStarted: null, completion: "not-established", qaVerdict: "not-established",
   });
   const unsupported = (reason: string): TaskWorkerDispatchResult => Object.freeze({
-    status: "unsupported", reason, requestId, runId: null, executionStarted: false, completion: "not-established", qaVerdict: "not-established",
+    status: "unsupported", reason, requestId, requestState: "not-attempted", runId: null, executionStarted: false,
+    completion: "not-established", qaVerdict: "not-established",
   });
   const packet = parseTaskPacketRecord(input.packet, input.binding.projectId, input.binding.ctoId, input.binding.workstreamId);
   if (taskPacketRecordDigest(packet, input.binding.projectId, input.binding.ctoId, input.binding.workstreamId)
@@ -170,8 +188,19 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   const platform = input.platform as ScopedPlatform;
   const sessions = platform.agents.sessions;
   const localFolders = platform.localFolders;
+  if (typeof sessions.getRequest !== "function") return unsupported("worker-session-request-reader-unavailable");
+  await input.assertCurrent();
+  let prior: TaskWorkerRequest | null;
+  try { prior = parseTaskWorkerRequest(await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId), requestId); }
+  catch { return unknown("worker-request-read-failed-or-invalid"); }
+  await input.assertCurrent();
+  if (prior?.state === "uncertain") return unknown("worker-request-state-uncertain", null, "uncertain");
+  if (prior) {
+    return Object.freeze({ status: "existing", requestId, requestState: prior.state, runId: prior.runId,
+      executionStarted: null, completion: "not-established", qaVerdict: "not-established" });
+  }
   if (typeof sessions.describePolicySupport !== "function" || typeof sessions.sendMessage !== "function"
-    || typeof sessions.getRequest !== "function" || typeof localFolders?.status !== "function"
+    || typeof localFolders?.status !== "function"
     || typeof localFolders.matchWorkspaceSourceV1 !== "function" || typeof localFolders.readWorkspaceSourceTextV1 !== "function"
     || typeof localFolders.writeWorkspaceSourceTextAtomicV1 !== "function" || typeof localFolders.deleteWorkspaceSourceFileV1 !== "function") {
     return unsupported("task-worker-session-policy-or-local-folder-api-unavailable");
@@ -181,15 +210,6 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   } catch { return unsupported("restricted-worker-session-policy-unavailable"); }
   try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
   catch { return unsupported("task-worker-source-folder-not-current-and-writable"); }
-  await input.assertCurrent();
-  const prior = await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId);
-  await input.assertCurrent();
-  if (prior !== null) {
-    if (prior.requestId !== requestId || (prior.runId !== null && !UUID.test(prior.runId))) return unknown("worker-request-receipt-invalid");
-    if (prior.state === "uncertain") return unknown("worker-request-state-uncertain", prior.runId);
-    return Object.freeze({ status: "existing", requestId, runId: prior.runId, executionStarted: prior.runId !== null,
-      completion: "not-established", qaVerdict: "not-established" });
-  }
   const prompt = [
     input.binding.role === "worker"
       ? "Implement only the exact assigned Builder Task Packet below, using writePaths for implementation changes."
@@ -214,13 +234,13 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
   catch { return unknown("task-source-folder-changed-after-worker-dispatch", accepted.runId); }
   try {
-    const receipt = await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId);
+    const receipt = parseTaskWorkerRequest(await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId), requestId);
     await input.assertCurrent();
-    if (!receipt || receipt.requestId !== requestId || receipt.state === "uncertain" || receipt.runId !== accepted.runId) {
+    if (receipt?.state !== "submitted" || receipt.runId !== accepted.runId) {
       return unknown("worker-dispatch-receipt-does-not-confirm-the-exact-run", accepted.runId);
     }
   } catch { return unknown("worker-dispatch-receipt-read-failed", accepted.runId); }
-  return Object.freeze({ status: "submitted", requestId, runId: accepted.runId, executionStarted: true,
+  return Object.freeze({ status: "submitted", requestId, requestState: "submitted", runId: accepted.runId, executionStarted: null,
     completion: "not-established", qaVerdict: "not-established" });
 }
 
@@ -253,13 +273,12 @@ export async function readTaskWorkerSessionRun(input: Readonly<{
   if (typeof sessions.getRequest !== "function" || typeof sessions.getRun !== "function") return unsupported("worker-session-result-reader-unavailable");
   try {
     await input.assertCurrent();
-    const request = await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId);
+    const request = parseTaskWorkerRequest(await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId), requestId);
     await input.assertCurrent();
-    if (!request || request.requestId !== requestId) return unknown("exact-worker-session-request-not-found");
-    if (request.state === "uncertain") return unknown("worker-session-request-state-uncertain", request.runId);
+    if (!request) return unknown("exact-worker-session-request-not-found");
+    if (request.state === "uncertain") return unknown("worker-session-request-state-uncertain");
     if (request.runId === null) return Object.freeze({ status: "pending", reason: "worker-session-request-has-no-run-id-yet",
       requestId, runId: null, completion: "not-established", qaVerdict: "not-established" });
-    if (!UUID.test(request.runId)) return unknown("worker-session-run-id-invalid", request.runId);
     const raw = plain(await sessions.getRun(input.binding.sessionId, input.binding.workspaceId, request.runId), "Worker session Run");
     await input.assertCurrent();
     if (raw.runId !== request.runId || typeof raw.status !== "string"
