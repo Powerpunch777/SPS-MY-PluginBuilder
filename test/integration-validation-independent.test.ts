@@ -17,20 +17,32 @@ test("registered request fails closed on absent, null, or unsupported delegated-
   }
 });
 
-test("reproduces acceptance of a Core run whose child approval pin impersonates the parent template", async () => {
+test("rejects parent-template approval impersonation and keeps the reservation unknown", async () => {
   const f = await validationFixture();
   const api = (f.f.platform as any).protectedTests;
   const enqueue = api.enqueueApprovedV1.bind(api);
   api.enqueueApprovedV1 = async (input: unknown) => {
     const run = await enqueue(input);
     run.pins.approvalId = f.plan.validationPlans!.ci.approvalTemplateId;
+    run.status = "succeeded";
+    run.termination = "confirmed";
+    run.receipt = { digest: "a".repeat(64), status: "completed", stdoutSha256: "b".repeat(64), stderrSha256: null,
+      stdoutBytes: 1, stderrBytes: 0, processExitCode: 0, timedOut: false, cancelled: false, outputLimit: false,
+      appContainerVerified: true, capabilitiesCount: 0, childTerminationConfirmed: true, jobEmpty: true,
+      profileCleanupSucceeded: true, sandboxCleanupSucceeded: true, fixtureMustBeRetained: false };
     return run;
   };
 
   const result = await validationTool().handler({ ...f.input, phase: "ci" }, f.managerContext, f.f.platform) as any;
-  assert.equal(result.data.status, "published");
-  assert.equal(result.data.reference.approvalId, f.plan.validationPlans!.ci.approvalTemplateId);
-  assert.equal(result.data.qaVerdict, "not-established");
+  assert.equal(result.data.status, "unknown");
+  assert.equal(result.data.executionStarted, null);
+  assert.equal(f.enqueueCalls, 1);
+  const progress = await progressTool().handler({ workstreamId: "ws-1", eventId: f.eventId }, f.managerContext, f.f.platform) as any;
+  const reference = progress.data.attempts[0].validationRuns.ci;
+  assert.equal(reference.runId, null);
+  assert.equal(reference.approvalId, null);
+  assert.equal(progress.data.technicalValidation[0].status, "unknown");
+  assert.equal(progress.data.technicalValidation[0].qaVerdict, "not-established");
 });
 
 test("rejects Core run DTOs with mismatched source, commit, tree, plan, or subject pins", async t => {
