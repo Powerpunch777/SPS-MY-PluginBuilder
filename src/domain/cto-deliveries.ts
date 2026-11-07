@@ -17,7 +17,9 @@ const POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-memory
 const TASK_PACKET_POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.publish-task-packet", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.read-task-packets", "builder.submit-cto-question", "builder.update-cto-memory"] as const;
 const TASK_WORKER_POLICY_TOOLS = [...TASK_PACKET_POLICY_TOOLS, "builder.prepare-task-worker" as const, "builder.read-task-workers" as const].sort();
 const TASK_DISPATCH_POLICY_TOOLS = [...TASK_WORKER_POLICY_TOOLS, "builder.dispatch-task-worker" as const].sort();
-const POLICY_PROFILES = [LEGACY_POLICY_TOOLS, MEMORY_POLICY_TOOLS, POLICY_TOOLS, TASK_PACKET_POLICY_TOOLS, TASK_WORKER_POLICY_TOOLS, TASK_DISPATCH_POLICY_TOOLS] as const;
+const TASK_HANDOFF_POLICY_TOOLS = [...TASK_DISPATCH_POLICY_TOOLS, "builder.read-task-source-submissions" as const, "builder.accept-task-source-submission" as const].sort();
+const POLICY_PROFILES = [LEGACY_POLICY_TOOLS, MEMORY_POLICY_TOOLS, POLICY_TOOLS, TASK_PACKET_POLICY_TOOLS,
+  TASK_WORKER_POLICY_TOOLS, TASK_DISPATCH_POLICY_TOOLS, TASK_HANDOFF_POLICY_TOOLS] as const;
 const PHASES = ["prepared", "dispatching", "uncertain", "superseded", "submitted", "succeeded", "failed", "cancelled", "interrupted", "timed_out"] as const;
 const EARLY_PHASES = new Set<string>(["prepared", "dispatching", "uncertain", "superseded"]);
 
@@ -38,7 +40,7 @@ export type CtoDelivery = Readonly<{
   }>;
   executionPolicy: Readonly<{
     mode: "plugin-tools-only-v1";
-    toolNames: readonly (typeof TASK_DISPATCH_POLICY_TOOLS[number])[];
+    toolNames: readonly (typeof TASK_HANDOFF_POLICY_TOOLS[number])[];
   }>;
   createdAt: string;
   phase: typeof PHASES[number];

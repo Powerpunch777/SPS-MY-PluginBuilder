@@ -29,7 +29,8 @@ import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CT
 import { answerCtoQuestion, readCtoQuestionAnswer, acknowledgeCtoQuestionAnswer } from "./cto-question-reply-tools.ts";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
   DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL,
-  SUBMIT_TASK_SOURCE_TOOL } from "./task-packet-tool-declarations.mjs";
+  SUBMIT_TASK_SOURCE_TOOL, READ_TASK_SOURCE_SUBMISSIONS_TOOL, ACCEPT_TASK_SOURCE_SUBMISSION_TOOL } from "./task-packet-tool-declarations.mjs";
+import { acceptCtoTaskSourceSubmission, readCtoTaskSourceSubmission } from "./task-source-acceptance.ts";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
   writeTaskWorkerFile, deleteTaskWorkerFile, submitTaskWorkerSource } from "./task-worker-tools.ts";
@@ -1024,6 +1025,18 @@ export function createBuilderPlatform() {
         const context = parseLeadToolContext(runContext);
         return serialize(context.companyId, () => dispatchPreparedTaskWorker(params, context, platform));
       } },
+    { name: READ_TASK_SOURCE_SUBMISSIONS_TOOL.name, declaration: { displayName: READ_TASK_SOURCE_SUBMISSIONS_TOOL.displayName,
+      description: READ_TASK_SOURCE_SUBMISSIONS_TOOL.description, parametersSchema: READ_TASK_SOURCE_SUBMISSIONS_TOOL.parametersSchema },
+      handler: async (params, context, platform) => ({
+        content: "Exact submission lookup, not current Git tip or independent QA evidence.",
+        data: await readCtoTaskSourceSubmission(params, context, platform) as unknown as JsonValue,
+      }) },
+    { name: ACCEPT_TASK_SOURCE_SUBMISSION_TOOL.name, declaration: { displayName: ACCEPT_TASK_SOURCE_SUBMISSION_TOOL.displayName,
+      description: ACCEPT_TASK_SOURCE_SUBMISSION_TOOL.description, parametersSchema: ACCEPT_TASK_SOURCE_SUBMISSION_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Receipt is not current Git tip, Task completion, or QA.",
+        data: await acceptCtoTaskSourceSubmission(params, context, platform) as unknown as JsonValue,
+      })) },
     { name: READ_TASK_SOURCE_FILE_TOOL.name, declaration: { displayName: READ_TASK_SOURCE_FILE_TOOL.displayName,
       description: READ_TASK_SOURCE_FILE_TOOL.description, parametersSchema: READ_TASK_SOURCE_FILE_TOOL.parametersSchema },
       handler: (params, runContext, platform) => {

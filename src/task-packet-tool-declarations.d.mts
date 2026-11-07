@@ -9,3 +9,5 @@ export const READ_TASK_SOURCE_FILE_TOOL: Tool<"builder.read-task-source-file">;
 export const WRITE_TASK_SOURCE_FILE_TOOL: Tool<"builder.write-task-source-file">;
 export const DELETE_TASK_SOURCE_FILE_TOOL: Tool<"builder.delete-task-source-file">;
 export const SUBMIT_TASK_SOURCE_TOOL: Tool<"builder.submit-task-source">;
+export const READ_TASK_SOURCE_SUBMISSIONS_TOOL: Tool<"builder.read-task-source-submissions">;
+export const ACCEPT_TASK_SOURCE_SUBMISSION_TOOL: Tool<"builder.accept-task-source-submission">;

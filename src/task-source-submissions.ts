@@ -41,6 +41,7 @@ export type TaskSourceSubmission = Readonly<{
   role: TaskSourceSubmissionBinding["role"];
   producer: Readonly<{ agentId: string; sessionId: string; runId: string }>;
   source: TaskSourceSubmissionBinding["source"];
+  requestedPaths?: readonly string[];
   commitSha: string;
   treeSha: string;
   changedPaths: readonly string[];
@@ -170,9 +171,11 @@ function stateKey(kind: "intent" | "outcome", submissionId: string) {
 
 function parseStoredSubmission(value: unknown, expected: Readonly<{ binding: TaskSourceSubmissionBinding; paths: readonly string[];
   submissionId: string; producerRunId: string }>): TaskSourceSubmission {
-  const row = exactRecord(value, ["schemaVersion", "submissionId", "workspaceId", "projectId", "ctoId", "workstreamId", "taskId",
+  const baseFields = ["schemaVersion", "submissionId", "workspaceId", "projectId", "ctoId", "workstreamId", "taskId",
     "packetRevision", "packetRecordSha256", "dependencyPins", "role", "producer", "source", "commitSha", "treeSha",
-    "changedPaths", "coreStatus", "authorityAfterCommit", "submittedAt"], "Task source submission");
+    "changedPaths", "coreStatus", "authorityAfterCommit", "submittedAt"] as const;
+  const hasRequestedPaths = value && typeof value === "object" && Object.hasOwn(value, "requestedPaths");
+  const row = exactRecord(value, hasRequestedPaths ? [...baseFields, "requestedPaths"] : baseFields, "Task source submission");
   const binding = expected.binding;
   const producer = exactRecord(row.producer, ["agentId", "sessionId", "runId"], "Task submission producer");
   const source = exactRecord(row.source, ["sourceId", "folderKey", "branch", "expectedHead"], "Task submission source");
@@ -187,7 +190,8 @@ function parseStoredSubmission(value: unknown, expected: Readonly<{ binding: Tas
     || (row.authorityAfterCommit !== "current" && row.authorityAfterCommit !== "changed")
     || typeof row.submittedAt !== "string" || !Number.isFinite(Date.parse(row.submittedAt))
     || !Array.isArray(row.changedPaths) || row.changedPaths.length < 1 || row.changedPaths.length > 64
-    || row.changedPaths.some(path => typeof path !== "string" || !expected.paths.includes(path))) {
+    || row.changedPaths.some(path => typeof path !== "string" || !expected.paths.includes(path))
+    || hasRequestedPaths && (!Array.isArray(row.requestedPaths) || JSON.stringify(row.requestedPaths) !== JSON.stringify(expected.paths))) {
     throw new Error("Stored Task source submission does not match its immutable Task/Worker binding.");
   }
   return Object.freeze({ schemaVersion: 1, submissionId: expected.submissionId, workspaceId: binding.workspaceId,
@@ -195,7 +199,8 @@ function parseStoredSubmission(value: unknown, expected: Readonly<{ binding: Tas
     packetRevision: binding.packetRevision, packetRecordSha256: binding.packetRecordSha256,
     dependencyPins: binding.dependencyPins, role: binding.role,
     producer: Object.freeze({ agentId: binding.agentId, sessionId: binding.sessionId, runId: expected.producerRunId }),
-    source: binding.source, commitSha: row.commitSha, treeSha: row.treeSha,
+    source: binding.source, ...(hasRequestedPaths ? { requestedPaths: Object.freeze([...(row.requestedPaths as string[])]) } : {}),
+    commitSha: row.commitSha, treeSha: row.treeSha,
     changedPaths: Object.freeze([...(row.changedPaths as string[])]), coreStatus: row.coreStatus,
     authorityAfterCommit: row.authorityAfterCommit,
     submittedAt: row.submittedAt });
@@ -411,8 +416,63 @@ export async function submitTaskSourceFiles(input: Readonly<{
     workstreamId: binding.workstreamId, taskId: binding.taskId, packetRevision: binding.packetRevision,
     packetRecordSha256: binding.packetRecordSha256, dependencyPins: binding.dependencyPins, role: binding.role,
     producer: Object.freeze({ agentId: binding.agentId, sessionId: binding.sessionId, runId: binding.runId }),
-    source: binding.source, commitSha: result.commitSha, treeSha: result.treeSha, changedPaths: result.changedPaths,
+    source: binding.source, requestedPaths: paths, commitSha: result.commitSha, treeSha: result.treeSha, changedPaths: result.changedPaths,
     coreStatus: result.status, authorityAfterCommit, submittedAt: new Date().toISOString() });
   if (!await finish({ status: "submitted", submission })) return unknown(id, "core-commit-known-but-source-submission-journal-unconfirmed");
   return Object.freeze({ status: "submitted", submission, duplicateCommitPrevented: false });
+}
+
+export type TaskSourceSubmissionReadResult =
+  | Readonly<{ status: "submitted"; submission: TaskSourceSubmission }>
+  | Readonly<{ status: "not-found" }>
+  | Readonly<{ status: "ineligible"; reason: "not-a-definitive-submission" | "legacy-receipt-unbound-paths" }>;
+
+/** Reads one exact receipt from the producer's immutable journal and re-derives its deterministic key. */
+export async function readTaskSourceSubmission(input: Readonly<{
+  state: RevisionState;
+  binding: Omit<TaskSourceSubmissionBinding, "runId">;
+  submissionId: string;
+}>): Promise<TaskSourceSubmissionReadResult> {
+  if (!/^[a-f0-9]{64}$/u.test(input.submissionId)) throw new TypeError("submissionId must be a SHA-256 identifier.");
+  const binding = parseBinding({ ...input.binding, runId: "00000000-0000-4000-8000-000000000000" });
+  const key = { ...stateKey("outcome", input.submissionId), scopeId: binding.workspaceId };
+  const raw = await input.state.get(key);
+  if (raw === null) return Object.freeze({ status: "not-found" });
+  const row = exactRecord(raw, ["schemaVersion", "workspaceId", "projectId", "submissionId", "bindingSha256", "phase", "producerRunId", "outcome"],
+    "Task source submission state");
+  if (row.schemaVersion !== 1 || row.workspaceId !== binding.workspaceId || row.projectId !== binding.projectId
+    || row.submissionId !== input.submissionId || row.phase !== "outcome" || typeof row.producerRunId !== "string" || !UUID.test(row.producerRunId)
+    || typeof row.bindingSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(row.bindingSha256)) {
+    throw new Error("Stored Task source submission state is malformed or outside this Workspace.");
+  }
+  const outcomeStatus = row.outcome && typeof row.outcome === "object"
+    ? Object.getOwnPropertyDescriptor(row.outcome, "status")?.value : undefined;
+  if (outcomeStatus !== "submitted") return Object.freeze({ status: "ineligible", reason: "not-a-definitive-submission" });
+  const outcome = exactRecord(row.outcome, ["status", "submission"], "Task source submission outcome");
+  const rawSubmission = outcome.submission;
+  if (!rawSubmission || typeof rawSubmission !== "object" || Array.isArray(rawSubmission)
+    || !Object.hasOwn(rawSubmission, "requestedPaths")) {
+    return Object.freeze({ status: "ineligible", reason: "legacy-receipt-unbound-paths" });
+  }
+  const receipt = exactRecord(rawSubmission, ["schemaVersion", "submissionId", "workspaceId", "projectId", "ctoId", "workstreamId", "taskId",
+    "packetRevision", "packetRecordSha256", "dependencyPins", "role", "producer", "source", "requestedPaths", "commitSha", "treeSha",
+    "changedPaths", "coreStatus", "authorityAfterCommit", "submittedAt"], "Task source submission");
+  const requestedPaths = receipt.requestedPaths;
+  if (!Array.isArray(requestedPaths) || requestedPaths.length < 1 || requestedPaths.length > 64
+    || Reflect.ownKeys(requestedPaths).length !== requestedPaths.length + 1
+    || requestedPaths.some(path => typeof path !== "string") || new Set(requestedPaths).size !== requestedPaths.length) {
+    throw new TypeError("Stored Task source submission paths are malformed.");
+  }
+  if (receipt.role !== binding.role) return Object.freeze({ status: "not-found" });
+  const exactBinding = parseBinding({ ...input.binding, runId: row.producerRunId });
+  const expectedId = submissionId(exactBinding, requestedPaths as string[]);
+  if (expectedId !== input.submissionId || stableBindingDigest(exactBinding) !== row.bindingSha256) return Object.freeze({ status: "not-found" });
+  const allowed = binding.role === "worker" ? binding.writePaths : binding.qaWritePaths;
+  if (requestedPaths.some(path => !allowed.includes(path))) throw new Error("Stored Task source submission exceeds this role's current source scope.");
+  const parsed = parseSubmissionState(raw, { binding: exactBinding, paths: requestedPaths as string[], workspaceId: binding.workspaceId,
+    projectId: binding.projectId, submissionId: input.submissionId, bindingSha256: row.bindingSha256 });
+  if (parsed.phase !== "outcome" || parsed.outcome?.status !== "submitted") {
+    return Object.freeze({ status: "ineligible", reason: "not-a-definitive-submission" });
+  }
+  return Object.freeze({ status: "submitted", submission: parsed.outcome.submission });
 }

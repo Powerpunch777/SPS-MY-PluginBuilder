@@ -3,7 +3,7 @@ import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { parseTaskPacket } from "../src/domain/task-packets.ts";
-import { submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "../src/task-source-submissions.ts";
+import { readTaskSourceSubmission, submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "../src/task-source-submissions.ts";
 
 const W = "10000000-0000-4000-8000-000000000001";
 const P = "20000000-0000-4000-8000-000000000002";
@@ -86,12 +86,51 @@ test("Core commit receipt becomes an immutable Task source submission, not QA or
   assert.deepEqual(result.submission.dependencyPins, [{ taskId: "task-base", revision: 2, recordSha256: "e".repeat(64) }]);
   assert.deepEqual(result.submission.producer, { agentId: AGENT, sessionId: SESSION, runId: RUN });
   assert.equal(result.submission.role, "worker");
+  assert.deepEqual(result.submission.requestedPaths, ["src/main.ts"]);
   assert.equal("qaVerdict" in result, false);
   assert.equal("completion" in result, false);
   const commit = f.operations.find(row => row.method === "commit")?.input as Record<string, unknown>;
   assert.deepEqual(commit, { sourceId: SOURCE, folderKey: "project-source", branch: "builder/task-impl",
     expectedHead: HEAD, paths: ["src/main.ts"] });
   assert.equal([...f.rows.values()].length, 2, "intent and immutable outcome are separate records");
+});
+
+test("CTO read primitive verifies the submitted key and exact requested paths; old unbound receipts are ineligible", async () => {
+  const f = fixture();
+  const result = await f.submit();
+  assert.equal(result.status, "submitted");
+  if (result.status !== "submitted") return;
+  const { runId: _runId, ...base } = binding();
+  const read = await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: result.submission.submissionId });
+  assert.equal(read.status, "submitted");
+  if (read.status === "submitted") assert.deepEqual(read.submission.requestedPaths, ["src/main.ts"]);
+  assert.deepEqual(await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: "f".repeat(64) }),
+    { status: "not-found" });
+
+  const outcomeKey = [...f.rows.keys()].find(key => key.includes("task-source-outcome"))!;
+  const stored = f.rows.get(outcomeKey)! as Record<string, unknown>;
+  const outcome = stored.outcome as Record<string, unknown>;
+  const receipt = outcome.submission as Record<string, unknown>;
+  const { requestedPaths: _requestedPaths, ...legacyReceipt } = receipt;
+  f.rows.set(outcomeKey, structuredClone({ ...stored, outcome: { ...outcome, submission: legacyReceipt } }) as JsonValue);
+  assert.deepEqual(await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: result.submission.submissionId }),
+    { status: "ineligible", reason: "legacy-receipt-unbound-paths" });
+});
+
+test("unchanged and conflicted Core outcomes are not submission receipts", async t => {
+  for (const [label, result] of [["unchanged", { status: "unchanged", headSha: HEAD }],
+    ["conflict", { status: "conflict", reason: "head_changed", actualHead: "f".repeat(40) }]] as const) {
+    await t.test(label, async () => {
+      const f = fixture({ result });
+      const submitted = await f.submit();
+      assert.ok(submitted.status === "unchanged" || submitted.status === "conflict");
+      if (submitted.status === "unchanged" || submitted.status === "conflict") {
+        const { runId: _runId, ...base } = binding();
+        assert.deepEqual(await readTaskSourceSubmission({ state: f.state, binding: base, submissionId: submitted.submissionId }),
+          { status: "ineligible", reason: "not-a-definitive-submission" });
+      }
+    });
+  }
 });
 
 test("lost Core reply leaves a durable intent and never repeats the commit", async () => {

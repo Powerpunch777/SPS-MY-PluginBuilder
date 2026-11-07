@@ -104,3 +104,18 @@ export const SUBMIT_TASK_SOURCE_TOOL = Object.freeze({
   parametersSchema: { type: "object", additionalProperties: false, required: ["paths"],
     properties: { paths: { type: "array", minItems: 1, maxItems: 64, uniqueItems: true, items: taskFilePath } } },
 });
+
+const taskSourceHandoffScope = { type: "object", additionalProperties: false,
+  required: ["projectId", "ctoId", "workstreamId", "taskId", "submissionId"],
+  properties: { projectId: id, ctoId: id, workstreamId: id, taskId: id,
+    submissionId: { type: "string", pattern: "^[a-f0-9]{64}$" } } };
+export const READ_TASK_SOURCE_SUBMISSIONS_TOOL = Object.freeze({
+  name: "builder.read-task-source-submissions", displayName: "Read an exact Task source submission",
+  description: "Only the assigned active CTO may look up a submission ID from the Worker. This checks the recorded source and Run, not the current Git tip or protected QA.",
+  parametersSchema: taskSourceHandoffScope,
+});
+export const ACCEPT_TASK_SOURCE_SUBMISSION_TOOL = Object.freeze({
+  name: "builder.accept-task-source-submission", displayName: "Acknowledge receipt of exact submitted source",
+  description: "Only the assigned active CTO may acknowledge the exact immutable submitted commit once. This records receipt, not branch freshness, QA, Task completion, or VERIFIED.",
+  parametersSchema: taskSourceHandoffScope,
+});

@@ -7,12 +7,14 @@ import { workstreamInstructionDigest } from "../src/cto-delivery-store.ts";
 import { prepareTaskWorker, readTaskWorkerFile, writeTaskWorkerFile, deleteTaskWorkerFile } from "../src/task-worker-tools.ts";
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "../src/task-worker-runtime.ts";
 import { parseTaskWorkerRegistry, taskWorkerRegistryKey } from "../src/domain/task-workers.ts";
+import { createBuilderPlatform } from "../src/platform.ts";
 import { fixture, W, A, C, CTO, ctx, now } from "./fixtures/cto-platform.ts";
 
 const AGENT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RUN = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const SOURCE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const HEAD = "a".repeat(40), COMMIT = "b".repeat(40), TREE = "c".repeat(40);
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 async function taskFixture(sourceBound = true) {
@@ -24,7 +26,8 @@ async function taskFixture(sourceBound = true) {
     kind: "development" as const, title: "One scoped source edit", goal: "Edit the assigned source only.",
     scopeNodeIds: ["feature"], requirementIds: ["REQ-1"], dependencies: [], included: ["src/feature.ts"], excluded: [],
     constraints: [], acceptance: ["Review the submitted commit"], evidenceRequired: ["Exact source commit"], reuse: [], testPlan: null,
-    sourceAccess: { sourceId: SOURCE, folderKey: "project-source", readPaths: ["src/feature.ts"], writePaths: ["src/feature.ts"], qaWritePaths: [] } },
+    sourceAccess: { sourceId: SOURCE, folderKey: "project-source", branch: "feature/task-dev", expectedHead: HEAD,
+      readPaths: ["src/feature.ts"], writePaths: ["src/feature.ts"], qaWritePaths: [] } },
     source: { requestId: delivery.requestId, workstreamId: "ws-1", specRevision: 1,
       instructionSha256: workstreamInstructionDigest(f.instruction) }, author: { agentId: A, sessionId: C, runId: ctoRun },
     createdAtISO: now, dependencyPins: [] };
@@ -57,12 +60,15 @@ async function taskFixture(sourceBound = true) {
     currentPackets: [record], worker: registry.records[0]! });
   let cancellationRequested = false;
   let receiptRunId = RUN;
+  const { getRun: getCtoRun, getRequest: getCtoRequest } = f.platform.agents.sessions;
   Object.assign(f.platform.agents.sessions, {
     async getRun(sessionId: string, companyId: string, runId: string) {
+      if (sessionId === C) return getCtoRun(sessionId, companyId, runId);
       assert.equal(sessionId, SESSION); assert.equal(companyId, W); assert.equal(runId, RUN);
       return { runId: RUN, status: "running", cancellationRequested, termination: "not_applicable", error: null, errorCode: null };
     },
     async getRequest(sessionId: string, companyId: string, requestId: string) {
+      if (sessionId === C) return getCtoRequest(sessionId, companyId, requestId);
       assert.equal(sessionId, SESSION); assert.equal(companyId, W); assert.equal(requestId, taskWorkerRequestId(binding));
       return { requestId, state: "submitted", runId: receiptRunId };
     },
@@ -74,9 +80,15 @@ async function taskFixture(sourceBound = true) {
     assert.equal(folderKey, "project-source");
     assert.equal(relativePath, "src/feature.ts");
   }
+  let onMatch = async () => {};
   Object.assign(f.platform, { localFolders: {
-    async status(folderKey: string) { return { folderKey, configured: true, access: "readWrite", readable: true, writable: true, healthy: true }; },
-    async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) { return { folderKey, workspaceSourceId, match: "same_root" }; },
+    async status(folderKey: string) { return { folderKey, configured: true, access: "readWrite", readable: true, writable: true, healthy: true,
+      requiredDirectories: [], requiredFiles: [], missingDirectories: [], missingFiles: [], checkedAt: now }; },
+    async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) { await onMatch(); return { folderKey, workspaceSourceId, match: "same_root" }; },
+    async commitTaskFilesV1(input: unknown) {
+      assert.deepEqual(input, { sourceId: SOURCE, folderKey: "project-source", branch: "feature/task-dev", expectedHead: HEAD, paths: ["src/feature.ts"] });
+      return { status: "committed", commitSha: COMMIT, treeSha: TREE, changedPaths: ["src/feature.ts"] };
+    },
     async readText() { assert.fail("Legacy reads must not be used for a Task Source"); },
     async writeTextAtomic() { assert.fail("Legacy writes must not be used for a Task Source"); },
     async deleteFile() { assert.fail("Legacy deletes must not be used for a Task Source"); },
@@ -92,8 +104,9 @@ async function taskFixture(sourceBound = true) {
       },
     } : {}),
   } });
-  return { f, ensureContext, effects, files, packets, record,
+  return { f, ensureContext, effects, files, packets, record, ctoContext: ctx(C, ctoRun),
     context: { companyId: W, agentId: AGENT, sessionId: SESSION, runId: RUN },
+    setOnMatch(callback: typeof onMatch) { onMatch = callback; },
     cancel() { cancellationRequested = true; }, changeReceipt() { receiptRunId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"; } };
 }
 
@@ -108,6 +121,36 @@ test("Workspace-only Worker context prepares without a Core Project and passes e
   const deleted = await deleteTaskWorkerFile({ relativePath: "src/feature.ts" }, f.context, f.f.platform);
   assert.equal((deleted.data as { status: string }).status, "deleted");
   assert.deepEqual(f.effects, { reads: 1, writes: 1, deletes: 1 });
+});
+
+test("registered Worker submit and CTO receipt bind the same commit, deny other actors and detect Task drift", async () => {
+  const f = await taskFixture();
+  const platform = createBuilderPlatform();
+  const call = (name: string, params: object, context = f.ctoContext) => Promise.resolve().then(() =>
+    platform.tools.find(tool => tool.name === name)!.handler(params as never, context as never, f.f.platform));
+  const submit = await call("builder.submit-task-source", { paths: ["src/feature.ts"] }, f.context);
+  const submitted = submit.data as { status: string; submission: { submissionId: string; commitSha: string } };
+  assert.equal(submitted.status, "submitted");
+  assert.equal(submitted.submission.commitSha, COMMIT);
+  const input = { projectId: W, ctoId: CTO, workstreamId: "ws-1", taskId: "task-dev", submissionId: submitted.submission.submissionId };
+  const read = "builder.read-task-source-submissions", accept = "builder.accept-task-source-submission";
+  await assert.rejects(call(accept, input, f.context));
+  assert.equal(((await call(read, input)).data as { status: string }).status, "submitted");
+  const first = (await call(accept, input)).data as { status: string; acceptance: { commitSha: string }; qaVerdict: string };
+  assert.equal(first.status, "accepted");
+  assert.equal(first.acceptance.commitSha, COMMIT);
+  assert.equal(first.qaVerdict, "not-established");
+  const replay = (await call(accept, input)).data as typeof first;
+  assert.equal(replay.status, "existing");
+  assert.deepEqual(replay.acceptance, first.acceptance);
+  f.setOnMatch(async () => {
+    const result = await f.packets.publish({ expectedBaseRevisionId: "qa-file-board-1", revision: { projectId: W, ctoId: CTO,
+      workstreamId: "ws-1", revisionId: "qa-file-board-2", packets: [{ ...f.record, packet: { ...f.record.packet, revision: 2 } }] } });
+    assert.equal(result.status, "published");
+  });
+  await assert.rejects(call(read, input), /Task Packet or dependency changed/);
+  f.setOnMatch(async () => {});
+  assert.equal(((await call(read, input)).data as { status: string }).status, "stale");
 });
 
 test("Workspace-only Worker file tools never fall back to legacy alias IO on a Host without V1", async () => {
