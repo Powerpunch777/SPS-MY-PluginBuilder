@@ -19,10 +19,10 @@
 | CTO 프로필 | 지원 SDK/Host에서는 동일 CTO ID를 같은 plugin-owned Agent 및 Session ID로 준비함. 신규 프로필 요청은 현재 Lead에서 확인된 실행 어댑터만 초기 선호값으로 전달하며, 관측 불가 시 생성하지 않음. 이 연결은 fixture 독립 QA 완료. 등록은 Run을 시작하지 않으며 비활성·소유권 변경을 관측하면 전송을 차단함. 후보 공개 SDK의 범용 API를 사용한 별도 no-AI 플러그인으로 실제 소스 Host에서 전용 프로필 2개·세션·재시작·Workspace 분리와 Run 0개를 확인. 현재 고정 SDK의 논리 세션은 독립 Agent가 아니며, Builder Main 도구·동시 실행·전송 경쟁의 Core admission은 별도 미검증. |
 | Task Worker·QA | 새 CTO 실행에 준비·조회·명시 dispatch를 등록하며 과거 실행의 권한 목록은 확대하지 않음. 정확한 현재 Workstream·Task Packet revision·출처·의존 핀과 역할별 owned Agent/keyed session을 확인함. 별도 Core Project가 없는 Workspace도 준비하며, 결정적 request ID와 실제 활성 Run을 확인한 Worker/QA만 전용 파일 도구를 사용함. Worker 구현 경로와 QA 테스트/설정 경로를 분리하고 취소·출처 변경·다른 요청의 Run 재사용을 차단함. 지원 SDK에는 사용자가 설정하는 `project-source` 폴더 선언을 제공하며 경로를 추정하지 않음. 현행 고정 SDK의 미지원 API는 대체 실행 없이 종료함. 후보 SDK/고정 SDK의 fixture 회귀·타입 검사는 통과했으나 실제 Host 파일 작업·AI Worker 작성·Git 제출·보호 테스트·독립 QA·결과 인수는 미완료. Source match와 파일 I/O 간 경합은 별도 Core 결속 API가 필요한 남은 의존성임. |
 | Gate producer/consumer | 현재 Baseline·승인된 D3 Coverage·전체 개발 Task와 독립 QA 보고/완료 Run을 읽는 CTO 도구 `builder.verify-workstream` 및 기존 CAS/이벤트 Job 발행을 등록함. 정확한 현재 증거를 다시 읽는 별도 Manager dispatch와 인수 기록도 연결함. 등록 handler의 독립 양성·변경 거부 검사는 fixture이며 실제 AI VERIFIED나 설치본 검증이 아님. `currentGuarded`는 원자적 시점 조회이지 실행 lease가 아니며 dispatch와 Git 효과에서 현재 역할·등록·원본 guard를 다시 검증함. 누락된 Coverage·실행·QA 증거는 계속 `UNKNOWN`. |
-| 조건부 Revision 발행 | 기존 불변 entry·CAS head 저널의 `publishGuarded`는 지원 SDK/Host에서만 원문 포인터 조건과 head를 함께 비교하며, 충돌·누락된 조건·응답 유실 뒤 staging 기록을 보존함. 별도 선택 기능 `publishGuardedWithJobWakeV1`은 같은 저장과 작업 알림을 명시적 원자 API로 요청함. 기존 API로 대체하거나 불확실한 요청을 자동 재시도하지 않으며 고정 SDK에서 미지원이면 state 접근 전에 멈춤. 저널 fixture 회귀는 통과했으나 실제 VERIFIED·최종 승인 writer 연결은 미완료. 후보 SDK/Host에서 확인한 원자 저장·작업 등록은 실제 Builder 자동 통합의 증거가 아님. |
+| 조건부 Revision 발행 | 기존 불변 entry·CAS head 저널의 `publishGuarded`는 지원 SDK/Host에서만 원문 포인터 조건과 head를 함께 비교하며, 충돌·누락된 조건·응답 유실 뒤 staging 기록을 보존함. `publishGuardedWithJobWakeV1`은 VERIFIED 등 이벤트 발행을 기존 저장과 작업 알림에 원자적으로 결속함. 고정 SDK/Host에서 미지원이면 기존 API로 우회하지 않음. 등록 경로의 fixture 회귀와 후보 SDK/Host의 원자 저장·작업 등록을 확인했으나 실제 AI VERIFIED와 자동 통합 인수는 아님. |
 | Manager 설정 | 시스템 화면에서 Lead와 분리된 Agent를 인증 사용자 action으로 선택·준비함. 같은 Workspace에서만 CAS로 설정하고, 현재 Lead와 같은 Agent는 거부함. Agent별 기존 Core 세션을 재사용하며 설정 변경은 과거 세션을 삭제하지 않음. 격리된 소스 Desktop/Host에서 사용자 선택, 독립 세션 준비·재확인·재시작, 다른 Workspace 및 Lead 선택 거부, Run 0개를 확인함. 후보 공개 SDK와 소스 Host를 쓰는 별도 no-AI 플러그인에서는 같은 생산자의 신규 기본 프로필 생성·독립 세션·재시작·Workspace 분리·사용자 설정 및 pause 보존도 확인함. 이는 실제 Builder UI의 신규 자동 생성 검증이 아니며, 현행 고정 SDK에서는 신규 자동 생성이 미지원. 준비는 실행 권한이나 통합 완료가 아님. |
 | 실행 지표 | 시스템 화면에서 현재 Workstream·Task Packet·Worker 등록과 정확한 Core Run을 읽기 전용으로 대조함. 지원 Host가 기록한 시각이 있을 때만 AI 실행·큐 대기 시간을 계산하며, 구형 Host·조회 실패·불일치는 미측정으로 보존함. Task 완료 시간·권한/통합 대기·재작업·수동 개입은 아직 미측정이며 정상 Run 종료를 업무 완료나 QA 합격으로 세지 않음. 실제 운영 처리량과 전체 속도 정책의 인수는 미완료. |
-| Manager 자동 통합 / Final Packet | 현재 검증 이벤트의 Workspace Job은 별도 owned Manager의 정확한 요청/Run 인수를 기록함. Main의 Baseline/UI·Source·후보 브랜치 계획 아래 실제 QA Commit/Tree와 영속 예약을 Core의 guarded Git 효과에 전달하는 도구를 등록함. 현재 관측 후보의 CI·E2E/회귀 요청과 Run 참조를 같은 journal에 보존함. Manager 패킷과 Main 알림을 원자적으로 저장하며, 현재 파일·Artifact 바이트·가이드·준비 정보의 서버 reader를 최종 검토와 Main 점검에 연결함. 등록 경로의 fixture 검사와 실제 Core Git·사전 위임·스케줄러 시험은 구분함. 정상 의존 대기와 기술 오류를 구분하고 응답 유실은 같은 예약으로 조정함. 유한 테스트 성공만으로 전체 QA/G6/G7을 주장하지 않음. 원자 사용자 승인 writer와 실제 전체 앱·AI 인수가 남아 있어 납품 확정은 불가. |
+| Manager 자동 통합 / Final Packet | 현재 검증 이벤트의 Workspace Job은 별도 owned Manager의 정확한 요청/Run 인수를 기록함. Main의 Baseline/UI·Source·후보 브랜치 계획 아래 실제 QA Commit/Tree와 영속 예약을 Core의 guarded Git 효과에 전달하는 도구를 등록함. 현재 관측 후보의 CI·E2E/회귀 요청과 Run 참조를 같은 journal에 보존함. Manager 패킷과 Main 알림을 원자적으로 저장하며, 현재 파일·Artifact 바이트·가이드·준비 정보의 서버 reader를 최종 검토와 Main 점검에 연결함. 정상 의존 대기와 기술 오류를 구분하고 응답 유실은 같은 예약으로 조정함. 지원 Host의 사용자 원자 승인 writer를 연결했고, 시험용 QA/Run 근거를 사용한 Core Git ref·DB 검사에서 저장과 철회 차단을 확인함. 실제 두 CTO·Manager·Main의 전체 앱/AI 흐름과 사용자 납품 확정은 미인수. |
 | Reuse | Background가 기존 사용자 조사 원문의 정확한 행·해시에서 후보를 기록하고 Main/Background와 문서센터가 같은 저널을 조회함. 원문의 CRLF를 보존하며 Lead 원문 16 KiB와 저장소 인용문 32 KiB 한도를 구분함. 로컬 등록 handler·문서 검사 및 실제 소스 Host에서 도구 등록·Workspace별 빈 조회·실행 사칭 거부를 확인. 실제 AI 조사·자산별 권리·호환성은 미검증이며 미확인 후보의 재사용은 차단 상태. |
 
 ### 2026-11-07 Task 인수·보호 QA 후속 연결
@@ -414,6 +414,9 @@
 - `e6c1f79`는 각 행 조회 시 현재 Workstream·Task에 필요한 기록만 재확인하고, 전체
   응답 전에는 모든 관측 기록을 다시 비교한다. 타입·집중 19개에서 다른 Task의 인수
   기록 반복 조회를 없앴고, 같은 기록의 중간 변경은 끝까지 감지했다.
+- `08ef21a`는 실제 Run이 없고 Host가 기존 요청의 미시작을 확인한 경우만 '미시작 확인'으로
+  표시한다. 일반 미확인·배정 대기와 구분하며 재실행이나 업무 완료를 뜻하지 않는다.
+  고정 SDK 사본에 해당 변경을 반영한 타입·집중 20개와 390/1440px 화면을 확인했다.
 
 ### 문서 Markdown 내보내기
 
@@ -432,6 +435,9 @@
 - `6172f78`은 등록된 기준선 조회가 반환하는 정확한 Revision의 해시를 문서 자체
   참조에 사용한다. 같은 해시를 가진 Workstream·기술결정의 출처에서 원본을 열 수 있고,
   이전 응답에 해시가 없으면 문서를 읽을 수 있지만 원본 링크는 만들지 않는다.
+- `bc47fe9`는 본문을 바꾸고 예전 해시를 재사용한 응답의 원본 연결을 차단한다.
+  고정 SDK 정확 사본의 타입·빌드는 통과했지만 전체 회귀에서 해시 없는 기존 기준선의
+  후속 팩 검토가 SSR에서 표시되지 않는 실패를 확인했다. 이 사본의 회귀는 미통과다.
 
 ### 실행 미시작 관측과 실제 런타임 연결
 
