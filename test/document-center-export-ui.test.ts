@@ -53,7 +53,7 @@ test("browser export downloads exact selected snapshot bytes and preserves respo
     page.setDefaultTimeout(5_000);
     const requests: string[] = [];
     page.on("request", request => requests.push(request.url()));
-    await page.setContent("<body style='margin:0'><div id='root'></div></body>");
+    await page.setContent("<body style='margin:0;padding:16px;box-sizing:border-box;background:#202020'><div id='root'></div></body>");
     await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
     const mount = (documents: readonly object[], state?: { loading?: boolean; error?: string | null }) =>
       page.evaluate(({ documents, state }) => (window as unknown as { mountDocuments: (docs: unknown, state?: unknown) => void })
