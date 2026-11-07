@@ -399,6 +399,12 @@ test("preparation is not Main G7: exact authored assessment is required and reta
   await assert.rejects(store.attestFinalPacket(input, f.runContext, f.platform), /Main G7 review/);
   await assert.rejects(store.attestFinalPacket({ ...input, mainReview: { ...review(f.snapshot), currentPinsSha256: sha("old pins") } },
     f.runContext, f.platform), /does not bind/);
+  for (const verdict of ["FAIL", "UNKNOWN"]) {
+    const mainReview = review(f.snapshot);
+    await assert.rejects(store.attestFinalPacket({ ...input, mainReview: { ...mainReview,
+      checks: mainReview.checks.map((check, index) => index ? check : { ...check, verdict }) } },
+    f.runContext, f.platform), /must explicitly pass/);
+  }
   assert.equal(await store.headRevisionId(), null);
   const result = await store.attestFinalPacket({ ...input, mainReview: review(f.snapshot) }, f.runContext, f.platform);
   assert.equal(result.status, "attested");

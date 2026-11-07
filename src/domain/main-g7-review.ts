@@ -2,7 +2,7 @@ export const MAIN_G7_REVIEW_AREAS = ["approved-design", "deliverables", "install
 export type MainG7Review = Readonly<{
   packetSha256: string;
   currentPinsSha256: string;
-  checks: readonly Readonly<{ area: (typeof MAIN_G7_REVIEW_AREAS)[number]; summary: string; evidenceSourceIds: readonly string[] }>[];
+  checks: readonly Readonly<{ area: (typeof MAIN_G7_REVIEW_AREAS)[number]; verdict: "PASS"; summary: string; evidenceSourceIds: readonly string[] }>[];
 }>;
 type Pin = Readonly<{ sourceId: string }>;
 type ReviewPacket = Readonly<{ packetSha256: string; baseline: Pin; uiRevision: Pin; manifest: Pin;
@@ -48,14 +48,15 @@ export function parseMainG7Review(value: unknown, packet: ReviewPacket, currentP
       ...packet.integration.ciEvidence, ...packet.integration.e2eEvidence, ...(packet.integration.regressionEvidence ?? [])],
   };
   const checks = list(row.checks, value => {
-    const check = record(value, ["area", "summary", "evidenceSourceIds"]);
+    const check = record(value, ["area", "verdict", "summary", "evidenceSourceIds"]);
+    if (check.verdict !== "PASS") throw new TypeError("Every Main G7 review area must explicitly pass before attestation.");
     if (typeof check.area !== "string" || !(MAIN_G7_REVIEW_AREAS as readonly string[]).includes(check.area)) throw new TypeError("Invalid Main G7 review area.");
     const area = check.area as (typeof MAIN_G7_REVIEW_AREAS)[number];
     const sourceIds = list(check.evidenceSourceIds, value => text(value, 1100), 1, 256);
     const expected = new Set(required[area].map(pin => pin.sourceId));
     if (!expected.size || new Set(sourceIds).size !== sourceIds.length || sourceIds.length !== expected.size
       || sourceIds.some(sourceId => !expected.has(sourceId))) throw new TypeError("Main G7 review evidence does not cover its exact area.");
-    return Object.freeze({ area, summary: text(check.summary, 2048), evidenceSourceIds: sourceIds });
+    return Object.freeze({ area, verdict: "PASS" as const, summary: text(check.summary, 2048), evidenceSourceIds: sourceIds });
   }, MAIN_G7_REVIEW_AREAS.length, MAIN_G7_REVIEW_AREAS.length);
   if (new Set(checks.map(check => check.area)).size !== MAIN_G7_REVIEW_AREAS.length) throw new TypeError("Main G7 review areas are incomplete.");
   return Object.freeze({ packetSha256: packet.packetSha256, currentPinsSha256, checks });

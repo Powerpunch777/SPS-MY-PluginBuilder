@@ -11,7 +11,7 @@ export function mainG7ReviewFixture(packet: Packet, currentPinsSha256: string) {
       ...packet.integration.ciEvidence, ...packet.integration.e2eEvidence, ...(packet.integration.regressionEvidence ?? [])],
   };
   const review = parseMainG7Review({ packetSha256: packet.packetSha256, currentPinsSha256,
-    checks: Object.entries(groups).map(([area, pins]) => ({ area, summary: `Fixture Main comparison for ${area}.`,
+    checks: Object.entries(groups).map(([area, pins]) => ({ area, verdict: "PASS", summary: `Fixture Main comparison for ${area}.`,
       evidenceSourceIds: [...new Set(pins.map(pin => pin.sourceId))] })) }, packet, currentPinsSha256);
   return { ...review, checks: review.checks.map(check => ({ ...check, evidenceSourceIds: [...check.evidenceSourceIds] })) };
 }

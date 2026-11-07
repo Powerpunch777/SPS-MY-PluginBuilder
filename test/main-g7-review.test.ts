@@ -22,6 +22,8 @@ test("Main assessment binds every required area to exact server evidence and kee
     { ...review(), checks: review().checks.slice(1) },
     { ...review(), checks: [review().checks[0], ...review().checks.slice(0, 4)] },
     { ...review(), checks: review().checks.map((check, index) => index ? check : { ...check, summary: " " }) },
+    { ...review(), checks: review().checks.map((check, index) => index ? check : { ...check, verdict: "FAIL" }) },
+    { ...review(), checks: review().checks.map((check, index) => index ? check : { ...check, verdict: "UNKNOWN" }) },
     { ...review(), checks: review().checks.map((check, index) => index ? check : { ...check, evidenceSourceIds: ["unknown"] }) },
     { ...review(), checks: review().checks.map((check, index) => index !== 4 ? check : { ...check, evidenceSourceIds: check.evidenceSourceIds.filter(id => id !== "regression") }) },
     { ...review(), pass: true },

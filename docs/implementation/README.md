@@ -342,6 +342,15 @@
   화면도 통과했다. 최초 역사 기록 fixture의 비정규 객체 순서로 인한 digest 실패와
   수정 후 결과를 보존했다. 실제 앱/AI·두 CTO 병렬 통합·사용자 원자 확정은 미인수이며,
   후보 SDK 검사와 제품의 고정 SDK/설치본 상태를 혼동하지 않는다.
+- 후속 독립 QA는 `a223c27`과 후보 SDK `bb2a622`에서 타입 검사와 G7 관련 42개를
+  통과했고 실제 Source/folder capability와 폴더 선언의 manifest 투영을 확인했다.
+  자유 설명만으로 점검 결과가 모호한 한계는 영역별 명시 verdict를 추가해 보강했다.
+  FAIL/UNKNOWN 영역은 점검 발행 전에 거부하며, 이 보강의 타입/집중 42개도 통과했다.
+- `c2bdabc`은 후속 팩 검토 section을 기존 Main 설계 검토에 연결한다. 현재 Baseline이
+  없으면 노출하지 않고 조회/화면 mount만으로 확인 action을 실행하지 않는다.
+  정확한 별도 소스 사본의 타입·빌드·관련 12개가 통과했다. data/action 등록은 아직
+  연결 작업 중이므로 전체 사용자 흐름이 완료된 것으로 보지 않는다. 과거 사본에서
+  UI 의존 파일을 빠뜨렸던 혼합 검사 실패는 보존하고 정확 사본 검사로 대체했다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)

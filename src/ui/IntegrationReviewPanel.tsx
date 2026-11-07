@@ -505,7 +505,7 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
           {ready!.mainAttestation?.attestation?.mainReview && <dl className="sps-ir-list">
             {ready!.mainAttestation.attestation.mainReview.checks.map(check => <div key={check.area} className="sps-ir-item">
               <dt>{({ "approved-design": "승인 설계 대조", deliverables: "납품 산출물", installation: "설치법", usage: "사용법", "validation-and-limits": "검증·제한사항" } as const)[check.area]}</dt>
-              <dd>{check.summary}</dd><small className="sps-ir-mono">{check.evidenceSourceIds.join(" · ")}</small>
+              <dd>{check.verdict} · {check.summary}</dd><small className="sps-ir-mono">{check.evidenceSourceIds.join(" · ")}</small>
             </div>)}
           </dl>}
           {!isCurrentRequest(ready!) ? <p className="sps-ir-status">현재 결정 가능한 Main attestation과 Integration Review 승인 요청이 없거나 이미 결정되었습니다.</p>

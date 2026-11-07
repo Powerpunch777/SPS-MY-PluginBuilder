@@ -12,9 +12,10 @@ export const ATTEST_FINAL_PACKET_TOOL = Object.freeze({ name: "builder.attest-fi
       packetSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }, currentPinsSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
       checks: { type: "array", minItems: 5, maxItems: 5, items: { type: "object", additionalProperties: false, properties: {
         area: { type: "string", enum: ["approved-design", "deliverables", "installation", "usage", "validation-and-limits"] },
+        verdict: { type: "string", enum: ["PASS", "FAIL", "UNKNOWN"] },
         summary: { type: "string", minLength: 1, maxLength: 2048 },
         evidenceSourceIds: { type: "array", minItems: 1, maxItems: 256, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 1100 } },
-      }, required: ["area", "summary", "evidenceSourceIds"] } },
+      }, required: ["area", "verdict", "summary", "evidenceSourceIds"] } },
     }, required: ["packetSha256", "currentPinsSha256", "checks"] },
   }, required: [...Object.keys(base), "mainReview"] } });
 
