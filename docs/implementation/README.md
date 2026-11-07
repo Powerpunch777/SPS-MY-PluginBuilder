@@ -496,6 +496,18 @@
   승인된 시험 모델로 제한된 AppServer turn과 허용 도구 callback 1건, 프로세스 종료와
   정리를 확인했다. 이 CLI 시험의 lease 및 도구 응답은 로컬 fixture였다. 두 시험을
   합쳐 실제 Manager의 Core Run→Node→Builder 도구 전체 인수로 간주하지 않는다.
+- 후속 단일 시험은 정확한 Builder `3c51710`·후보 SDK `578d15c`의 실제 Worker와
+  임시 Core Host를 연결했다. 기존 등록 검증 생산자가 시험용 CTO/QA 근거를 원자 저장하고,
+  실제 Scheduler가 이벤트를 인수해 별도 Manager를 실행했다. 시스템 대기 상태로
+  생성된 Agent는 개별 수동 활성화 없이 범위가 고정된 Host 사전 위임으로 실행됐다.
+  실제 Windows CLI의 `gpt-5.6-luna/high`가 등록된 검증 조회 도구를 한 번 호출했고,
+  서명 claim/lease, 프로세스 종료 코드 0, Core Run 성공, 명령 완료 영수증과 세션 종료
+  이벤트 1건을 같은 실행에서 확인했다. 작업자와 Scheduler의 정상 종료도 확인했다.
+- 위 실행은 후보 소스의 제한된 기술 연결 시험이다. 상류 CTO/QA 판정은 합성 입력이며,
+  Git 쓰기·보호 테스트·CI/E2E·패킷·사용자 납품 승인은 수행하지 않았다. 실제 통합 도구
+  호출도 권한 부재로 효과를 만들지 않았다. 도구 제한을 OS 파일 격리로 주장하지 않는다.
+  초기 입력·시험용 전송 어댑터와 HTTP 기대값 오류, 수정 전 실패, 수동 활성화를 포함한
+  이전 통과와 이를 제거한 후속 통과를 각각 보존했다. 제품 SDK pin·설치본은 그대로다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
