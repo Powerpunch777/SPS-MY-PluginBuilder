@@ -11,6 +11,7 @@ import { approveFirstDesignReview, assertCurrentFirstDesignApproval, proposeFirs
   readFirstDesignReviewRevision } from "../../src/spec-assurance/review-first-design.ts";
 import { createCurrentBaselineAssuranceProvider } from "../../src/spec-assurance/current-baseline-provider.ts";
 import { createSpecAssuranceConsumer } from "../../src/spec-assurance/evaluator.ts";
+import { PROPOSE_FIRST_DESIGN_REVIEW_TOOL } from "../../src/spec-assurance/tool-declarations.mjs";
 import { createBuilderPlatform } from "../../src/platform.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
@@ -71,6 +72,15 @@ function fixture(actor: { type: "user" | "agent" | "system"; companyId: string; 
   return { values, state, put, drafts, published, context, platform, runContext, params, pack, source };
 }
 
+function storeAdditionalConsultationSource(f: ReturnType<typeof fixture>, source: { id: string; text: string }) {
+  const snapshot = f.values.get(keyOf({ scopeKind: "company", scopeId: WORKSPACE,
+    namespace: "sonpark.my-builder", stateKey: "snapshot.v1" })) as unknown as ReturnType<typeof createEmptyBuilderSnapshot>
+    | undefined ?? createEmptyBuilderSnapshot(WORKSPACE);
+  snapshot.messages.push({ id: source.id, channel: "main", actorId: null, role: "user", text: source.text,
+    createdAt: "2026-11-07T00:00:00.000Z", runId: null });
+  f.put("snapshot.v1", snapshot as unknown as JsonValue);
+}
+
 function modelProposal(f: ReturnType<typeof fixture>) {
   return { ...f.params,
     pack: { ...f.pack, applicability: { all: ["design.onboarding"] },
@@ -85,6 +95,22 @@ function modelProposal(f: ReturnType<typeof fixture>) {
       itemDecisions: [{ requirementId: "REQ-1", status: "RESOLVED", reason: "Exact user-reviewed requirement.", sourceIds: [f.source.id] }],
       acceptanceCriteria: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: f.source.id, quote: f.source.text }] } };
 }
+
+async function publishTestBaseline(f: ReturnType<typeof fixture>, revisionId = "baseline-v1") {
+  return createDesignBaselineStore(WORKSPACE, PROJECT, f.state).publish({ expectedBaseRevisionId: null, revision: {
+    projectId: PROJECT, revisionId, sourceDraftRevisionId: "draft-v1", draftDigest: "a".repeat(64),
+    createdAt: "2026-11-06T00:00:02.000Z", author: { agentId: AGENT, sessionId: SESSION, runId: RUN, selectionRevision: 1 },
+    userDecision: { sourceId: SOURCE_ID, sourceSha256: digest(SOURCE_TEXT), interpretation: "Keep onboarding clear." },
+    specification: { projectId: PROJECT, revisionId: `spec-${revisionId}`, productTier: "M",
+      requirements: [{ id: "REQ-1", description: "Keep onboarding clear.", acceptanceCriteriaIds: ["AC-1"] }],
+      targets: ["sps-plugin"], dataPolicyRef: "policy-v1", approvalEvidenceRef: SOURCE_ID },
+    graph: { approvedSpecRevisionId: `spec-${revisionId}`, graphRevisionId: `graph-${revisionId}`,
+      entities: [], relations: [], viewLayoutRef: "layout-v1" },
+  } });
+}
+
+const consultationClassification = (sourceId: string) => ({ sourceId, classification: "clarification" as const,
+  rationale: "Main records how this exact consultation source relates to the pinned Baseline." });
 
 test("exact approved design-model inputs produce static checks, not runtime QA, and caller scenarios cannot replace them", async () => {
   const f = fixture(); await f.published;
@@ -224,6 +250,9 @@ test("proposal requires the active Main run and user claims cannot enter the AI 
     sessions: { main: null, "ui-design": null, background: null, "cto-inbox": null, decisions: null,
       "integration-review": SESSION } });
   await assert.rejects(proposeFirstDesignReview(activeMain.params, activeMain.runContext, activeMain.platform), /Only the Main Lead context/);
+  await assert.rejects(proposeFirstDesignReview({ ...activeMain.params,
+    consultationClassifications: [consultationClassification("consultation-55555555-5555-4555-8555-555555555555")] },
+  activeMain.runContext, activeMain.platform), /Only the Main Lead context/);
   const noMain = fixture();
   await assert.rejects(proposeFirstDesignReview(noMain.params, { ...noMain.runContext,
     sessionId: "77777777-7777-4777-8777-777777777777" }, noMain.platform), /prepared current Lead session/);
@@ -336,4 +365,92 @@ test("follow-up review approval conflicts if its observed prior Baseline changes
   } });
   assert.deepEqual(await approveFirstDesignReview({ projectId: PROJECT,
     expectedBundleRevisionId: proposal.revision.revisionId }, f.context), { status: "conflict" });
+});
+
+test("Main records a current consultation classification against the exact follow-up Baseline without changing it", async () => {
+  const source = { id: "consultation-55555555-5555-4555-8555-555555555555", text: "A newly read Workspace consultation." };
+  const f = fixture();
+  await f.published;
+  storeAdditionalConsultationSource(f, source);
+  const baseline = await publishTestBaseline(f);
+  assert.equal(baseline.status, "published");
+  if (baseline.status !== "published") throw new Error("Test Baseline was not published.");
+
+  const proposal = await proposeFirstDesignReview({ ...f.params,
+    consultationClassifications: [consultationClassification(source.id)] }, f.runContext, f.platform);
+  assert.equal(proposal.status, "published");
+  if (proposal.status !== "published") throw new Error("Consultation classification proposal was not published.");
+  const recorded = proposal.revision.consultationClassifications?.[0];
+  assert.deepEqual(recorded, { ...consultationClassification(source.id), sourceDigest: digest(source.text) });
+  assert.deepEqual(Object.keys(recorded ?? {}).sort(), ["classification", "rationale", "sourceDigest", "sourceId"]);
+  assert.equal(proposal.revision.priorBaseline?.revisionId, baseline.revision.revisionId);
+  assert.equal(proposal.revision.status, "PROPOSED");
+  assert.equal(proposal.revision.approval, undefined);
+  assert.equal((await createDesignBaselineStore(WORKSPACE, PROJECT, f.state).current())?.revision.revisionId,
+    baseline.revision.revisionId, "classification proposal must not publish or alter the Baseline");
+});
+
+test("consultation classification rejects initial Baseline, duplicate, missing, and foreign Workspace sources", async () => {
+  const source = { id: "consultation-55555555-5555-4555-8555-555555555555", text: "Current Workspace consultation." };
+  const initial = fixture();
+  await initial.published;
+  storeAdditionalConsultationSource(initial, source);
+  await assert.rejects(proposeFirstDesignReview({ ...initial.params,
+    consultationClassifications: [consultationClassification(source.id)] }, initial.runContext, initial.platform), /existing current Baseline/u);
+  assert.equal(await readFirstDesignReviewBundle(WORKSPACE, PROJECT, initial.state), null);
+
+  const f = fixture();
+  await f.published;
+  storeAdditionalConsultationSource(f, source);
+  await publishTestBaseline(f);
+  await assert.rejects(proposeFirstDesignReview({ ...f.params, consultationClassifications: [
+    consultationClassification(source.id), consultationClassification(source.id),
+  ] }, f.runContext, f.platform), /unique/u);
+  await assert.rejects(proposeFirstDesignReview({ ...f.params,
+    consultationClassifications: [consultationClassification("consultation-77777777-7777-4777-8777-777777777777")] },
+  f.runContext, f.platform), /Original consultation source is unavailable in this Workspace/u);
+
+  const snapshot = f.values.get(keyOf({ scopeKind: "company", scopeId: WORKSPACE, namespace: "sonpark.my-builder", stateKey: "snapshot.v1" })) as
+    unknown as ReturnType<typeof createEmptyBuilderSnapshot>;
+  snapshot.messages[0]!.channel = "ui-design";
+  f.put("snapshot.v1", snapshot as unknown as JsonValue);
+  await assert.rejects(proposeFirstDesignReview({ ...f.params,
+    consultationClassifications: [consultationClassification(source.id)] }, f.runContext, f.platform), /Original consultation source is unavailable/u);
+});
+
+test("consultation source drift rejects approval and invalidates its prior approval binding", async () => {
+  const source = { id: "consultation-55555555-5555-4555-8555-555555555555", text: "Pinned consultation source." };
+  const f = fixture();
+  await f.published;
+  storeAdditionalConsultationSource(f, source);
+  await publishTestBaseline(f);
+  const proposal = await proposeFirstDesignReview({ ...f.params,
+    consultationClassifications: [consultationClassification(source.id)] }, f.runContext, f.platform);
+  if (proposal.status !== "published") throw new Error("Consultation classification proposal was not published.");
+  const snapshot = f.values.get(keyOf({ scopeKind: "company", scopeId: WORKSPACE, namespace: "sonpark.my-builder", stateKey: "snapshot.v1" })) as
+    unknown as ReturnType<typeof createEmptyBuilderSnapshot>;
+  snapshot.messages[0]!.text = "Changed consultation source bytes.";
+  f.put("snapshot.v1", snapshot as unknown as JsonValue);
+  assert.deepEqual(await approveFirstDesignReview({ projectId: PROJECT,
+    expectedBundleRevisionId: proposal.revision.revisionId }, f.context), { status: "conflict" });
+  assert.equal((await readFirstDesignReviewBundle(WORKSPACE, PROJECT, f.state))?.status, "PROPOSED");
+  snapshot.messages[0]!.text = source.text;
+  f.put("snapshot.v1", snapshot as unknown as JsonValue);
+  const approved = await approveFirstDesignReview({ projectId: PROJECT,
+    expectedBundleRevisionId: proposal.revision.revisionId }, f.context);
+  assert.equal(approved.status, "published");
+  snapshot.messages[0]!.text = "Drift after the exact user attestation.";
+  f.put("snapshot.v1", snapshot as unknown as JsonValue);
+  assert.equal(await assertCurrentFirstDesignApproval({ projectId: PROJECT, approvedRevisionId: approved.revision.revisionId },
+    f.runContext, f.platform), null);
+});
+
+test("tool schema exposes only bounded Main-authored follow-up classification fields", () => {
+  const schema = PROPOSE_FIRST_DESIGN_REVIEW_TOOL.parametersSchema as unknown as { properties: Record<string, any> };
+  assert.deepEqual(schema.properties.consultationClassifications.items.properties.classification.enum,
+    ["clarification", "correction", "change-request"]);
+  assert.equal(schema.properties.consultationClassifications.maxItems, 32);
+  assert.equal(schema.properties.consultationClassifications.items.additionalProperties, false);
+  assert.equal(schema.properties.consultationClassifications.items.properties.sourceDigest, undefined);
+  assert.equal(schema.properties.consultationClassifications.items.properties.receivedAt, undefined);
 });

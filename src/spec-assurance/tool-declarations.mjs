@@ -137,7 +137,7 @@ export const READ_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
 
 export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
   name: "builder.propose-first-design-review", displayName: "Propose a design review",
-  description: "Main proposes original-source links and a versioned rule pack for the exact current DesignDraft, before the first Baseline or pinned to the exact current Baseline for a follow-up. Optional designModel supplies explicit design facts, coverage rules/targets, finite design scenarios, source-linked item decisions and exact AC quotes for the same user review. These are static design inputs, not runtime observations or QA. Identity, prior-Baseline pins and source hashes are server-derived; the exact proposal must be confirmed by the user in Builder and included in Main Baseline publication.",
+  description: "Main proposes original-source links and a versioned rule pack for the exact current DesignDraft, before the first Baseline or pinned to the exact current Baseline for a follow-up. Optional designModel supplies static design facts, coverage rules/targets, finite scenarios and exact AC quotes, not runtime observations or QA. Optional consultationClassifications records Main-authored clarification, correction or change-request analysis for exact consultation-* user source IDs currently readable in this Workspace; the server reads and hashes original bytes and binds them to the existing current Baseline pin. It does not establish when a source was received, approve a change, publish a Baseline or grant implementation/execution authority. Identity, prior-Baseline pins and source hashes are server-derived.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"],
     properties: { projectId: firstId, expectedDraftRevisionId: firstId, expectedReviewHeadRevisionId: { type: ["string", "null"], maxLength: 160 },
@@ -147,6 +147,12 @@ export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
           transitions, exceptions, excludedCombinations } },
       sourcePins: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false,
         required: ["requirementId", "acId", "sourceId"], properties: { requirementId: firstId, acId: { type: ["string", "null"] }, sourceId: firstId } } },
+      consultationClassifications: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", additionalProperties: false,
+        required: ["sourceId", "classification", "rationale"], properties: {
+          sourceId: { type: "string", minLength: 1, maxLength: 160, pattern: "^consultation-[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$" },
+          classification: { type: "string", enum: ["clarification", "correction", "change-request"] },
+          rationale: { type: "string", minLength: 1, maxLength: 8192 },
+        } } },
       designModel: { type: "object", additionalProperties: false,
         required: ["facts", "rulesVersion", "coverageRules", "coverageTargets", "scenarios", "itemDecisions", "acceptanceCriteria"],
         properties: { facts: { type: "array", maxItems: 1000, items: firstId }, rulesVersion: firstId,

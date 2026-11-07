@@ -17,6 +17,11 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 const ID = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= 160
   && !/[\u0000-\u001f\u007f]/u.test(value);
 const HEX = /^[a-f0-9]{64}$/u;
+const CONSULTATION_SOURCE = /^consultation-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/iu;
+const CONSULTATION_CLASSIFICATIONS = ["clarification", "correction", "change-request"] as const;
+const MAX_CLASSIFICATION_SOURCES = 32;
+const MAX_CLASSIFICATION_RATIONALE_BYTES = 8 * 1024;
+const encoder = new TextEncoder();
 
 export type FirstDesignSourcePin = Readonly<{
   requirementId: string;
@@ -35,6 +40,8 @@ export type FirstDesignReviewBundle = Readonly<{
   draftDigest: string;
   draft: AuthoredDesignDraft["draft"];
   sourcePins: readonly FirstDesignSourcePin[];
+  consultationClassifications?: readonly Readonly<{ sourceId: string; sourceDigest: string;
+    classification: typeof CONSULTATION_CLASSIFICATIONS[number]; rationale: string }>[];
   pack: DomainPack;
   designModel?: DesignModelMaterial;
   author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number; createdAt: string }>;
@@ -79,10 +86,11 @@ function validatePack(value: unknown, identity: DomainPack["identity"], requirem
   return freezeTree(pack);
 }
 
-function proposalFingerprint(bundle: Pick<FirstDesignReviewBundle, "workspaceId" | "projectId" | "priorBaseline" | "draftRevisionId" | "draftDigest" | "draft" | "sourcePins" | "pack" | "designModel" | "author">) {
+function proposalFingerprint(bundle: Pick<FirstDesignReviewBundle, "workspaceId" | "projectId" | "priorBaseline" | "draftRevisionId" | "draftDigest" | "draft" | "sourcePins" | "pack" | "designModel" | "consultationClassifications" | "author">) {
   return hash([bundle.workspaceId, bundle.projectId, bundle.draftRevisionId, bundle.draftDigest, bundle.draft,
     bundle.sourcePins, bundle.pack, bundle.author.agentId, bundle.author.sessionId, bundle.author.runId, bundle.author.selectionRevision,
     ...(bundle.priorBaseline === null ? [] : [bundle.priorBaseline]),
+    ...(bundle.consultationClassifications ? [bundle.consultationClassifications] : []),
     ...(bundle.designModel ? [bundle.designModel] : [])]);
 }
 
@@ -102,7 +110,8 @@ function sameBaselinePin(left: FirstDesignReviewBaselinePin | null, right: First
 }
 
 function parseBundle(value: unknown, workspaceId: string, projectId: string): FirstDesignReviewBundle {
-  const row = exactToolRecord(value, ["status", "revisionId", "workspaceId", "projectId", "priorBaseline", "draftRevisionId", "draftDigest", "draft", "sourcePins", "pack", "author"], ["approval", "designModel"]);
+  const row = exactToolRecord(value, ["status", "revisionId", "workspaceId", "projectId", "priorBaseline", "draftRevisionId", "draftDigest", "draft", "sourcePins", "pack", "author"],
+    ["approval", "designModel", "consultationClassifications"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision", "createdAt"]);
   let priorBaseline: FirstDesignReviewBaselinePin | null = null;
   if (row.priorBaseline !== null) {
@@ -142,6 +151,32 @@ function parseBundle(value: unknown, workspaceId: string, projectId: string): Fi
   const pinKeys = sourcePins.map(pin => `${pin.requirementId}\0${pin.acId ?? ""}\0${pin.sourceId}`);
   if (new Set(pinKeys).size !== pinKeys.length || draft.specification.requirements.some(requirement =>
     !sourcePins.some(pin => pin.requirementId === requirement.id))) throw new TypeError("Every requirement needs a unique original-source pin.");
+  let consultationClassifications: FirstDesignReviewBundle["consultationClassifications"];
+  if (Object.hasOwn(row, "consultationClassifications")) {
+    if (priorBaseline === null || !Array.isArray(row.consultationClassifications)
+      || Object.getPrototypeOf(row.consultationClassifications) !== Array.prototype
+      || row.consultationClassifications.length < 1 || row.consultationClassifications.length > MAX_CLASSIFICATION_SOURCES
+      || Reflect.ownKeys(row.consultationClassifications).length !== row.consultationClassifications.length + 1) {
+      throw new TypeError("Consultation classifications require a follow-up Baseline and a bounded dense source list.");
+    }
+    consultationClassifications = Object.freeze(Array.from({ length: row.consultationClassifications.length }, (_, index) => {
+      const descriptor = Object.getOwnPropertyDescriptor(row.consultationClassifications, String(index));
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Consultation classifications must be dense data.");
+      const item = exactToolRecord(descriptor.value, ["sourceId", "sourceDigest", "classification", "rationale"]);
+      if (typeof item.sourceId !== "string" || !CONSULTATION_SOURCE.test(item.sourceId)
+        || typeof item.sourceDigest !== "string" || !HEX.test(item.sourceDigest)
+        || !CONSULTATION_CLASSIFICATIONS.includes(item.classification as typeof CONSULTATION_CLASSIFICATIONS[number])
+        || typeof item.rationale !== "string" || !item.rationale.trim()
+        || encoder.encode(item.rationale).byteLength > MAX_CLASSIFICATION_RATIONALE_BYTES) {
+        throw new TypeError("Invalid consultation classification evidence.");
+      }
+      return Object.freeze({ sourceId: item.sourceId, sourceDigest: item.sourceDigest,
+        classification: item.classification as typeof CONSULTATION_CLASSIFICATIONS[number], rationale: item.rationale });
+    }));
+    if (new Set(consultationClassifications.map(item => item.sourceId)).size !== consultationClassifications.length) {
+      throw new TypeError("Consultation source IDs must be unique within a review bundle.");
+    }
+  }
   const identity = Object.freeze({ workspaceId, projectId, specRevisionId: draft.specification.revisionId,
     specDigest: hash(draft.specification) });
   const pack = validatePack(row.pack, identity, new Set(draft.specification.requirements.map(item => item.id)));
@@ -156,6 +191,7 @@ function parseBundle(value: unknown, workspaceId: string, projectId: string): Fi
   }
   return freezeTree({ status: row.status, revisionId: row.revisionId, workspaceId, projectId, priorBaseline,
     draftRevisionId: row.draftRevisionId, draftDigest: row.draftDigest, draft, sourcePins: Object.freeze(sourcePins), pack,
+    ...(consultationClassifications ? { consultationClassifications } : {}),
     ...(designModel ? { designModel } : {}),
     author: Object.freeze({ agentId: author.agentId as string, sessionId: author.sessionId as string,
       runId: author.runId as string, selectionRevision: author.selectionRevision as number, createdAt: author.createdAt as string }),
@@ -243,6 +279,56 @@ async function verifiedDraftSources(draft: AuthoredDesignDraft, workspaceId: str
   return verified;
 }
 
+async function readConsultationClassifications(value: unknown, workspaceId: string,
+  sessions: Awaited<ReturnType<typeof currentDraft>>["sessions"], context: ReviewContext,
+  requirePinnedDigests?: readonly Readonly<{ sourceId: string; sourceDigest: string;
+    classification: typeof CONSULTATION_CLASSIFICATIONS[number]; rationale: string }>[]) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < 1
+    || value.length > MAX_CLASSIFICATION_SOURCES || Reflect.ownKeys(value).length !== value.length + 1) {
+    throw new TypeError("Consultation classifications must be a bounded dense list.");
+  }
+  const inputs = Array.from({ length: value.length }, (_, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Consultation classifications must be dense data.");
+    const row = exactToolRecord(descriptor.value, ["sourceId", "classification", "rationale"]);
+    if (typeof row.sourceId !== "string" || !CONSULTATION_SOURCE.test(row.sourceId)
+      || !CONSULTATION_CLASSIFICATIONS.includes(row.classification as typeof CONSULTATION_CLASSIFICATIONS[number])
+      || typeof row.rationale !== "string" || !row.rationale.trim()
+      || encoder.encode(row.rationale).byteLength > MAX_CLASSIFICATION_RATIONALE_BYTES) {
+      throw new TypeError("Invalid consultation classification input.");
+    }
+    return { sourceId: row.sourceId, classification: row.classification as typeof CONSULTATION_CLASSIFICATIONS[number],
+      rationale: row.rationale };
+  });
+  if (new Set(inputs.map(item => item.sourceId)).size !== inputs.length) {
+    throw new TypeError("Consultation source IDs must be unique within a review bundle.");
+  }
+  if (requirePinnedDigests && JSON.stringify(inputs) !== JSON.stringify(requirePinnedDigests.map(({ sourceId, classification, rationale }) => ({
+    sourceId, classification, rationale,
+  })))) throw new TypeError("Consultation classification input changed from the stored review bundle.");
+  const result: Array<NonNullable<FirstDesignReviewBundle["consultationClassifications"]>[number]> = [];
+  for (const item of inputs) {
+    const source = await readOriginalDesignSource(item.sourceId, workspaceId, sessions, context);
+    if (source.id !== item.sourceId) throw new Error("Consultation source identity changed.");
+    result.push(Object.freeze({ ...item, sourceDigest: createHash("sha256").update(source.text, "utf8").digest("hex") }));
+  }
+  if (requirePinnedDigests?.some((pin, index) => pin.sourceDigest !== result[index]?.sourceDigest)) {
+    throw new Error("Original consultation source bytes changed after the review proposal.");
+  }
+  return Object.freeze(result);
+}
+
+async function consultationClassificationsAreCurrent(bundle: FirstDesignReviewBundle, workspaceId: string,
+  sessions: Awaited<ReturnType<typeof currentDraft>>["sessions"], context: ReviewContext) {
+  if (!bundle.consultationClassifications) return true;
+  try {
+    await readConsultationClassifications(bundle.consultationClassifications.map(({ sourceId, classification, rationale }) =>
+      ({ sourceId, classification, rationale })), workspaceId, sessions, context, bundle.consultationClassifications);
+    return true;
+  } catch { return false; }
+}
+
 async function assertDraftStillCurrent(workspaceId: string, projectId: string,
   expected: Awaited<ReturnType<typeof currentDraft>>["draft"], context: ReviewContext) {
   const latest = await currentDraft(workspaceId, projectId, context);
@@ -266,7 +352,7 @@ async function baselinePinIsCurrent(workspaceId: string, projectId: string, expe
  * Registered-tool signature: (params, Host runContext, platform).
  * params: { projectId: companyId, expectedDraftRevisionId, expectedReviewHeadRevisionId,
  *   pack: { packId, version, applicability, rules, transitions, exceptions, excludedCombinations },
- *   sourcePins: [{ requirementId, acId, sourceId }] }.
+ *   sourcePins: [{ requirementId, acId, sourceId }], consultationClassifications?: [{ sourceId, classification, rationale }] }.
  * Main authors the proposal; pack identity and source digests come from the verified exact Draft and original readers.
  */
 export async function proposeFirstDesignReview(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
@@ -284,7 +370,8 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
     } : undefined,
   } } as ReviewContext;
   const workspaceId = context.companyId;
-  const input = exactToolRecord(params, ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"], ["designModel"]);
+  const input = exactToolRecord(params, ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"],
+    ["designModel", "consultationClassifications"]);
   if (!ID(input.projectId) || input.projectId !== workspaceId) throw new TypeError("First-design review requires the authenticated single-project Workspace ID.");
   if (!ID(input.expectedDraftRevisionId) || input.expectedReviewHeadRevisionId !== null && !ID(input.expectedReviewHeadRevisionId)) {
     throw new TypeError("Exact current DesignDraft revision and observed review head are required.");
@@ -292,12 +379,17 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
   const projectId = input.projectId;
   await authority.check();
   const priorBaseline = await currentBaselinePin(workspaceId, projectId, guardedContext);
+  if (Object.hasOwn(input, "consultationClassifications") && priorBaseline === null) {
+    throw new TypeError("Consultation classifications require an existing current Baseline.");
+  }
   const { draft, sessions } = await currentDraft(workspaceId, projectId, guardedContext);
   const parsedDraft = parseDesignDraft(draft.revision.draft, projectId);
   if (parsedDraft.revisionId !== input.expectedDraftRevisionId) {
     return { status: "conflict" as const, actualDraftRevisionId: parsedDraft.revisionId, content: "DesignDraft changed; refresh before proposing." };
   }
   const sources = await verifiedDraftSources(draft.revision, workspaceId, sessions, guardedContext);
+  const consultationClassifications = await readConsultationClassifications(input.consultationClassifications,
+    workspaceId, sessions, guardedContext);
   await assertDraftStillCurrent(workspaceId, projectId, draft, guardedContext);
   await assertBaselinePin(workspaceId, projectId, priorBaseline, guardedContext);
   const identity = Object.freeze({ workspaceId, projectId, specRevisionId: parsedDraft.specification.revisionId,
@@ -317,7 +409,8 @@ export async function proposeFirstDesignReview(params: unknown, runContext: unkn
   });
   const base = { status: "PROPOSED" as const, workspaceId, projectId, priorBaseline,
     draftRevisionId: parsedDraft.revisionId, draftDigest: hash(parsedDraft), draft: parsedDraft,
-    sourcePins, pack, author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId,
+    sourcePins, pack, ...(consultationClassifications ? { consultationClassifications } : {}),
+    author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId,
       selectionRevision: authority.selectionRevision, createdAt: new Date().toISOString() } };
   const proposed = Object.hasOwn(input, "designModel") ? { ...base,
     designModel: parseDesignModelMaterial(input.designModel, identity, parsedDraft.specification.requirements, pack, sourcePins,
@@ -369,6 +462,7 @@ export async function approveFirstDesignReview(params: unknown, context: UserRev
     || hash(draft.revision.draft) !== current.revision.draftDigest) return { status: "conflict" as const };
   const sources = await verifiedDraftSources(draft.revision, workspaceId, sessions, context);
   if (current.revision.sourcePins.some(pin => sources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return { status: "conflict" as const };
+  if (!await consultationClassificationsAreCurrent(current.revision, workspaceId, sessions, context)) return { status: "conflict" as const };
   await assertDraftStillCurrent(workspaceId, projectId, draft, context);
   if (!await baselinePinIsCurrent(workspaceId, projectId, current.revision.priorBaseline, context)) return { status: "conflict" as const };
   const latest = await store.current();
@@ -377,9 +471,10 @@ export async function approveFirstDesignReview(params: unknown, context: UserRev
   const base = { ...current.revision, status: "APPROVED" as const, approval };
   const revision = parseBundle({ ...base, revisionId: `first-review-approval-${hash([base, approval])}` }, workspaceId, projectId);
   const result = await store.approveCAS({ expectedBaseRevisionId: current.revision.revisionId, revision });
-  if (!await baselinePinIsCurrent(workspaceId, projectId, current.revision.priorBaseline, context)) return { status: "conflict" as const };
+  if (!await baselinePinIsCurrent(workspaceId, projectId, current.revision.priorBaseline, context)
+    || !await consultationClassificationsAreCurrent(current.revision, workspaceId, sessions, context)) return { status: "conflict" as const };
   return result.status === "conflict" ? result : Object.freeze({ status: result.status, revision: result.revision,
-    content: "Authenticated user attested to this exact initial DesignDraft, source-pin set, and proposed rule-pack version. This is not a Baseline publication, QA acceptance, or execution permission." });
+    content: "Authenticated user attested to this exact design-review bundle. Recorded consultation classifications remain Main-authored analysis; they do not themselves approve a change, publish a Baseline, accept QA, or grant execution permission." });
 }
 
 export type CurrentFirstDesignApprovalBinding = Readonly<{
@@ -439,6 +534,7 @@ export async function assertCurrentFirstDesignApproval(params: unknown, runConte
     || JSON.stringify(normalizedDraft) !== JSON.stringify(exact.revision.draft)) return null;
   const sources = await verifiedDraftSources(draft.revision, workspaceId, sessions, guardedContext);
   if (exact.revision.sourcePins.some(pin => sources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return null;
+  if (!await consultationClassificationsAreCurrent(exact.revision, workspaceId, sessions, guardedContext)) return null;
   await assertDraftStillCurrent(workspaceId, projectId, draft, guardedContext);
   await assertBaselinePin(workspaceId, projectId, exact.revision.priorBaseline, guardedContext);
   const latest = await reviewStore.current();
@@ -447,6 +543,7 @@ export async function assertCurrentFirstDesignApproval(params: unknown, runConte
   if (latestDraft.draft.sequence !== draft.sequence || JSON.stringify(latestDraft.draft.revision) !== JSON.stringify(draft.revision)) return null;
   const latestSources = await verifiedDraftSources(latestDraft.draft.revision, workspaceId, latestDraft.sessions, guardedContext);
   if (exact.revision.sourcePins.some(pin => latestSources.get(pin.sourceId)?.digest !== pin.sourceDigest)) return null;
+  if (!await consultationClassificationsAreCurrent(exact.revision, workspaceId, latestDraft.sessions, guardedContext)) return null;
   await assertBaselinePin(workspaceId, projectId, exact.revision.priorBaseline, guardedContext);
   await authority.check();
   const bundleDigest = hash(exact.revision);
