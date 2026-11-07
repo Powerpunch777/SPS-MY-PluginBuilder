@@ -74,7 +74,7 @@ import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_T
 import { createFinalPacketStore } from "./delivery-evidence/final-packet.ts";
 import { readFinalReview } from "./delivery-evidence/final-review.ts";
 import { publishIntegrationPacket, readCurrentIntegrationPacket } from "./delivery-evidence/integration-packet.ts";
-import { INTEGRATION_PACKET_MAIN_JOB } from "./delivery-evidence/integration-packet-evidence.ts";
+import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB } from "./delivery-evidence/integration-packet-evidence.ts";
 import { dispatchIntegrationPacketToMain, integrationPacketMainRequestId } from "./delivery-evidence/integration-packet-dispatch.ts";
 import { createCurrentFinalEvidenceReader } from "./delivery-evidence/current-final-evidence.ts";
 import { dispatchFinalReview, FINAL_REVIEW_EVENT, FINAL_REVIEW_JOB } from "./delivery-evidence/final-review-dispatch.ts";
@@ -849,6 +849,16 @@ function currentFinalPacketStore(companyId: string, platform: SpsPlatformInvocat
     });
 }
 
+function unrelatedJobEvent(job: unknown, expectedType: string) {
+  if (!job || typeof job !== "object") throw new TypeError("Invalid event Job context.");
+  const descriptor = Object.getOwnPropertyDescriptor(job, "event");
+  if (!descriptor) return false;
+  if (!descriptor.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Invalid event Job envelope.");
+  const event = exactToolRecord(descriptor.value, ["eventType", "payload"]);
+  if (typeof event.eventType !== "string" || !event.eventType) throw new TypeError("Invalid persisted event type.");
+  return event.eventType !== expectedType;
+}
+
 async function notifyIntegrationPacket(job: { companyId?: string; eventId?: string; trigger: string }, platform: SpsPlatformInvocationContext) {
   if (job.trigger !== "event" || !job.companyId || !job.eventId) throw new Error("Main packet notification requires a Workspace event.");
   const companyId = job.companyId, eventId = job.eventId;
@@ -925,9 +935,11 @@ export function createBuilderPlatform() {
       if ("waitingDependencies" in result && result.waitingDependencies === true || result.status === "stale") return;
       if (result.status !== "accepted") throw new Error(`Workstream integration not admitted: ${result.reason}`);
     } }, { jobKey: INTEGRATION_PACKET_MAIN_JOB, handler: async (job, platform) => {
+      if (unrelatedJobEvent(job, INTEGRATION_PACKET_EVENT)) return;
       const result = await notifyIntegrationPacket(job, platform);
       if (result.status !== "accepted" && result.status !== "stale") throw new Error("Main packet notification admission is unconfirmed; preserve its request.");
     } }, { jobKey: FINAL_REVIEW_JOB, handler: async (job, platform) => {
+      if (unrelatedJobEvent(job, FINAL_REVIEW_EVENT)) return;
       const result = await notifyFinalReview(job, platform);
       if (result.status !== "accepted" && result.status !== "stale") throw new Error("Integration Review admission is unconfirmed; preserve its request.");
     } }],

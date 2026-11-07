@@ -400,3 +400,18 @@ test("Main publication rejects document races and cannot silently omit the Revie
     assert.equal(head?.revision.kind, "manager-packet");
   });
 });
+
+test("Main and Review jobs ignore unrelated protected receipts without reads, retries or AI execution", async () => {
+  const { f } = await setup(), platform = f.f.platform;
+  let reads = 0, sends = 0;
+  platform.state.get = async () => { reads++; throw new Error("No unrelated evidence reads"); };
+  (platform.agents.sessions as any).sendMessage = async () => { sends++; throw new Error("No unrelated wake"); };
+  for (const key of ["builder.review-integration-packet", "builder.request-packet-user-review"]) {
+    const job = createBuilderPlatform().jobs!.find(job => job.jobKey === key)!;
+    await job.handler({ jobKey: key, eventId: "sps-protected-test-terminal-v1:unrelated", companyId: W, trigger: "event",
+      runId: "ffffffff-ffff-4fff-8fff-ffffffffffff", event: { eventType: "sps.protected-test.terminal",
+        payload: { schemaVersion: 1, companyId: W, runId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" } } } as any, platform);
+  }
+  assert.equal(reads, 0);
+  assert.equal(sends, 0);
+});
