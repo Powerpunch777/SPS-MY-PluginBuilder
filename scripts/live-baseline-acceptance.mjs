@@ -17,6 +17,16 @@ async function eventually(read, check, label, timeout = 45_000) {
   throw new Error(`Live design baseline did not observe ${label}.`);
 }
 
+export function summarizeScopedToolCalls(calls) {
+  return calls.map(call => ({ server: call.server, tool: call.tool, status: call.status,
+    operation: call.arguments?.toolName ?? null,
+    error: typeof call.error?.message === "string" ? call.error.message
+      .replace(/(?:sk-[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]{48,})/gu, "[redacted]")
+      .replace(/((?:authorization|token|secret|password|api[_ -]?key)\s*[:=]\s*)\S+/giu, "$1[redacted]").slice(0, 600) : null,
+    resultIsError: call.result?.isError ?? null,
+  }));
+}
+
 async function assertScopedTurn(request, turn, sessionId, answer, requiredTools, writeTool, inspectResult) {
   assert.equal(turn.state, "succeeded", "Do not replace failed or uncertain provider calls.");
   assert.equal(turn.answer?.trim(), answer);
@@ -30,6 +40,7 @@ async function assertScopedTurn(request, turn, sessionId, answer, requiredTools,
     .map(line => JSON.parse(line)).filter(event => event.type === "item.completed" && event.item).map(event => event.item);
   assert.ok(items.length > 0 && items.every(item => ["agent_message", "reasoning", "mcp_tool_call"].includes(item.type)));
   const calls = items.filter(item => item.type === "mcp_tool_call");
+  console.log(JSON.stringify({ liveBaselineToolCalls: summarizeScopedToolCalls(calls) }));
   assert.ok(calls.some(call => call.tool === "list_plugin_tools"));
   for (const call of calls) {
     assert.equal(call.server, "sps-plugin-session");

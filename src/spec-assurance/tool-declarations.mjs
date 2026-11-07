@@ -27,6 +27,42 @@ export const READ_SPEC_ASSURANCE_PACK_TOOL = Object.freeze({
 });
 
 const firstId = { type: "string", minLength: 1, maxLength: 160 };
+const idList = (maxItems, minItems = 0) => ({ type: "array", minItems, maxItems, uniqueItems: true, items: firstId });
+const predicate = { type: "object", additionalProperties: false, properties: {
+  all: idList(1000), any: idList(1000), none: idList(1000),
+} };
+const domainRules = { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false,
+  required: ["id", "requirementIds", "appliesWhen", "requiresCheck"], properties: {
+    id: firstId, requirementIds: idList(1000, 1), appliesWhen: predicate, requiresCheck: { type: "boolean" },
+    modelCases: { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+      required: ["when", "state", "event", "allowedNextStates"], properties: {
+        when: predicate, state: firstId, event: firstId, allowedNextStates: idList(10000, 1),
+      } } },
+  } } };
+const transitionFields = { from: firstId, event: firstId, to: firstId };
+const transitions = { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+  required: ["from", "event", "to"], properties: transitionFields } };
+const exceptions = { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+  required: ["id", "from", "event", "to"], properties: { id: firstId, ...transitionFields } } };
+const excludedCombinations = { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+  required: ["from", "event", "to", "reason"], properties: { ...transitionFields, reason: firstId } } };
+const coverageRules = { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false,
+  required: ["id", "requiresCheck", "requiredEvidenceKinds"], properties: {
+    id: firstId, requiresCheck: { type: "boolean" }, requiredEvidenceKinds: { type: "array", maxItems: 5, uniqueItems: true,
+      items: { type: "string", enum: ["specification", "workstream", "task", "question", "source"] } },
+  } } };
+const coverageTargets = { type: "array", maxItems: 101000, items: { type: "object", additionalProperties: false,
+  required: ["targetId", "targetKind", "ruleIds"], properties: { targetId: firstId,
+    targetKind: { type: "string", enum: ["requirement", "ac"] }, ruleIds: idList(1000) } } };
+const scenarios = { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+  required: ["id", "state", "event", "nextState", "exceptionId"], properties: {
+    id: firstId, state: firstId, event: firstId, nextState: firstId, exceptionId: { type: ["string", "null"], minLength: 1, maxLength: 160 },
+  } } };
+const itemDecisions = { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false,
+  required: ["requirementId", "status", "reason", "sourceIds"], properties: {
+    requirementId: firstId, status: { type: "string", enum: ["RESOLVED", "DELEGATED", "UNDECIDED", "NOT_APPLICABLE", "NOT_CHECKED", "INCONCLUSIVE"] },
+    reason: { type: "string", minLength: 1, maxLength: 4096 }, sourceIds: idList(1000),
+  } } };
 export const READ_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
   name: "builder.read-first-design-review", displayName: "Read the initial design review",
   description: "Main reads the latest initial design review, its exact head and any recorded user approval. Does not publish a Baseline.",
@@ -41,15 +77,14 @@ export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
     properties: { projectId: firstId, expectedDraftRevisionId: firstId, expectedReviewHeadRevisionId: { type: ["string", "null"], maxLength: 160 },
       pack: { type: "object", additionalProperties: false,
         required: ["packId", "version", "applicability", "rules", "transitions", "exceptions", "excludedCombinations"],
-        properties: { packId: firstId, version: firstId, applicability: { type: "object" }, rules: { type: "array" },
-          transitions: { type: "array" }, exceptions: { type: "array" }, excludedCombinations: { type: "array" } } },
+        properties: { packId: firstId, version: firstId, applicability: predicate, rules: domainRules,
+          transitions, exceptions, excludedCombinations } },
       sourcePins: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false,
         required: ["requirementId", "acId", "sourceId"], properties: { requirementId: firstId, acId: { type: ["string", "null"] }, sourceId: firstId } } },
       designModel: { type: "object", additionalProperties: false,
         required: ["facts", "rulesVersion", "coverageRules", "coverageTargets", "scenarios", "itemDecisions", "acceptanceCriteria"],
         properties: { facts: { type: "array", maxItems: 1000, items: firstId }, rulesVersion: firstId,
-          coverageRules: { type: "array", maxItems: 1000 }, coverageTargets: { type: "array", maxItems: 101000 },
-          scenarios: { type: "array", maxItems: 10000 }, itemDecisions: { type: "array", maxItems: 1000 },
+          coverageRules, coverageTargets, scenarios, itemDecisions,
           acceptanceCriteria: { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
             required: ["requirementId", "acId", "sourceId", "quote"], properties: { requirementId: firstId, acId: firstId,
               sourceId: firstId, quote: { type: "string", minLength: 1, maxLength: 8192 } } } } } },
