@@ -61,10 +61,11 @@ export type ProtectedContinuation = Readonly<{
   subjectKeySha256: string;
   phase: "ci" | "e2e" | "regression";
   requestId: string;
-  status: "waiting" | "pending" | "uncertain" | "accepted";
+  status: "waiting" | "pending" | "uncertain" | "accepted" | "manager-failed";
   dispatchAttempts: 0 | 1;
   recoveryWakeCount: 0 | 1;
   receipt: StoredReceipt | null;
+  managerTerminalStatus?: "failed" | "cancelled";
 }>;
 type Reservation = Readonly<{
   eventId: string;
@@ -203,14 +204,14 @@ function parseReservation(value: unknown): Reservation {
 }
 
 function parseContinuation(value: unknown): ProtectedContinuation {
-  if (!isRecord(value) || Reflect.ownKeys(value).length !== 10
+  if (!isRecord(value) || ![10, 11].includes(Reflect.ownKeys(value).length)
     || typeof value.terminalEventId !== "string" || !EVENT_ID.test(value.terminalEventId)
     || typeof value.protectedRunId !== "string" || !ID.test(value.protectedRunId)
     || typeof value.receiptDigest !== "string" || !HASH.test(value.receiptDigest)
     || typeof value.subjectKeySha256 !== "string" || !HASH.test(value.subjectKeySha256)
     || !["ci", "e2e", "regression"].includes(value.phase as string)
     || typeof value.requestId !== "string" || !/^builder-ws-continuation-v1:[a-f0-9]{64}$/u.test(value.requestId)
-    || !["waiting", "pending", "uncertain", "accepted"].includes(value.status as string)
+    || !["waiting", "pending", "uncertain", "accepted", "manager-failed"].includes(value.status as string)
     || !Number.isSafeInteger(value.dispatchAttempts) || ![0, 1].includes(value.dispatchAttempts as number)
     || !Number.isSafeInteger(value.recoveryWakeCount) || ![0, 1].includes(value.recoveryWakeCount as number)) {
     throw new TypeError("Malformed protected-receipt continuation.");
@@ -225,7 +226,10 @@ function parseContinuation(value: unknown): ProtectedContinuation {
   if ((value.status === "waiting" && (value.dispatchAttempts !== 0 || receipt !== null))
     || (value.status === "pending" && (value.dispatchAttempts !== 1 || receipt !== null))
     || (value.status === "uncertain" && (value.dispatchAttempts !== 1 || receipt !== null))
-    || (value.status === "accepted" && (value.dispatchAttempts !== 1 || receipt === null))) {
+    || (value.status === "accepted" && (value.dispatchAttempts !== 1 || receipt === null))
+    || (value.status === "manager-failed" && (!(["failed", "cancelled"] as unknown[]).includes(value.managerTerminalStatus)
+      || value.managerTerminalStatus === undefined))
+    || (value.status !== "manager-failed" && Object.hasOwn(value, "managerTerminalStatus"))) {
     throw new TypeError("Continuation status does not match its effect receipt.");
   }
   return value as unknown as ProtectedContinuation;
@@ -399,6 +403,13 @@ export async function finishProtectedContinuation(scope: ContinuationScope, iden
     if (prior.status !== "pending" && prior.status !== "uncertain") return prior;
     return Object.freeze({ ...prior, status: "accepted", dispatchAttempts: 1, receipt: { receiptId: result.receiptId, runId: result.runId } });
   });
+}
+
+/** Close a waiting/accepted continuation when the exact Manager run ended unsuccessfully. */
+export async function failProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity,
+  terminalStatus: "failed" | "cancelled", state: StateClient) {
+  return updateProtectedContinuation(scope, identity, state, prior => prior.status === "manager-failed"
+    ? prior : Object.freeze({ ...prior, status: "manager-failed", managerTerminalStatus: terminalStatus }));
 }
 
 async function updateProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity, state: StateClient,

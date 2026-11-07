@@ -37,7 +37,8 @@ import { PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL } from "./task-pack
 import { publishTaskQaReport } from "./task-qa-reports.ts";
 import { verifyCurrentWorkstream } from "./builder-gates/current-workstream-verification.ts";
 import { WORKSTREAM_VERIFIED_JOB } from "./builder-gates/workstream-verification-publication.ts";
-import { consumeVerifiedWorkstreamJob } from "./builder-gates/integration-manager-job.ts";
+import { consumeManagerSessionTerminalJob, consumeVerifiedWorkstreamJob,
+  MANAGER_SESSION_TERMINAL_JOB } from "./builder-gates/integration-manager-job.ts";
 import { readVerifiedWorkstreamForManager } from "./builder-gates/integration-manager-job.ts";
 import { publishIntegrationPlan } from "./builder-gates/integration-plan.ts";
 import { integrateVerifiedTask, readIntegrationProgress } from "./builder-gates/integration-progress.ts";
@@ -932,8 +933,13 @@ export function createBuilderPlatform() {
       const result = await consumeVerifiedWorkstreamJob(job, platform);
       // A persisted pending reservation is not successful Git/CI execution.
       // Surface the missing producer to Core's bounded job-error handling.
-      if ("waitingDependencies" in result && result.waitingDependencies === true || result.status === "stale") return;
+      if ("waitingDependencies" in result && result.waitingDependencies === true
+        || ["accepted", "stale", "ignored", "waiting"].includes(result.status)) return;
       if (result.status !== "accepted") throw new Error(`Workstream integration not admitted: ${result.reason}`);
+    } }, { jobKey: MANAGER_SESSION_TERMINAL_JOB, handler: async (job, platform) => {
+      const result = await consumeManagerSessionTerminalJob(job, platform);
+      if (["accepted", "failed", "stale", "ignored", "waiting"].includes(result.status)) return;
+      throw new Error(`Manager terminal continuation unresolved: ${result.reason}`);
     } }, { jobKey: INTEGRATION_PACKET_MAIN_JOB, handler: async (job, platform) => {
       if (unrelatedJobEvent(job, INTEGRATION_PACKET_EVENT)) return;
       const result = await notifyIntegrationPacket(job, platform);

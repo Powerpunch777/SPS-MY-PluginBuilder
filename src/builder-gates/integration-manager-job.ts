@@ -9,6 +9,7 @@ import { exactToolRecord } from "../lead-tool-authority.ts";
 import { WORKSTREAM_VERIFIED_EVENT, WORKSTREAM_VERIFIED_JOB, createWorkstreamVerificationPublication } from "./workstream-verification-publication.ts";
 import { consumeVerifiedWorkstream, queueProtectedContinuationRecheck,
   readVerifiedWorkstreamReservation, reserveProtectedContinuation, startProtectedContinuation, finishProtectedContinuation,
+  failProtectedContinuation,
   type ManagerDispatchRequest, type ProtectedContinuation, type VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
 import { readWorkstreams } from "../workstream-tools.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
@@ -28,7 +29,7 @@ const REQUEST_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-
 const BUILDER_PLUGIN_ID = "com.sonparkserver.my-plugin-builder";
 const PROTECTED_TERMINAL_EVENT = "sps.protected-test.terminal";
 const PROTECTED_RECHECK_EVENT = "sps.protected-test.continuation-recheck";
-const MANAGER_TERMINAL_JOB = "agent-session-terminal";
+export const MANAGER_SESSION_TERMINAL_JOB = "agent-session-terminal";
 const MANAGER_TERMINAL_EVENT = "agent.session.run.terminal";
 type Host = SpsPlatformInvocationContext & {
   protectedTests?: { getRunV1?: (workspaceId: string, runId: string, subjectKeySha256: string) => Promise<unknown> };
@@ -459,10 +460,10 @@ async function consumeProtectedTerminalJob(job: Job, platform: Host, payload: Pr
     reason: "continuation-core-request-receipt-confirmed-not-completion" };
 }
 
-/** Consumer for Core's durable successful Manager-session terminal notification. */
+/** Consumer for Core's durable Manager-session terminal notification. */
 export async function consumeManagerSessionTerminalJob(job: Job, platformInput: SpsPlatformInvocationContext) {
   const platform = platformInput as Host;
-  if (job.jobKey !== MANAGER_TERMINAL_JOB || job.trigger !== "event" || !job.eventId || !EVENT_ID.test(job.eventId)
+  if (job.jobKey !== MANAGER_SESSION_TERMINAL_JOB || job.trigger !== "event" || !job.eventId || !EVENT_ID.test(job.eventId)
     || !job.companyId || !UUID.test(job.companyId) || !job.runId || !UUID.test(job.runId)) {
     return { status: "unsupported" as const, reason: "manager-terminal-event-context-incomplete-or-unsupported" };
   }
@@ -477,7 +478,8 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
   }
   if (payload.schemaVersion !== 1 || typeof payload.runId !== "string" || !UUID.test(payload.runId)
     || typeof payload.sessionId !== "string" || !UUID.test(payload.sessionId)
-    || typeof payload.requestId !== "string" || !REQUEST_ID.test(payload.requestId) || payload.status !== "succeeded"
+    || typeof payload.requestId !== "string" || !REQUEST_ID.test(payload.requestId)
+    || !["succeeded", "failed", "cancelled"].includes(payload.status as string)
     || typeof payload.resultSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(payload.resultSha256)
     || typeof payload.finishedAt !== "string" || !Number.isFinite(Date.parse(payload.finishedAt))) {
     return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-event-payload-invalid" };
@@ -493,10 +495,15 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
     || sessionRequest.runId !== payload.runId) return { status: "ignored" as const, eventId: job.eventId,
     reason: "terminal-event-does-not-match-current-manager-request-receipt" };
   const sessionRun = await platform.agents.sessions.getRun(authority.sessionId, job.companyId, payload.runId);
-  if (!safeRunReceipt(sessionRun, payload.runId) || sessionRun.status !== "succeeded"
-    || sessionRun.cancellationRequested !== false) {
-    return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-core-run-not-authoritatively-succeeded" };
+  if (!safeRunReceipt(sessionRun, payload.runId) || sessionRun.status !== payload.status
+    || !["succeeded", "failed", "cancelled"].includes(String(sessionRun.status))) {
+    return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-core-run-does-not-match-terminal-event" };
   }
+  if (payload.status === "failed" || payload.status === "cancelled") {
+    return closeFailedManagerContinuations(job.companyId, payload.requestId, payload.runId, payload.status, job.eventId, platform);
+  }
+  if (sessionRun.cancellationRequested !== false) return { status: "unknown" as const, eventId: job.eventId,
+    reason: "manager-terminal-success-is-cancellation-marked" };
   const board = await readWorkstreams(job.companyId, job.companyId, platform);
   if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) return { status: "unknown" as const,
     eventId: job.eventId, reason: "manager-terminal-workstream-board-unavailable-or-over-bound" };
@@ -552,6 +559,44 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
     reason: "manager-terminal-target-no-longer-current", continuations: outcomes };
   return { status: "accepted" as const, eventId: job.eventId, reason: "manager-terminal-notification-consumed",
     continuations: outcomes };
+}
+
+async function closeFailedManagerContinuations(workspaceId: string, requestId: string, runId: string,
+  terminalStatus: "failed" | "cancelled", eventId: string, platform: Host) {
+  const board = await readWorkstreams(workspaceId, workspaceId, platform);
+  if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) return { status: "unknown" as const,
+    eventId, reason: "failed-manager-terminal-workstream-board-unavailable-or-over-bound" };
+  let scans = 0;
+  const closed: Array<{ workstreamId: string; requestId: string }> = [];
+  for (const workstream of board.revision.workstreams) {
+    const latest = await createWorkstreamVerificationPublication(revisionState(platform)).readLatestCurrent({
+      workspaceId, projectId: workspaceId, workstreamId: workstream.spec.id });
+    if (latest.status === "unknown" && latest.reason !== "verified-head-unavailable") return { status: "unknown" as const,
+      eventId, reason: "failed-manager-terminal-current-workstream-read-unavailable" };
+    if (latest.status !== "current") continue;
+    const scope = { workspaceId, projectId: workspaceId, workstreamId: workstream.spec.id,
+      verifiedEventId: latest.snapshot.eventId };
+    const reservation = await readVerifiedWorkstreamReservation(scope, platform.state);
+    if (!reservation || reservation.status !== "accepted" || !reservation.receipt || !reservation.requestId) continue;
+    const originalMatches = managerRequestUuidForLedgerKey(reservation.requestId) === requestId
+      && reservation.receipt.runId === runId;
+    for (const continuation of reservation.continuations ?? []) {
+      if (++scans > MAX_TERMINAL_ATTEMPT_LOOKUPS) return { status: "unknown" as const, eventId,
+        reason: "failed-manager-terminal-continuation-scan-over-bound" };
+      const continuationMatches = managerRequestUuidForLedgerKey(continuation.requestId) === requestId
+        && (continuation.receipt === null || continuation.receipt.runId === runId);
+      if (!continuationMatches && !(originalMatches && continuation.status === "waiting")) continue;
+      if (["accepted", "waiting", "pending", "uncertain"].includes(continuation.status)) {
+        const result = await failProtectedContinuation(scope, continuation, terminalStatus, platform.state);
+        if (result.status === "unknown" || result.status === "conflict") return { status: "unknown" as const,
+          eventId, reason: result.reason ?? "failed-manager-continuation-close-unconfirmed" };
+        closed.push({ workstreamId: workstream.spec.id, requestId: continuation.requestId });
+      }
+    }
+  }
+  return closed.length ? { status: "failed" as const, eventId, terminalStatus,
+    continuations: closed, reason: "manager-terminal-failure-recorded-no-replacement-session" }
+    : { status: "ignored" as const, eventId, reason: "failed-manager-terminal-has-no-current-continuation" };
 }
 
 export async function resolveCurrentIntegrationManagerAuthority(workspaceId: string,

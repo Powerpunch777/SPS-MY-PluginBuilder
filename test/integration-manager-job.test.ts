@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createVerifiedWorkstreamManagerReadHandler, consumeVerifiedWorkstreamJob,
   consumeManagerSessionTerminalJob,
-  INTEGRATION_MANAGER_VERIFIED_READ_TOOL, managerRequestUuidForLedgerKey,
+  INTEGRATION_MANAGER_VERIFIED_READ_TOOL, managerRequestUuidForLedgerKey, MANAGER_SESSION_TERMINAL_JOB,
   resolveCurrentIntegrationManagerAuthority, type VerifiedEventLookup } from "../src/builder-gates/integration-manager-job.ts";
 import { consumeVerifiedWorkstream, type ManagerDispatchPort, type VerifiedSnapshotRead,
   type VerifiedWorkstreamSnapshot } from "../src/builder-gates/workstream-verification-consumer.ts";
@@ -13,6 +14,7 @@ import { integrationManagerSessionStateKey, integrationManagerSessionTaskKey,
 import { WORKSTREAM_VERIFIED_EVENT, WORKSTREAM_VERIFIED_JOB } from "../src/builder-gates/workstream-verification-publication.ts";
 import { mapKey } from "./fixtures/cto-platform.ts";
 import { validationFixture, validationTool, progressTool, MANAGER_RUN as FIXTURE_MANAGER_RUN } from "./fixtures/integration-manager-platform.ts";
+import { createBuilderPlatform } from "../src/platform.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
@@ -186,7 +188,7 @@ test("Manager read cannot use another project, another run, or a null request re
   assert.equal(INTEGRATION_MANAGER_VERIFIED_READ_TOOL, "builder.read-verified-workstream");
 });
 
-async function preparedTerminalFixture(managerStatus: "running" | "succeeded" = "succeeded",
+async function preparedTerminalFixture(managerStatus: "running" | "succeeded" | "failed" | "cancelled" = "succeeded",
   phase: "ci" | "e2e" | "regression" = "ci", withRegression = false) {
   const validation = await validationFixture(withRegression);
   const fixture = validation.f;
@@ -224,7 +226,7 @@ async function preparedTerminalFixture(managerStatus: "running" | "succeeded" = 
   const terminalEventId = `sps-protected-test-terminal-v1:${reference.runId}:${run.receipt.digest}:${reference.subjectKeySha256}:job`;
   assert.ok(terminalEventId.length > 160);
   return { fixture, eventId: validation.eventId, payload, terminalEventId, sends, coreRequests, reference,
-    setOriginalManagerStatus(status: "running" | "succeeded") { originalManagerStatus = status; } };
+    setOriginalManagerStatus(status: "running" | "succeeded" | "failed" | "cancelled") { originalManagerStatus = status; } };
 }
 
 for (const phase of ["ci", "e2e", "regression"] as const) test(`current ${phase} terminal receipt resumes the exact Manager session once`, async () => {
@@ -327,6 +329,80 @@ test("active Manager terminal race records waiting and queues only one bounded r
       status: "succeeded", resultSha256: "c".repeat(64), finishedAt: "2026-11-07T01:00:00.000Z" } } }, f.fixture.platform);
   assert.equal(resumed.status, "accepted", JSON.stringify(resumed));
   assert.equal(f.sends.length, 1, "durable Manager terminal notification should resume the same session once");
+  const replay = await consumeManagerSessionTerminalJob({ jobKey: MANAGER_SESSION_TERMINAL_JOB,
+    runId: "99999999-9999-4999-8999-999999999999", trigger: "event", eventId: `agent-session-terminal-v1:${"a".repeat(64)}`,
+    companyId: WORKSPACE, event: { eventType: "agent.session.run.terminal", payload: { schemaVersion: 1,
+      runId: FIXTURE_MANAGER_RUN, sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", requestId: originalRequestId,
+      status: "succeeded", resultSha256: "c".repeat(64), finishedAt: "2026-11-07T01:00:00.000Z" } } }, f.fixture.platform);
+  assert.equal(replay.status, "ignored", JSON.stringify(replay));
+  assert.equal(f.sends.length, 1, "replayed terminal event must use the durable continuation receipt");
+});
+
+test("late Manager terminal notification waits for authoritative run state and preserves the continuation", async () => {
+  const f = await preparedTerminalFixture("running");
+  const protectedJob = { jobKey: WORKSTREAM_VERIFIED_JOB, runId: RUN, trigger: "event", eventId: f.terminalEventId,
+    companyId: WORKSPACE, event: { eventType: "sps.protected-test.terminal", payload: f.payload } };
+  assert.equal((await consumeVerifiedWorkstreamJob(protectedJob, f.fixture.platform)).status, "waiting");
+  const row = f.fixture.values.get(mapKey(requestKey)) as { events: Array<{ requestId: string }> };
+  const originalRequestId = managerRequestUuidForLedgerKey(row.events[0]!.requestId);
+  const terminalJob = { jobKey: MANAGER_SESSION_TERMINAL_JOB, runId: RUN, trigger: "event",
+    eventId: `agent-session-terminal-v1:${"b".repeat(64)}`, companyId: WORKSPACE,
+    event: { eventType: "agent.session.run.terminal", payload: { schemaVersion: 1,
+      runId: FIXTURE_MANAGER_RUN, sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", requestId: originalRequestId,
+      status: "succeeded", resultSha256: "e".repeat(64), finishedAt: "2026-11-07T01:00:00.000Z" } } };
+  const sessions = f.fixture.platform.agents.sessions as any;
+  const getRun = sessions.getRun;
+  sessions.getRun = async (...args: any[]) => ({ ...await getRun(...args), status: "running" });
+  const early = await consumeManagerSessionTerminalJob(terminalJob, f.fixture.platform);
+  assert.equal(early.status, "unknown");
+  assert.equal(f.sends.length, 0);
+  sessions.getRun = getRun;
+  f.setOriginalManagerStatus("succeeded");
+  const late = await consumeManagerSessionTerminalJob(terminalJob, f.fixture.platform);
+  assert.equal(late.status, "accepted", JSON.stringify(late));
+  assert.equal(f.sends.length, 1);
+});
+
+for (const terminalStatus of ["failed", "cancelled"] as const) test(`current ${terminalStatus} Manager terminal closes waiting continuation without retry`, async () => {
+  const f = await preparedTerminalFixture("running");
+  const protectedJob = { jobKey: WORKSTREAM_VERIFIED_JOB, runId: RUN, trigger: "event", eventId: f.terminalEventId,
+    companyId: WORKSPACE, event: { eventType: "sps.protected-test.terminal", payload: f.payload } };
+  const waiting = await consumeVerifiedWorkstreamJob(protectedJob, f.fixture.platform);
+  assert.equal(waiting.status, "waiting");
+  const row = f.fixture.values.get(mapKey(requestKey)) as { events: Array<{ requestId: string; continuations: Array<Record<string, unknown>> }> };
+  const originalRequestId = managerRequestUuidForLedgerKey(row.events[0]!.requestId);
+  f.setOriginalManagerStatus(terminalStatus);
+  const terminalJob = { jobKey: MANAGER_SESSION_TERMINAL_JOB, runId: RUN, trigger: "event",
+    eventId: `agent-session-terminal-v1:${terminalStatus}`, companyId: WORKSPACE,
+    event: { eventType: "agent.session.run.terminal", payload: { schemaVersion: 1,
+      runId: FIXTURE_MANAGER_RUN, sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", requestId: originalRequestId,
+      status: terminalStatus, resultSha256: "d".repeat(64), finishedAt: "2026-11-07T01:00:00.000Z" } } };
+  const closed = await consumeManagerSessionTerminalJob(terminalJob, f.fixture.platform);
+  assert.equal(closed.status, "failed", JSON.stringify(closed));
+  const after = f.fixture.values.get(mapKey(requestKey)) as { events: Array<{ continuations: Array<Record<string, unknown>> }> };
+  assert.equal(after.events[0]!.continuations[0]!.status, "manager-failed");
+  assert.equal(after.events[0]!.continuations[0]!.managerTerminalStatus, terminalStatus);
+  assert.equal(f.sends.length, 0);
+  const replay = await consumeManagerSessionTerminalJob(terminalJob, f.fixture.platform);
+  assert.equal(replay.status, "ignored");
+  assert.equal(f.sends.length, 0, "terminal failure must not create a replacement request");
+});
+
+test("registered terminal jobs route typed events and ignore unrelated events without state reads", async () => {
+  let reads = 0;
+  const platform = { state: { async get() { reads++; return null; } } } as unknown as SpsPlatformInvocationContext;
+  const contract = createBuilderPlatform() as unknown as { jobs: Array<{ jobKey: string; handler(job: any, platform: any): Promise<unknown> }> };
+  const registered = new Set(contract.jobs.map(job => job.jobKey));
+  assert.ok(registered.has(WORKSTREAM_VERIFIED_JOB));
+  assert.ok(registered.has(MANAGER_SESSION_TERMINAL_JOB));
+  const manifestSource = await readFile(new URL("../src/manifest.mjs", import.meta.url), "utf8");
+  assert.match(manifestSource, /jobKey: "agent-session-terminal"[^\n]+scope: "workspace"/u);
+  for (const jobKey of [WORKSTREAM_VERIFIED_JOB, MANAGER_SESSION_TERMINAL_JOB]) {
+    const job = contract.jobs.find(item => item.jobKey === jobKey)!;
+    await job.handler({ jobKey, runId: RUN, trigger: "event", eventId: "unrelated",
+      companyId: WORKSPACE, event: { eventType: "unrelated.event", payload: {} } }, platform);
+  }
+  assert.equal(reads, 0);
 });
 
 test("unrelated and legacy untyped events are filtered before verified-event reads", async () => {
