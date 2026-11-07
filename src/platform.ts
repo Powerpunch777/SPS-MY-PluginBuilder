@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readBuilderExecutionMetrics } from "./execution-metrics.ts";
 import { defineSpsPlatformContract, SPS_PLATFORM_CAPABILITIES } from "@sonparkserver/plugin-sdk/platform";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
@@ -1444,7 +1445,12 @@ export function createBuilderPlatform() {
         const companyId = workspaceId(context.companyId);
         return serialize(companyId, () => submitTaskWorkerSource(params, runContext, platform));
       } }],
-    data: [{ key: "builder.delivery-documents", handler: async (params, platform) => {
+    data: [{ key: "builder.execution-metrics", handler: async (params, platform) => {
+      exactToolRecord(params, ["companyId"], ["projectId", "renderEnvironment"]);
+      const companyId = workspaceId(params.companyId);
+      if (params.projectId !== undefined && params.projectId !== companyId) throw new TypeError("Metrics require the authenticated Workspace project.");
+      return await readBuilderExecutionMetrics(companyId, platform) as unknown as JsonValue;
+    } }, { key: "builder.delivery-documents", handler: async (params, platform) => {
       exactToolRecord(params, ["companyId"], ["renderEnvironment"]);
       const companyId = workspaceId(params.companyId);
       return serialize(companyId, async () => ({ workspaceId: companyId, projectId: companyId,

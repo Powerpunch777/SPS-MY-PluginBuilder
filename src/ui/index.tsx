@@ -8,6 +8,7 @@ import { UiContractPanel } from "./UiContractPanel.tsx";
 import { IntegrationReviewPanel, parseIntegrationReviewDTO, type IntegrationReviewDTO } from "./IntegrationReviewPanel.tsx";
 import { FirstDesignReviewPanel, type FirstDesignReviewApprovalInput, type FirstDesignReviewPanelView } from "./FirstDesignReviewPanel.tsx";
 import { CurrentBaselinePackReviewSection } from "./CurrentBaselinePackReviewSection.tsx";
+import { ExecutionMetricsSection } from "./ExecutionMetricsSection.tsx";
 import { ChangeImpactPanel, type G5ChangeImpactRequest, type G5ChangeImpactReadDTO } from "./ChangeImpactPanel.tsx";
 import type { G5ComparisonPairsReadDTO } from "../g5-comparison-pairs.ts";
 import type { ApproveUiProposalInput } from "./UiHtmlReview.tsx";
@@ -242,6 +243,7 @@ export function BuilderPage() {
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
   const hasCurrentBaseline = Boolean(baselineView.snapshot?.documents.some(document => document.sourceKind === "design-baseline"));
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
+    executionMetrics={<ExecutionMetricsSection key={workspaceId} workspaceId={workspaceId} />}
     changeImpact={<ChangeImpactPanel projectId={workspaceId} onReadComparisonPairs={readG5ComparisonPairs} onQueryImpact={compareChangeImpact} />}
     firstDesignReview={draftView.view || firstDesign.status === "ready" || firstDesign.status === "stale" || hasCurrentBaseline ? <>
       {(draftView.view || firstDesign.status === "ready" || firstDesign.status === "stale")

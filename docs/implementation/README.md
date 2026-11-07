@@ -21,6 +21,7 @@
 | Gate producer/consumer | 현재 Baseline·승인된 D3 Coverage·전체 개발 Task와 독립 QA 보고/완료 Run을 읽는 CTO 도구 `builder.verify-workstream` 및 기존 CAS/이벤트 Job 발행을 등록함. 정확한 현재 증거를 다시 읽는 별도 Manager dispatch와 인수 기록도 연결함. 등록 handler의 독립 양성·변경 거부 검사는 fixture이며 실제 AI VERIFIED나 설치본 검증이 아님. `currentGuarded`는 원자적 시점 조회이지 실행 lease가 아니며 dispatch와 Git 효과에서 현재 역할·등록·원본 guard를 다시 검증함. 누락된 Coverage·실행·QA 증거는 계속 `UNKNOWN`. |
 | 조건부 Revision 발행 | 기존 불변 entry·CAS head 저널의 `publishGuarded`는 지원 SDK/Host에서만 원문 포인터 조건과 head를 함께 비교하며, 충돌·누락된 조건·응답 유실 뒤 staging 기록을 보존함. 별도 선택 기능 `publishGuardedWithJobWakeV1`은 같은 저장과 작업 알림을 명시적 원자 API로 요청함. 기존 API로 대체하거나 불확실한 요청을 자동 재시도하지 않으며 고정 SDK에서 미지원이면 state 접근 전에 멈춤. 저널 fixture 회귀는 통과했으나 실제 VERIFIED·최종 승인 writer 연결은 미완료. 후보 SDK/Host에서 확인한 원자 저장·작업 등록은 실제 Builder 자동 통합의 증거가 아님. |
 | Manager 설정 | 시스템 화면에서 Lead와 분리된 Agent를 인증 사용자 action으로 선택·준비함. 같은 Workspace에서만 CAS로 설정하고, 현재 Lead와 같은 Agent는 거부함. Agent별 기존 Core 세션을 재사용하며 설정 변경은 과거 세션을 삭제하지 않음. 격리된 소스 Desktop/Host에서 사용자 선택, 독립 세션 준비·재확인·재시작, 다른 Workspace 및 Lead 선택 거부, Run 0개를 확인함. 후보 공개 SDK와 소스 Host를 쓰는 별도 no-AI 플러그인에서는 같은 생산자의 신규 기본 프로필 생성·독립 세션·재시작·Workspace 분리·사용자 설정 및 pause 보존도 확인함. 이는 실제 Builder UI의 신규 자동 생성 검증이 아니며, 현행 고정 SDK에서는 신규 자동 생성이 미지원. 준비는 실행 권한이나 통합 완료가 아님. |
+| 실행 지표 | 시스템 화면에서 현재 Workstream·Task Packet·Worker 등록과 정확한 Core Run을 읽기 전용으로 대조함. 지원 Host가 기록한 시각이 있을 때만 AI 실행·큐 대기 시간을 계산하며, 구형 Host·조회 실패·불일치는 미측정으로 보존함. Task 완료 시간·권한/통합 대기·재작업·수동 개입은 아직 미측정이며 정상 Run 종료를 업무 완료나 QA 합격으로 세지 않음. 실제 운영 처리량과 전체 속도 정책의 인수는 미완료. |
 | Manager 자동 통합 / Final Packet | 현재 검증 이벤트의 Workspace Job은 별도 owned Manager의 정확한 요청/Run 인수를 기록함. Main의 Baseline/UI·Source·후보 브랜치 계획 아래 실제 QA Commit/Tree와 영속 예약을 Core의 guarded Git 효과에 전달하는 도구를 등록함. 현재 관측 후보의 CI·E2E/회귀 요청과 Run 참조를 같은 journal에 보존함. Manager 패킷과 Main 알림을 원자적으로 저장하며, 현재 파일·Artifact 바이트·가이드·준비 정보의 서버 reader를 최종 검토와 Main 점검에 연결함. 등록 경로의 fixture 검사와 실제 Core Git·사전 위임·스케줄러 시험은 구분함. 정상 의존 대기와 기술 오류를 구분하고 응답 유실은 같은 예약으로 조정함. 유한 테스트 성공만으로 전체 QA/G6/G7을 주장하지 않음. 원자 사용자 승인 writer와 실제 전체 앱·AI 인수가 남아 있어 납품 확정은 불가. |
 | Reuse | Background가 기존 사용자 조사 원문의 정확한 행·해시에서 후보를 기록하고 Main/Background와 문서센터가 같은 저널을 조회함. 원문의 CRLF를 보존하며 Lead 원문 16 KiB와 저장소 인용문 32 KiB 한도를 구분함. 로컬 등록 handler·문서 검사 및 실제 소스 Host에서 도구 등록·Workspace별 빈 조회·실행 사칭 거부를 확인. 실제 AI 조사·자산별 권리·호환성은 미검증이며 미확인 후보의 재사용은 차단 상태. |
 
@@ -384,6 +385,26 @@
   실제 Worker invocation까지의 권한 전달 전체를 입증하지는 않는다. Git ref 잠금도
   협력 Git writer의 범위이며 비협력 외부 파일 변경까지 전역 원자성을 주장하지 않는다.
   이 잔여 범위와 실제 Manager 모델/두 CTO 통합 인수는 계속 미완료로 유지한다.
+
+### 실행 지표의 첫 읽기 전용 연결
+
+- `builder.execution-metrics`는 기존 현재 Task/Worker 등록과 결정적 요청 ID를 읽는다.
+  조회는 state 저장·AI Wake·취소를 하지 않는다. 현재 상태 head를 재확인하지만 여러
+  Core Run을 하나의 전역 트랜잭션에서 읽었다고 주장하지 않는다.
+- 기록된 `createdAt`/`startedAt`/`finishedAt`의 순서와 관측 시각을 검증하고 실제 차이만
+  계산한다. 조회하지 못한 Run은 ID가 있어도 관측 수에서 제외한다. Run의 정상 종료,
+  실행 시간, Task 인수·독립 QA·통합 완료는 각각 다른 사실이다.
+- 기존 저널과 Core의 선택적 Run timing을 재사용하며 지표 저장소·관리 Agent를 추가하지
+  않는다. 제품 SDK pin과 설치본은 그대로다. 후보 Host timing의 존재와 현 설치본 지원은
+  구분하고, 없는 업무 지표를 0이나 테스트 통과 건수로 대신하지 않는다.
+- backend 집중 검사 13개는 정확한 현재 핀·다른 Workspace 거부·현재 등록 변경·오류
+  관측·구형 Host·접근자 및 잘못된 시각을 검증한다. 사용한 Core 응답은 fixture이므로
+  실제 AI 수행 시간이나 운영 속도가 개선됐다는 증거가 아니다.
+- `4811fd2`에 이 묶음만 반영한 고정 SDK 사본의 타입·빌드와 backend/UI 16개가
+  통과했다. 독립 UI 검사는 390/1440px의 시스템 탭 mount·다른 탭 unmount·넘침과
+  잘못된 DTO 거부를 확인했다. 캡처 직접 검토에서 발견한 표 글자 대비도 수정했다.
+  후보 SDK `f0c300d` 별도 사본의 타입·backend 13개 호환 검사도 통과했다.
+  실제 설치본·모델 실행·업무 대기 시간·POLICY-EXEC-12 전체는 계속 미인수다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)

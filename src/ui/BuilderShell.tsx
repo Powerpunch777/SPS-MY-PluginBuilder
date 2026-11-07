@@ -491,7 +491,7 @@ type IntegrationManagerViewProps = BuilderShellProps & {
   onRefreshIntegrationManager?(): void;
 };
 
-function SystemView({ props }: { props: IntegrationManagerViewProps }) {
+function SystemView({ props, executionMetrics }: { props: IntegrationManagerViewProps; executionMetrics?: ReactNode }) {
   const aiLabel = props.snapshot.integrations.ai === "ready" ? "사용 가능" : props.snapshot.integrations.ai === "unavailable" ? "사용 불가" : "설정되지 않음";
   const githubLabel = props.snapshot.integrations.github === "ready" ? "사용 가능" : props.snapshot.integrations.github === "unavailable" ? "사용 불가" : "설정되지 않음";
   return <div className="builder-page builder-system-page"><div className="builder-page-intro"><h2>Workspace 상태</h2><p>이 Workspace의 AI와 GitHub 연결 상태입니다.</p></div>
@@ -509,7 +509,7 @@ function SystemView({ props }: { props: IntegrationManagerViewProps }) {
       <IntegrationCard detail="저장소 및 Actions 연동 상태" icon={GitFork} state={githubLabel} title="GitHub" />
     </section><section className="builder-card"><h2>Runner 정보</h2>
       <div className="builder-empty-card builder-runner-unavailable"><Server /><strong>Runner 정보가 아직 연결되지 않았습니다</strong><p>접속 상태, 운영체제, 라벨, 최근 작업은 현재 화면에서 확인할 수 없습니다.</p></div>
-    </section></div>
+    </section></div>{executionMetrics}
   </div>;
 }
 
@@ -591,7 +591,7 @@ function ConsultationImport({ onImport }: { onImport: NonNullable<BuilderShellPr
 }
 
 export function BuilderShell(props: IntegrationManagerViewProps & { productSelection?: ReactNode; finalReview?: ReactNode;
-  documentsLoading?: boolean; documentsError?: string | null; firstDesignReview?: ReactNode; changeImpact?: ReactNode }) {
+  documentsLoading?: boolean; documentsError?: string | null; firstDesignReview?: ReactNode; changeImpact?: ReactNode; executionMetrics?: ReactNode }) {
   const [view, setView] = useState<BuilderView>("lead");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -637,7 +637,7 @@ export function BuilderShell(props: IntegrationManagerViewProps & { productSelec
       error={documents.length === 0 ? props.documentsError : null} />
   </div>;
   else if (view === "decisions") content = <DecisionsView drawerOpen={drawerOpen} onDrawerClose={() => setDrawerOpen(false)} onDrawerToggle={() => setDrawerOpen(value => !value)} props={props} />;
-  else content = <SystemView props={props} />;
+  else content = <SystemView props={props} executionMetrics={props.executionMetrics} />;
 
   return <div className="builder-shell">
     <style>{flowCss}{builderCss}</style>
