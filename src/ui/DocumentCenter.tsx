@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
+import { Download } from "lucide-react";
 import { selectProjectDocuments, parseDocumentCenterQuery, type DocumentCenterQuery } from "../domain/document-center.ts";
+import { exportDocumentMarkdown, safeDocumentMarkdownFilename } from "../domain/document-markdown-export.ts";
 import type { BuilderDocument, DocumentCategory, DocumentFreshnessStatus, DocumentSourceKind } from "../domain/model.ts";
 
 export type DocumentCenterProps = Readonly<{
@@ -73,6 +75,7 @@ export function DocumentCenter({ documents, loading = false, error = null }: Doc
     ?? view.items[0] ?? null;
   const isFilteredOut = Boolean(selected && !view.items.some(document => document.id === selected.id));
   const hasFilters = Boolean(searchText.trim() || query.category || query.sourceKind || query.approvalStatus || query.freshnessStatus || query.relatedId);
+  const canExport = Boolean(selected && selected.bodyAvailable !== false && !loading && !error);
 
   function updateQuery(field: keyof DocumentCenterQuery, value: string) {
     setQuery(previous => parseDocumentCenterQuery({ ...previous, [field]: value }));
@@ -80,6 +83,24 @@ export function DocumentCenter({ documents, loading = false, error = null }: Doc
   function reset() {
     setQuery(initialQuery());
     setSearchText("");
+  }
+
+  function downloadSelected() {
+    if (!canExport || !selected) return;
+    try {
+      const markdown = exportDocumentMarkdown(selected, new Date().toISOString());
+      const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = safeDocumentMarkdownFilename(selected.title);
+      anchor.hidden = true;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch {
+      // Invalid or unavailable snapshot data must not produce a partial export.
+    }
   }
 
   return <section className="sps-document-center" aria-labelledby="sps-dc-title">
@@ -149,7 +170,13 @@ export function DocumentCenter({ documents, loading = false, error = null }: Doc
             : <p className="sps-dc-empty" role="status">{searchText.trim() ? "검색어와 일치하는 문서가 없습니다." : "현재 필터에 해당하는 문서가 없습니다."}</p>}
         </section>
         <section className="sps-dc-detail" aria-label="선택한 문서">
-          <h3>문서 상세</h3>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <h3>문서 상세</h3>
+            <button className="sps-dc-reset" type="button" aria-label="선택 문서 Markdown 내보내기"
+              title="Markdown 내보내기" disabled={!canExport} onClick={downloadSelected}>
+              <Download size={14} aria-hidden="true" />
+            </button>
+          </div>
           {selected ? <>
             {isFilteredOut && <p className="sps-dc-empty">선택 문서는 현재 필터 결과 밖에 있습니다. 선택은 유지됩니다.</p>}
             <h4>{selected.title}</h4>
