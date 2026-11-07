@@ -3,6 +3,7 @@ import { taskPacketRecordDigest, type TaskPacketRecord } from "./domain/task-pac
 import { exactToolRecord } from "./lead-tool-authority.ts";
 import { resolveCtoTaskAuthority } from "./task-packet-tools.ts";
 import { createTaskQaRunReferenceStore, type TaskQaRunReference } from "./task-qa-run-references.ts";
+import { createTaskQaReportStore } from "./task-qa-reports.ts";
 
 const TOOL = "builder.read-protected-task-qa-history";
 const hash = /^[a-f0-9]{64}$/u;
@@ -79,6 +80,7 @@ export async function readProtectedTaskQaHistory(params: unknown, runContext: un
   const scope = { workspaceId: authority.context.companyId, projectId, ctoId, workstreamId, qaTaskId };
   const store = createTaskQaRunReferenceStore(scope, authority.state);
   const page = await store.publishedPage(input.cursor as string | null | undefined ?? null, 10);
+  const reportHistory = await createTaskQaReportStore(scope, authority.state).recent(50);
   const board = await authority.store.current();
   const packets = board?.revision.packets ?? [];
   const entries = [];
@@ -109,10 +111,28 @@ export async function readProtectedTaskQaHistory(params: unknown, runContext: un
     await authority.check();
     const latest = await authority.store.current();
     if (!packetPinsCurrent(reference, latest?.revision.packets ?? [])) freshness = "stale";
-    entries.push(Object.freeze({ sequence, reference, freshness, core, qaVerdict: "not-established" as const }));
+    const qaReports = [];
+    for (const { revision: report } of reportHistory.revisions.filter(item => item.revision.reference.revisionId === reference.revisionId)) {
+      let authorRun: "succeeded" | "running" | "not-succeeded" | "unknown" = "unknown";
+      try {
+        const run = await platform.agents.sessions.getRun(report.author.sessionId, scope.workspaceId, report.author.runId);
+        if (run.runId === report.author.runId && run.cancellationRequested === false) {
+          authorRun = run.status === "succeeded" ? "succeeded" : run.status === "running" ? "running" : "not-succeeded";
+        }
+      } catch { /* A stored report remains history, not evidence of a successful author run. */ }
+      await authority.check();
+      qaReports.push(Object.freeze({ revisionId: report.revisionId, authoredVerdict: report.verdict,
+        coreReceiptMatches: core.status === "available" ? core.receiptDigest === report.coreReceiptDigest : "unknown",
+        authorRun, checkedCriteria: report.checks.length,
+        failedCriteria: report.checks.filter(check => check.verdict === "failed").length,
+        untestedCriteria: report.checks.filter(check => check.verdict === "not-tested").length }));
+    }
+    entries.push(Object.freeze({ sequence, reference, freshness, core, qaReports: Object.freeze(qaReports),
+      qaVerdict: "not-established" as const }));
   }
   await authority.check();
   return Object.freeze({ status: "read" as const, scope: Object.freeze(scope), entries: Object.freeze(entries),
-    nextCursor: page.nextCursor, freshnessScope: "task-packets-and-source-only" as const,
+    nextCursor: page.nextCursor, qaReportHistoryTruncated: reportHistory.hasMore,
+    freshnessScope: "task-packets-and-source-only" as const,
     executionStarted: false, qaVerdict: "not-established" as const });
 }

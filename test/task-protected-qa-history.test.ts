@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { readProtectedTaskQaHistory } from "../src/task-protected-qa-history.ts";
 import { recordTaskQaRunReference } from "../src/task-qa-run-references.ts";
+import { createTaskQaRunReferenceStore } from "../src/task-qa-run-references.ts";
+import { createTaskQaReportStore, taskQaCriteria } from "../src/task-qa-reports.ts";
 import { createTaskPacketStore } from "../src/task-packet-tools.ts";
 import { taskPacketRecordDigest } from "../src/domain/task-packets.ts";
 import { workstreamInstructionDigest } from "../src/cto-delivery-store.ts";
@@ -108,4 +110,33 @@ test("wrong CTO context and malformed cursors are denied before reading a Core r
   await assert.rejects(readProtectedTaskQaHistory(f.params, ctx(), f.f.platform));
   await assert.rejects(readProtectedTaskQaHistory({ ...f.params, cursor: 3 }, f.runContext, f.f.platform), /cursor/);
   assert.equal(f.coreCalls, 0);
+});
+
+test("authored QA verdict, its Core receipt match and the author turn are separate historical facts", async () => {
+  const f = await setup();
+  const scope = { workspaceId: W, projectId: P, ctoId: CTO, workstreamId: "ws-1", qaTaskId: "qa-1" };
+  const found = await createTaskQaRunReferenceStore(scope, f.f.state).findRun(RUN);
+  if (found.status !== "found") throw new Error("fixture reference missing");
+  const authorRunId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const content = { schemaVersion: 1, reference: found.reference, coreReceiptDigest: f.coreReceipt.receipt.digest,
+    coreStatus: "succeeded", author: { agentId: f.target.qaWorker.agentId, sessionId: f.target.qaWorker.sessionId, runId: authorRunId },
+    checks: taskQaCriteria(["Assigned QA acceptance"], ["All checks pass"]).map(criterion => ({ ...criterion,
+      verdict: "passed", note: "Fixture criterion assessment." })), summary: "Fixture report only.", verdict: "passed" };
+  const revisionId = "task-qa-report-v1:" + createHash("sha256").update(JSON.stringify(content), "utf8").digest("hex");
+  await createTaskQaReportStore(scope, f.f.state).publish({ expectedBaseRevisionId: null, revision: { ...content, revisionId } });
+  const getRun = f.f.platform.agents.sessions.getRun;
+  let authorStatus = "running";
+  Object.assign(f.f.platform.agents.sessions, { async getRun(sessionId: string, companyId: string, runId: string) {
+    if (sessionId === f.target.qaWorker.sessionId && runId === authorRunId) return { runId, status: authorStatus,
+      cancellationRequested: false, termination: "not_applicable", errorCode: null, error: null };
+    return getRun(sessionId, companyId, runId);
+  } });
+  let page = await f.read();
+  assert.deepEqual(page.entries[0]?.qaReports[0], { revisionId, authoredVerdict: "passed", coreReceiptMatches: true,
+    authorRun: "running", checkedCriteria: 2, failedCriteria: 0, untestedCriteria: 0 });
+  assert.equal(page.qaVerdict, "not-established");
+  authorStatus = "succeeded";
+  page = await f.read();
+  assert.equal(page.entries[0]?.qaReports[0]?.authorRun, "succeeded");
+  assert.equal(page.qaVerdict, "not-established", "neither a finished model turn nor a report publishes CTO VERIFIED");
 });
