@@ -77,3 +77,42 @@ test("registered integration roles cannot impersonate one another or final appro
   assert.ok(!CTO_SESSION_EXECUTION_POLICY.toolNames.includes("builder.publish-integration-plan"));
   assert.ok(INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames.every(name => !name.includes("approve") && !name.includes("publish-design")));
 });
+
+test("Main pins both validation templates without issuing technical approval or creating a run", async () => {
+  const f = await setup();
+  const plans = { ci: { approvalTemplateId: "11111111-1111-4111-8111-111111111111", planSha256: "a".repeat(64) },
+    e2e: { approvalTemplateId: "22222222-2222-4222-8222-222222222222", planSha256: "b".repeat(64) } };
+  const result = await publishIntegrationPlan({ ...f.input, validationPlans: plans }, ctx(), f.platform);
+  assert.equal(result.status, "published");
+  assert.equal(result.executionStarted, false);
+  assert.equal(result.technicalAuthority, "separate-host-grants-required");
+  const saved = (await createIntegrationPlanStore(W, f.state).current())!.revision;
+  assert.deepEqual(saved.validationPlans, plans);
+  assert.ok(Object.isFrozen(saved.validationPlans!.ci));
+  assert.equal(f.sent.length, 0);
+  assert.throws(() => parseIntegrationPlan({ ...saved, validationPlans: { ...plans,
+    ci: { ...plans.ci, planSha256: "c".repeat(64) } } }), /digest/);
+  assert.throws(() => parseIntegrationPlan({ ...saved, validationPlans: { ...plans,
+    e2e: { ...plans.e2e, approvalTemplateId: plans.ci.approvalTemplateId } } }), /digest/);
+});
+
+test("incomplete or caller-asserted validation authority never enters the Main plan", async () => {
+  const f = await setup();
+  const ci = { approvalTemplateId: "11111111-1111-4111-8111-111111111111", planSha256: "a".repeat(64) };
+  for (const plans of [{ ci }, { ci, e2e: { ...ci, approved: true } }, { ci, e2e: { ...ci, command: "npm test" } },
+    { ci, e2e: { ...ci, planSha256: "not-a-hash" } }, { ci, e2e: { ...ci, approvalTemplateId: "other-workspace" } }, null]) {
+    await assert.rejects(() => publishIntegrationPlan({ ...f.input, validationPlans: plans }, ctx(), f.platform));
+  }
+  assert.equal(await createIntegrationPlanStore(W, f.state).current(), null);
+  assert.equal(f.hostCalls, 0);
+});
+
+test("legacy integration plans retain their exact serialized identity without validation configuration", async () => {
+  const f = await setup();
+  await publishIntegrationPlan(f.input, ctx(), f.platform);
+  const saved = (await createIntegrationPlanStore(W, f.state).current())!.revision;
+  assert.equal(Object.hasOwn(saved, "validationPlans"), false);
+  const { revisionId, ...content } = saved;
+  assert.equal(revisionId, `integration-plan-v1:${hash(content)}`);
+  assert.deepEqual(parseIntegrationPlan(saved), saved);
+});

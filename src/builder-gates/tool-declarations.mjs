@@ -3,11 +3,15 @@ const uuid = { type: "string", format: "uuid" };
 const branch = { type: "string", minLength: 1, maxLength: 240 };
 export const PUBLISH_INTEGRATION_PLAN_TOOL = Object.freeze({
   name: "builder.publish-integration-plan", displayName: "Publish the current integration plan",
-  description: "Main records the candidate Source/branch and exact current Baseline/UI scope. The candidate must differ from the protected base branch. This workflow plan grants no Git, CLI or Runner authority and starts no run. Host grants are separately checked for every effect.",
+  description: "Main records the candidate Source/branch and exact current Baseline/UI scope. Optional validationPlans pin separate Host-approved CI and E2E template IDs and test-plan hashes; these are workflow references, not proof of technical approval or test execution. The candidate must differ from the protected base branch. This workflow plan grants no Git, CLI or Runner authority and starts no run. Host grants are separately checked for every effect.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["expectedBaseRevisionId", "sourceId", "folderKey", "baseBranch", "baseCommit", "candidateBranch"],
     properties: { expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 }, sourceId: uuid, folderKey: id,
-      baseBranch: branch, baseCommit: { type: "string", pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" }, candidateBranch: branch } },
+      baseBranch: branch, baseCommit: { type: "string", pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" }, candidateBranch: branch,
+      validationPlans: { type: "object", additionalProperties: false, required: ["ci", "e2e"], properties:
+        Object.fromEntries(["ci", "e2e"].map(stage => [stage, { type: "object", additionalProperties: false,
+          required: ["approvalTemplateId", "planSha256"], properties: { approvalTemplateId: uuid,
+            planSha256: { type: "string", pattern: "^[a-f0-9]{64}$" } } }])) } } },
 });
 const eventScope = { type: "object", additionalProperties: false, required: ["workstreamId", "eventId"],
   properties: { workstreamId: id, eventId: id } };

@@ -14,12 +14,29 @@ const SHA = /^[a-f0-9]{64}$/u;
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const BRANCH = /^(?!\/)(?!.*(?:\.\.|\.lock(?:\/|$)|\/\.|\/\/|@\{))[A-Za-z0-9._/-]{1,240}(?<!\.)$/u;
 
+export type IntegrationValidationPlan = Readonly<{ approvalTemplateId: string; planSha256: string }>;
+export type IntegrationValidationPlans = Readonly<{ ci: IntegrationValidationPlan; e2e: IntegrationValidationPlan }>;
+
 export type IntegrationPlan = Readonly<{
   schemaVersion: 1; revisionId: string; workspaceId: string;
   baselineRevisionId: string; baselineDigest: string; uiRevisionId: string; uiDigest: string;
   sourceId: string; folderKey: string; baseBranch: string; baseCommit: string; baseTree: string; candidateBranch: string;
+  validationPlans?: IntegrationValidationPlans;
   author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number }>;
 }>;
+
+function validationPlans(value: unknown): IntegrationValidationPlans {
+  const plans = exactToolRecord(value, ["ci", "e2e"]);
+  const parse = (input: unknown): IntegrationValidationPlan => {
+    const row = exactToolRecord(input, ["approvalTemplateId", "planSha256"]);
+    if (typeof row.approvalTemplateId !== "string" || !UUID.test(row.approvalTemplateId)
+      || typeof row.planSha256 !== "string" || !SHA.test(row.planSha256)) {
+      throw new TypeError("Integration validation requires an exact Host template ID and plan hash.");
+    }
+    return Object.freeze({ approvalTemplateId: row.approvalTemplateId, planSha256: row.planSha256 });
+  };
+  return Object.freeze({ ci: parse(plans.ci), e2e: parse(plans.e2e) });
+}
 
 function id(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/u.test(value)) throw new TypeError("A bounded integration identifier is required.");
@@ -28,7 +45,7 @@ function id(value: unknown): string {
 
 export function parseIntegrationPlan(value: unknown): IntegrationPlan {
   const row = exactToolRecord(value, ["schemaVersion", "revisionId", "workspaceId", "baselineRevisionId", "baselineDigest",
-    "uiRevisionId", "uiDigest", "sourceId", "folderKey", "baseBranch", "baseCommit", "baseTree", "candidateBranch", "author"]);
+    "uiRevisionId", "uiDigest", "sourceId", "folderKey", "baseBranch", "baseCommit", "baseTree", "candidateBranch", "author"], ["validationPlans"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision"]);
   if (row.schemaVersion !== 1 || [row.workspaceId, row.sourceId, author.agentId, author.sessionId, author.runId]
     .some(value => typeof value !== "string" || !UUID.test(value))
@@ -42,6 +59,7 @@ export function parseIntegrationPlan(value: unknown): IntegrationPlan {
     uiRevisionId: id(row.uiRevisionId), uiDigest: row.uiDigest as string, sourceId: row.sourceId as string,
     folderKey: row.folderKey, baseBranch: row.baseBranch as string, baseCommit: row.baseCommit as string,
     baseTree: row.baseTree as string, candidateBranch: row.candidateBranch as string,
+    ...(Object.hasOwn(row, "validationPlans") ? { validationPlans: validationPlans(row.validationPlans) } : {}),
     author: { agentId: author.agentId as string, sessionId: author.sessionId as string, runId: author.runId as string,
       selectionRevision: author.selectionRevision as number } };
   const revisionId = `integration-plan-v1:${digest(content)}`;
@@ -92,7 +110,8 @@ export async function checkIntegrationPrerequisites(workspaceId: string, workstr
 /** Main approves workflow scope; the Host's separate Git and execution grants
  * remain necessary for every technical effect. No AI run starts here. */
 export async function publishIntegrationPlan(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
-  const input = exactToolRecord(params, ["expectedBaseRevisionId", "sourceId", "folderKey", "baseBranch", "baseCommit", "candidateBranch"]);
+  const input = exactToolRecord(params, ["expectedBaseRevisionId", "sourceId", "folderKey", "baseBranch", "baseCommit", "candidateBranch"], ["validationPlans"]);
+  const selectedValidation = Object.hasOwn(input, "validationPlans") ? validationPlans(input.validationPlans) : undefined;
   const context = parseLeadToolContext(runContext), authority = await resolveLeadToolAuthority(context, platform);
   requireLeadFormalPublicationAuthority(authority);
   if (context.projectId !== undefined && context.projectId !== context.companyId) throw new Error("Integration plan requires this Workspace project.");
@@ -117,6 +136,7 @@ export async function publishIntegrationPlan(params: unknown, runContext: unknow
   const content = { schemaVersion: 1 as const, workspaceId: context.companyId, baselineRevisionId: baseline.revision.revisionId,
     baselineDigest: digest(baseline.revision), uiRevisionId: ui.revision.revisionId, uiDigest: digest(ui.revision), sourceId, folderKey,
     baseBranch, baseCommit: tip.commitSha, baseTree: tip.treeSha, candidateBranch,
+    ...(selectedValidation ? { validationPlans: selectedValidation } : {}),
     author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId, selectionRevision: authority.selectionRevision } };
   const plan = parseIntegrationPlan({ ...content, revisionId: `integration-plan-v1:${digest(content)}` });
   const store = createIntegrationPlanStore(context.companyId, platform.state);
