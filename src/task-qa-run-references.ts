@@ -102,7 +102,6 @@ export function createTaskQaRunReferenceStore(rawScope: TaskQaReferenceScope, st
 
 /** Called only after the production resolver validates a real Core receipt and current QA authority. */
 export async function recordTaskQaRunReference(state: RevisionState, target: ReferenceTarget, runId: string) {
-  await target.assertCurrent();
   const selected = scope({ workspaceId: target.workspaceId, projectId: target.projectId, ctoId: target.ctoId,
     workstreamId: target.workstreamId, qaTaskId: target.qa.packet.taskId });
   const value = reference(selected, { implementationTaskId: target.implementation.packet.taskId,
@@ -114,11 +113,13 @@ export async function recordTaskQaRunReference(state: RevisionState, target: Ref
     subjectKeySha256: target.subjectKeySha256, runId });
   const store = createTaskQaRunReferenceStore(selected, state);
   const prior = await store.findRun(runId);
-  await target.assertCurrent();
-  if (prior.status === "found") return prior.reference.revisionId === value.revisionId
-    ? { status: "existing" as const, reference: prior.reference } : { status: "conflict" as const };
-  if (prior.status !== "not-found") return prior;
+  if (prior.status !== "not-found") {
+    await target.assertCurrent();
+    return prior.status === "found" ? prior.reference.revisionId === value.revisionId
+      ? { status: "existing" as const, reference: prior.reference } : { status: "conflict" as const } : prior;
+  }
   const current = await store.current();
+  // The lookup group is read-only; revalidate once before publication and again before success.
   await target.assertCurrent();
   try {
     const result = await store.publish({ expectedBaseRevisionId: current?.revision.revisionId ?? null, revision: value });

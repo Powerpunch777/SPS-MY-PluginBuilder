@@ -105,9 +105,12 @@ export async function readAcceptedTaskSourceForQa(input: Readonly<{ workspaceId:
   const stale = staleReason(current, submission);
   if (stale) return Object.freeze({ status: "stale", reason: stale });
   const root = await sourceRootCurrent(submission, input.platform);
-  await input.assertCurrent();
-  if (root !== "current") return Object.freeze({ status: root === "unsupported" ? "unsupported" : "stale",
-    reason: root === "unsupported" ? "source-root-match-api-unavailable" : "task-source-root-changed" });
+  if (root !== "current") {
+    await input.assertCurrent();
+    return Object.freeze({ status: root === "unsupported" ? "unsupported" : "stale",
+      reason: root === "unsupported" ? "source-root-match-api-unavailable" : "task-source-root-changed" });
+  }
+  // verifyProducerRun starts with the same current-authority check before its first read.
   const producerRun = await verifyProducerRun(current, submission, input.platform);
   if (producerRun === "unsupported") return Object.freeze({ status: "unsupported", reason: "task-session-run-receipt-api-unavailable" });
   const acceptance = await readCtoTaskSourceAcceptanceForSubmission({ workspaceId: input.workspaceId, submission, state });
