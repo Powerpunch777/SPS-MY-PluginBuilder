@@ -46,7 +46,10 @@ const shown = (value: unknown) => {
 
 function readBundle(value: unknown): ReadableBundle | null {
   if (!plain(value) || !["PROPOSED", "APPROVED"].includes(String(value.status)) || !text(value.revisionId)
-    || !text(value.workspaceId) || !text(value.projectId) || value.priorBaseline !== null
+    || !text(value.workspaceId) || !text(value.projectId)
+    || value.priorBaseline !== null && (!plain(value.priorBaseline) || !text(value.priorBaseline.revisionId)
+      || !Number.isSafeInteger(value.priorBaseline.sequence) || (value.priorBaseline.sequence as number) < 1
+      || !digest(value.priorBaseline.digest))
     || !text(value.draftRevisionId) || !digest(value.draftDigest) || !plain(value.draft)
     || !Array.isArray(value.draft.sourceIds)
     || !plain(value.draft.specification) || !plain(value.pack) || !text(value.pack.packId) || !text(value.pack.version)
@@ -183,12 +186,12 @@ export function FirstDesignReviewPanel({ view, onApprove }: FirstDesignReviewPan
   const bundle = snapshot?.bundle;
   return <section className="sps-fdr" aria-labelledby="sps-fdr-title">
     <style>{CSS}</style>
-    <header><h2 id="sps-fdr-title">최초 설계 검토</h2>
-      <p className="sps-fdr-muted">설계 초안, 요구사항별 원문 핀, 제안 규칙 버전을 확인합니다. 이 화면에서 규칙을 작성하거나 수정하지 않습니다.</p>
+    <header><h2 id="sps-fdr-title">설계 검토</h2>
+      <p className="sps-fdr-muted">현재 설계, 원문 핀, 제안 규칙 버전을 확인합니다. Baseline 승인에 함께 반영됩니다.</p>
     </header>
-    {view.status === "loading" ? <p className="sps-fdr-state" role="status">최초 설계 검토 자료를 불러오는 중입니다.</p>
-      : view.status === "empty" ? <p className="sps-fdr-state" role="status">검토할 최초 설계 제안이 없습니다.</p>
-      : view.status === "error" ? <p className="sps-fdr-state" role="alert">최초 설계 검토 자료를 확인하지 못했습니다. 새로고침해 주세요.</p>
+    {view.status === "loading" ? <p className="sps-fdr-state" role="status">설계 검토 자료를 불러오는 중입니다.</p>
+      : view.status === "empty" ? <p className="sps-fdr-state" role="status">검토할 설계 제안이 없습니다.</p>
+      : view.status === "error" ? <p className="sps-fdr-state" role="alert">설계 검토 자료를 확인하지 못했습니다. 새로고침해 주세요.</p>
       : !snapshot ? <p className="sps-fdr-state" role="alert">제안 구조가 올바르지 않아 검토와 승인을 차단했습니다.</p>
       : <>
         {view.status === "stale" && <p className="sps-fdr-state sps-fdr-warning" role="status">이 제안은 현재 head와 일치하지 않습니다. 내용은 조회할 수 있지만 승인은 비활성화됩니다.</p>}
@@ -196,6 +199,8 @@ export function FirstDesignReviewPanel({ view, onApprove }: FirstDesignReviewPan
         <section className="sps-fdr-section" aria-label="정확한 설계 초안">
           <h3>설계 초안 원본</h3>
           <div className="sps-fdr-grid">
+            <DataItem label="이전 Baseline" value={bundle!.priorBaseline ? `${bundle!.priorBaseline.revisionId} · seq ${bundle!.priorBaseline.sequence}` : "최초 Baseline"} mono />
+            {bundle!.priorBaseline && <DataItem label="이전 Baseline digest (SHA-256)" value={bundle!.priorBaseline.digest} mono />}
             <DataItem label="DesignDraft revision" value={bundle!.draftRevisionId} mono />
             <DataItem label="Draft digest (SHA-256)" value={bundle!.draftDigest} mono />
             <DataItem label="Workspace / Project" value={bundle!.workspaceId + " / " + bundle!.projectId} mono />
@@ -262,7 +267,7 @@ export function FirstDesignReviewPanel({ view, onApprove }: FirstDesignReviewPan
         </section>
         <section className="sps-fdr-section" aria-label="사용자 확인 및 승인">
           <h3>사용자 확인</h3>
-          <p className="sps-fdr-muted">승인은 표시된 Draft, 원문 핀, pack/version 그대로에만 적용됩니다. 규칙 작성·QA 합격·Baseline 발행을 뜻하지 않습니다.</p>
+          <p className="sps-fdr-muted">확인은 표시된 설계·원문 핀·pack/version에 묶이며, Main의 Baseline 발행 때 함께 재검증됩니다. QA 합격이나 실행 권한은 아닙니다.</p>
           {bundle!.status === "APPROVED" && <p role="status">이 제안에는 사용자 승인 기록이 있습니다.</p>}
           {actionState === "stale" && <p className="sps-fdr-warning" role="status">head가 바뀌었습니다. 최신 제안을 다시 불러오세요.</p>}
           {actionState === "error" && <p className="sps-fdr-danger" role="alert">승인 요청 결과를 확인하지 못했습니다. 새로고침 후 상태를 확인하세요.</p>}

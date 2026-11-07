@@ -289,11 +289,11 @@ test("approval requires the current exact proposal revision and never auto-retri
   assert.equal(proposal.status, "published");
 });
 
-test("first-design review proposal is unavailable once an approved Baseline exists", async () => {
+test("the same review journal proposes and approves follow-up bundles pinned to the exact prior Baseline", async () => {
   const f = fixture();
   await f.published;
   const baseline = createDesignBaselineStore(WORKSPACE, PROJECT, f.state);
-  await baseline.publish({ expectedBaseRevisionId: null, revision: {
+  const first = await baseline.publish({ expectedBaseRevisionId: null, revision: {
     projectId: PROJECT, revisionId: "baseline-v1", sourceDraftRevisionId: "draft-v1", draftDigest: "a".repeat(64),
     createdAt: "2026-11-06T00:00:02.000Z", author: { agentId: AGENT, sessionId: SESSION, runId: RUN, selectionRevision: 1 },
     userDecision: { sourceId: SOURCE_ID, sourceSha256: digest(SOURCE_TEXT), interpretation: "Keep onboarding clear." },
@@ -302,5 +302,38 @@ test("first-design review proposal is unavailable once an approved Baseline exis
       targets: ["sps-plugin"], dataPolicyRef: "policy-v1", approvalEvidenceRef: SOURCE_ID },
     graph: { approvedSpecRevisionId: "spec-v1", graphRevisionId: "graph-v1", entities: [], relations: [], viewLayoutRef: "layout-v1" },
   } });
-  await assert.rejects(proposeFirstDesignReview(f.params, f.runContext, f.platform), /only available before the first Baseline/);
+  assert.equal(first.status, "published");
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  assert.equal(proposal.status, "published");
+  if (proposal.status !== "published") throw new Error("Follow-up review proposal was not published.");
+  assert.deepEqual(proposal.revision.priorBaseline, { revisionId: first.revision.revisionId, sequence: first.sequence,
+    digest: digest(JSON.stringify(first.revision)) });
+  const approved = await approveFirstDesignReview({ projectId: PROJECT,
+    expectedBundleRevisionId: proposal.revision.revisionId }, f.context);
+  if (approved.status !== "published") throw new Error("Follow-up review approval was not published.");
+  assert.equal(approved.revision.priorBaseline?.revisionId, first.revision.revisionId);
+});
+
+test("follow-up review approval conflicts if its observed prior Baseline changes", async () => {
+  const f = fixture();
+  await f.published;
+  const baseline = createDesignBaselineStore(WORKSPACE, PROJECT, f.state);
+  const first = await baseline.publish({ expectedBaseRevisionId: null, revision: {
+    projectId: PROJECT, revisionId: "baseline-old", sourceDraftRevisionId: "draft-v1", draftDigest: "a".repeat(64),
+    createdAt: "2026-11-06T00:00:02.000Z", author: { agentId: AGENT, sessionId: SESSION, runId: RUN, selectionRevision: 1 },
+    userDecision: { sourceId: SOURCE_ID, sourceSha256: digest(SOURCE_TEXT), interpretation: "Old baseline." },
+    specification: { projectId: PROJECT, revisionId: "spec-old", productTier: "M",
+      requirements: [{ id: "REQ-1", description: "Keep onboarding clear.", acceptanceCriteriaIds: ["AC-1"] }],
+      targets: ["sps-plugin"], dataPolicyRef: "policy-v1", approvalEvidenceRef: SOURCE_ID },
+    graph: { approvedSpecRevisionId: "spec-old", graphRevisionId: "graph-old", entities: [], relations: [], viewLayoutRef: "layout-v1" },
+  } });
+  if (first.status !== "published") throw new Error("Initial test Baseline was not published.");
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (proposal.status !== "published") throw new Error("Follow-up review proposal was not published.");
+  await baseline.publish({ expectedBaseRevisionId: first.revision.revisionId, revision: {
+    ...first.revision, revisionId: "baseline-new", specification: { ...first.revision.specification, revisionId: "spec-new",
+      approvalEvidenceRef: SOURCE_ID }, graph: { ...first.revision.graph, approvedSpecRevisionId: "spec-new", graphRevisionId: "graph-new" },
+  } });
+  assert.deepEqual(await approveFirstDesignReview({ projectId: PROJECT,
+    expectedBundleRevisionId: proposal.revision.revisionId }, f.context), { status: "conflict" });
 });

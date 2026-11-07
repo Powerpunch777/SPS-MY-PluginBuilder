@@ -125,7 +125,21 @@ test("shows exact Draft, source pin IDs and digests, and the specific rule-pack 
       "resume-safe", "new-user", "resume-expired", "account is locked"]) assert.ok(html.includes(value), value);
     assert.match(html, /읽기 전용/u);
     assert.doesNotMatch(html, /<input|<textarea|contenteditable/u);
-    assert.match(html, /QA 합격·Baseline 발행을 뜻하지 않습니다/u);
+    assert.match(html, /QA 합격이나 실행 권한은 아닙니다/u);
+    assert.match(html, /<button[^>]*>정확한 제안 승인/u);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("follow-up review renders the exact prior Baseline revision, sequence, and digest", async () => {
+  const { Panel, temporary } = await loadPanel();
+  try {
+    const ready = fixture();
+    const priorBaseline = { revisionId: "baseline-fixture-r8", sequence: 8, digest: "f".repeat(64) };
+    const followup = { ...ready, bundle: { ...ready.bundle, priorBaseline } };
+    const html = renderToStaticMarkup(createElement(Panel, { view: followup, onApprove() {} }));
+    assert.match(html, /baseline-fixture-r8 · seq 8/u);
+    assert.ok(html.includes(priorBaseline.digest));
+    assert.match(html, /이전 Baseline digest \(SHA-256\)/u);
     assert.match(html, /<button[^>]*>정확한 제안 승인/u);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });

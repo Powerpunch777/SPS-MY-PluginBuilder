@@ -4,7 +4,6 @@ import { firstDesignReviewApprovalRevision, parseDesignBaseline } from "./domain
 import { createDesignDraftStore } from "./design-draft-store.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
-import { readLeadUserTurn } from "./lead-conversations.ts";
 import { assertCurrentFirstDesignApproval } from "./spec-assurance/review-first-design.ts";
 
 const hash = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -48,24 +47,16 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
   const existing = await readDesignBaseline(context.companyId, projectId, platform);
   if ((existing?.revision.revisionId ?? null) !== expectedBaseRevisionId) return changed("baseline");
   const approvalRevisionId = firstDesignReviewApprovalRevision(userSourceId);
+  if (!approvalRevisionId) throw new Error("A current approved design-review bundle covering the exact previous Baseline is required for Baseline publication.");
   const readApproval = () => assertCurrentFirstDesignApproval({ projectId, approvedRevisionId: approvalRevisionId }, context, platform);
-  let sourceSha256: string;
-  if (existing === null) {
-    if (!approvalRevisionId) throw new Error("The first Baseline requires an authenticated first-design review approval.");
-    const approved = await readApproval();
-    if (!approved || approved.bundle.draftRevisionId !== sourceDraftRevisionId
-      || JSON.stringify(approved.bundle.draft) !== JSON.stringify(current.revision.draft)) return changed("approved first-design review");
-    sourceSha256 = approved.bundleDigest;
-  } else {
-    if (!/^lead-turn:[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(userSourceId)) {
-      throw new Error("A new design decision from the current Main user turn is required for this change.");
-    }
-    const turn = await readLeadUserTurn(userSourceId.slice("lead-turn:".length), authority.sessions, platform);
-    if (turn.runId !== context.runId || turn.sessionId !== context.sessionId) {
-      throw new Error("The decision must be the actual user input for this current Lead run/session.");
-    }
-    sourceSha256 = hash(turn.text);
-  }
+  const approved = await readApproval();
+  if (!approved || approved.bundle.draftRevisionId !== sourceDraftRevisionId
+    || JSON.stringify(approved.bundle.draft) !== JSON.stringify(current.revision.draft)
+    || (existing === null ? approved.bundle.priorBaseline !== null : !approved.bundle.priorBaseline
+      || approved.bundle.priorBaseline.revisionId !== existing.revision.revisionId
+      || approved.bundle.priorBaseline.sequence !== existing.sequence
+      || approved.bundle.priorBaseline.digest !== hash(JSON.stringify(existing.revision)))) return changed("approved design-review bundle or previous Baseline");
+  const sourceSha256 = approved.bundleDigest;
   const draft = current.revision.draft;
   if (revisionId === draft.revisionId || specificationRevisionId === draft.specification.revisionId
     || graphRevisionId === draft.graph.graphRevisionId) throw new TypeError("New baseline, specification and Graph revision IDs are required.");
@@ -83,18 +74,30 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
     if (!latest || hash(JSON.stringify(latest.revision)) !== baseline.draftDigest) {
       throw new Error("The source design changed. Read and reconcile before recording a decision; do not automatically retry.");
     }
+    const latestBaseline = await readDesignBaseline(context.companyId, projectId, platform);
+    const matchesPrior = (latestBaseline?.revision.revisionId ?? null) === expectedBaseRevisionId
+      && (latestBaseline === null ? approved.bundle.priorBaseline === null : Boolean(approved.bundle.priorBaseline
+        && approved.bundle.priorBaseline.revisionId === latestBaseline.revision.revisionId
+        && approved.bundle.priorBaseline.sequence === latestBaseline.sequence
+        && approved.bundle.priorBaseline.digest === hash(JSON.stringify(latestBaseline.revision))));
+    const matchesPublished = Boolean(latestBaseline && latestBaseline.revision.revisionId === baseline.revisionId
+      && latestBaseline.sequence === (existing?.sequence ?? 0) + 1
+      && JSON.stringify(latestBaseline.revision) === JSON.stringify(baseline));
+    if (!matchesPrior && !matchesPublished) {
+      throw new Error("The previous Baseline changed. Read and reconcile before publication; do not automatically retry.");
+    }
     await authority.check();
   };
   const guarded: RevisionState = { get: async key => { await check(); const value = await state.get(key); await check(); return value; },
     compareAndSet: state.compareAndSet ? async (...args) => {
       await check();
-      if (approvalRevisionId && args[0].stateKey.startsWith("design-baseline-head.v1.")) {
+      if (args[0].stateKey.startsWith("design-baseline-head.v1.")) {
         const approved = await readApproval().catch(async error => {
           if (await readDesignBaseline(context.companyId, projectId, platform)) return null;
           throw error;
         });
         if (!approved && await readDesignBaseline(context.companyId, projectId, platform)) return { swapped: false };
-        if (!approved || approved.bundleDigest !== sourceSha256) throw new Error("First-design approval changed before Baseline publication.");
+        if (!approved || approved.bundleDigest !== sourceSha256) throw new Error("Design-review approval changed before Baseline publication.");
       }
       const receipt = await state.compareAndSet!(...args);
       await check();

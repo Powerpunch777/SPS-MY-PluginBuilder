@@ -130,14 +130,14 @@ const itemDecisions = { type: "array", maxItems: 1000, items: { type: "object", 
     reason: { type: "string", minLength: 1, maxLength: 4096 }, sourceIds: idList(1000),
   } } };
 export const READ_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
-  name: "builder.read-first-design-review", displayName: "Read the initial design review",
-  description: "Main reads the latest initial design review, its exact head and any recorded user approval. Does not publish a Baseline.",
+  name: "builder.read-first-design-review", displayName: "Read the design review",
+  description: "Main reads the latest initial or follow-up design review, its exact head and any recorded user approval. The approved bundle is included in the corresponding Baseline publication; this read does not publish a Baseline.",
   parametersSchema: { type: "object", additionalProperties: false, properties: {} },
 });
 
 export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL = Object.freeze({
-  name: "builder.propose-first-design-review", displayName: "Propose the initial design review",
-  description: "Main proposes original-source links and a versioned rule pack for the exact current DesignDraft before the first Baseline. Optional designModel supplies explicit design facts, coverage rules/targets, finite design scenarios, source-linked item decisions and exact AC quotes for the same user review. These are static design inputs, not runtime observations or QA. Identity and source hashes are server-derived; the exact proposal must be confirmed by the user in Builder.",
+  name: "builder.propose-first-design-review", displayName: "Propose a design review",
+  description: "Main proposes original-source links and a versioned rule pack for the exact current DesignDraft, before the first Baseline or pinned to the exact current Baseline for a follow-up. Optional designModel supplies explicit design facts, coverage rules/targets, finite design scenarios, source-linked item decisions and exact AC quotes for the same user review. These are static design inputs, not runtime observations or QA. Identity, prior-Baseline pins and source hashes are server-derived; the exact proposal must be confirmed by the user in Builder and included in Main Baseline publication.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["projectId", "expectedDraftRevisionId", "expectedReviewHeadRevisionId", "pack", "sourcePins"],
     properties: { projectId: firstId, expectedDraftRevisionId: firstId, expectedReviewHeadRevisionId: { type: ["string", "null"], maxLength: 160 },

@@ -92,4 +92,37 @@ test("Main Baseline publication produces a pinned body and the registered read p
     companyId: workspace, actor: { type: "user", companyId: workspace } });
   assert.equal(replay.replayed, true);
   assert.equal(replay.document.documentRevisionId, body.read.document.documentRevisionId);
+
+  const baselineRead = contract.data.find(row => row.key === "builder.design-baseline").handler;
+  const previous = await baselineRead({ companyId: workspace, projectId: workspace }, f.platform);
+  const followup = await propose({ projectId: workspace, expectedDraftRevisionId: "draft-1",
+    expectedReviewHeadRevisionId: approved.revision.revisionId,
+    pack: { packId: "doc-check", version: "2", applicability: {}, rules: [{ id: "doc-rule-v2", requirementIds: ["REQ-1"],
+      appliesWhen: {}, requiresCheck: true }], transitions: [], exceptions: [], excludedCombinations: [] },
+    sourcePins: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: `consultation-${uuid(5)}` }] }, f.context, f.platform);
+  assert.equal(followup.data.status, "published");
+  assert.deepEqual(followup.data.revision.priorBaseline, { revisionId: previous.baseline.revisionId,
+    sequence: previous.sequence, digest: hash(JSON.stringify(previous.baseline)) });
+  const followupView = await review({ companyId: workspace }, f.platform);
+  assert.equal(followupView.status, "ready");
+  const followupApproval = await approve({ proposalRevisionId: followupView.proposalRevisionId,
+    expectedHead: followupView.expectedHead }, { ...f.platform, companyId: workspace,
+    actor: { type: "user", companyId: workspace, userId: "fixture-user" } });
+  assert.equal(followupApproval.status, "published");
+  const next = await publishLeadDesignBaseline({ projectId: workspace, expectedBaseRevisionId: previous.baseline.revisionId,
+    sourceDraftRevisionId: "draft-1", revisionId: "baseline-2",
+    userSourceId: `first-design-review:${followupApproval.revision.revisionId}`,
+    interpretation: "The user confirmed this updated design and rule version." }, f.context, f.platform);
+  assert.equal(next.data.status, "published", JSON.stringify(next));
+  const current = await baselineRead({ companyId: workspace, projectId: workspace }, f.platform);
+  assert.equal(current.sequence, previous.sequence + 1);
+  assert.equal(current.baseline.userDecision.sourceId, `first-design-review:${followupApproval.revision.revisionId}`);
+  const inspect = contract.tools.find(row => row.name === "builder.inspect-spec-assurance").handler;
+  const d3 = await inspect({ projectId: workspace }, f.context, f.platform);
+  assert.ok(d3.data.result.packVersions.some(item => item.packId === "doc-check" && item.version === "2"));
+  assert.equal(d3.data.result.status, "UNKNOWN");
+  const oldApprovalReplay = await publishLeadDesignBaseline({ projectId: workspace,
+    expectedBaseRevisionId: current.baseline.revisionId, sourceDraftRevisionId: "draft-1", revisionId: "baseline-3",
+    userSourceId: `first-design-review:${approved.revision.revisionId}`, interpretation: "Stale approval." }, f.context, f.platform);
+  assert.equal(oldApprovalReplay.data.status, "conflict");
 });

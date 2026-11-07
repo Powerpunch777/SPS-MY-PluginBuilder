@@ -476,5 +476,5 @@ test("first Baseline consumes its exact approved review, preserving requirement 
   assert.equal(changed.status, "published");
   await assert.rejects(async () => provider({ identity: { ...currentIdentity, specRevisionId: changedSpec.revisionId,
     specDigest: sha256(JSON.stringify(changed.revision.specification)) }, requirementIds: ["remapped-requirement"] }),
-  /does not match the exact approved first-design bundle/);
+  /does not match the exact approved design-review bundle/);
 });

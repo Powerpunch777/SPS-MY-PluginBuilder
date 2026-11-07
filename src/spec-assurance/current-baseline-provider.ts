@@ -74,14 +74,14 @@ function rebindApprovedPack(bundle: NonNullable<Awaited<ReturnType<typeof readFi
     || bundle.approval.attestedBundleRevisionId === bundle.revisionId
     || bundle.workspaceId !== identity.workspaceId || bundle.projectId !== identity.projectId
     || pack.identity.specRevisionId !== bundle.draft.specification.revisionId || pack.identity.specDigest !== draftIdentityDigest) {
-    throw new Error("Approved first-design binding does not match its exact immutable bundle, pack, or approval pins.");
+    throw new Error("Approved design-review binding does not match its exact immutable bundle, pack, or approval pins.");
   }
   return Object.freeze({ ...pack, identity });
 }
 /**
  * Bind assurance reads to the current Builder Baseline and actual source bytes. A later Main
- * baseline may use only the server-selected pack ID after its exact proposal and model receive
- * authenticated user confirmation. Static findings never grant runtime QA or execution authority.
+ * Baseline reads resolve the exact jointly approved design-review bundle referenced by the
+ * published Baseline. Static findings never grant runtime QA or execution authority.
  * Construct this in server-owned code with current Host/session records, never from client data.
  */
 export function createCurrentBaselineAssuranceProvider(input: Readonly<{
@@ -132,7 +132,17 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
         || baseline.sourceDraftRevisionId !== reviewBundle.draftRevisionId
         || baseline.userDecision.sourceSha256 !== bundleDigest
         || !matchesPublishedDraft(reviewBundle.draft, baseline)) {
-        throw new Error("Current Baseline does not match the exact approved first-design bundle, digest, Spec or Graph.");
+        throw new Error("Current Baseline does not match the exact approved design-review bundle, digest, Spec or Graph.");
+      }
+      if (reviewBundle.priorBaseline === null) {
+        if (first.sequence !== 1) throw new Error("Initial design-review approval cannot explain a non-initial Baseline revision.");
+      } else {
+        const prior = await store.publishedRevision(reviewBundle.priorBaseline.revisionId);
+        if (!prior || prior.sequence !== reviewBundle.priorBaseline.sequence
+          || sha256(JSON.stringify(prior.revision)) !== reviewBundle.priorBaseline.digest
+          || prior.revision.revisionId === baseline.revisionId || first.sequence !== prior.sequence + 1) {
+          throw new Error("Follow-up design-review old/new Baseline pins do not form the exact consecutive published change.");
+        }
       }
 
       const approvedPack = rebindApprovedPack(reviewBundle, identity);
@@ -177,7 +187,7 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
         if (!latest || latest.sequence !== first.sequence || JSON.stringify(latest.revision) !== JSON.stringify(baseline)
           || !latestBundle || latestBundle.revisionId !== reviewBundle.revisionId
           || sha256(JSON.stringify(latestBundle)) !== bundleDigest) {
-          throw new Error("Current Baseline or first-design approval binding changed during assurance lookup.");
+          throw new Error("Current Baseline or design-review approval binding changed during assurance lookup.");
         }
       };
       await assertCurrentSnapshot();
