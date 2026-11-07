@@ -5,14 +5,26 @@ import { coverageRulesManifestDigest, evaluateSpecCoverage, SPEC_COVERAGE_LIMITS
 import type { ApprovedSpecRevision } from "../domain/specification-revisions.ts";
 import { exactToolRecord } from "../lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "../solution-revision-store.ts";
+import { parseDesignModelMaterial, type DesignModelMaterial } from "./design-model-material.ts";
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 const ID = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= 160
   && !/[\u0000-\u001f\u007f]/u.test(value);
 const HEX = /^[a-f0-9]{64}$/u;
 const utf8 = new TextEncoder();
-export const specAssurancePackRevisionId = (packId: string, version: string, identity: { specRevisionId: string; specDigest: string }) =>
-  `d3-pack-${sha256(JSON.stringify([packId, version, identity.specRevisionId, identity.specDigest]))}`;
+export const specAssurancePackRevisionId = (packId: string, version: string,
+  identity: { specRevisionId: string; specDigest: string }, designModelDigest?: string) =>
+  `d3-pack-${sha256(JSON.stringify([packId, version, identity.specRevisionId, identity.specDigest,
+    ...(designModelDigest ? [designModelDigest] : [])]))}`;
+export const currentBaselineSpecAssurancePackRevisionId = (packId: string, version: string,
+  identity: { specRevisionId: string; specDigest: string }, baselineRevisionId: string, baselineSequence: number,
+  sourceRefs: readonly SpecAssurancePackSourceRef[], designModelDigest?: string) =>
+  `d3-pack-${sha256(JSON.stringify([packId, version, identity.specRevisionId, identity.specDigest, "current-baseline-v2",
+    baselineRevisionId, baselineSequence, sha256(JSON.stringify(sourceRefs)), ...(designModelDigest ? [designModelDigest] : [])]))}`;
+export const specAssurancePackApprovalRevisionId = (approval: Omit<SpecAssurancePackApproval, "revisionId">) =>
+  `d3-pack-approval-${sha256(JSON.stringify([approval.packId, approval.proposalRevisionId, approval.proposalDigest,
+    approval.baselineRevisionId, approval.baselineSequence, approval.identity, approval.designModelDigest,
+    approval.user.userId, approval.user.agentId, approval.user.sessionId, approval.user.selectionRevision]))}`;
 
 export type SpecAssurancePackSourceRef = Readonly<{
   requirementId: string;
@@ -36,6 +48,22 @@ export type SpecAssurancePackProposal = Readonly<{
   pack: DomainPack;
   rulesManifest: CoverageRulesManifest;
   sourceRefs: readonly SpecAssurancePackSourceRef[];
+  designModel?: DesignModelMaterial;
+}>;
+
+export type SpecAssurancePackApproval = Readonly<{
+  status: "APPROVED";
+  revisionId: string;
+  workspaceId: string;
+  projectId: string;
+  packId: string;
+  proposalRevisionId: string;
+  proposalDigest: string;
+  baselineRevisionId: string;
+  baselineSequence: number;
+  identity: SpecAssurancePackProposal["identity"];
+  designModelDigest: string | null;
+  user: Readonly<{ userId: string; approvedAt: string; agentId: string; sessionId: string; selectionRevision: number }>;
 }>;
 
 export type SpecAssurancePackGap = Readonly<{
@@ -87,7 +115,7 @@ function parseSourceRefs(value: unknown, scopeBindings: SpecAssurancePackProposa
 
 function validateProposal(value: unknown, workspaceId: string, projectId: string, packId: string): SpecAssurancePackProposal {
   const row = exactToolRecord(value, ["status", "revisionId", "workspaceId", "projectId", "baselineRevisionId", "baselineSequence",
-    "identity", "scopeBindings", "author", "createdAt", "pack", "rulesManifest", "sourceRefs"]);
+    "identity", "scopeBindings", "author", "createdAt", "pack", "rulesManifest", "sourceRefs"], ["designModel"]);
   const identity = exactToolRecord(row.identity, ["workspaceId", "projectId", "specRevisionId", "specDigest"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision"]);
   if (row.status !== "PROPOSED" || !ID(row.revisionId) || row.workspaceId !== workspaceId || row.projectId !== projectId
@@ -105,9 +133,7 @@ function validateProposal(value: unknown, workspaceId: string, projectId: string
   if (!pack || pack.packId !== packId || !Array.isArray(pack.rules) || pack.rules.length > SPEC_ASSURANCE_LIMITS.rules) {
     throw new TypeError("Invalid assurance Domain Pack.");
   }
-  if (!ID(pack.version) || row.revisionId !== specAssurancePackRevisionId(packId, pack.version, boundIdentity)) {
-    throw new TypeError("Pack revision ID must be the stable ID for this pack version and specification identity.");
-  }
+  if (!ID(pack.version)) throw new TypeError("Invalid assurance pack version.");
   composeDomainPacks([pack], boundIdentity, []);
   const manifest = row.rulesManifest as CoverageRulesManifest;
   if (!manifest || manifest.digest !== coverageRulesManifestDigest(manifest)
@@ -133,11 +159,48 @@ function validateProposal(value: unknown, workspaceId: string, projectId: string
       runId: author.runId as string, selectionRevision: author.selectionRevision as number }),
     createdAt: row.createdAt, pack, rulesManifest: manifest, sourceRefs,
   };
-  if (utf8.encode(JSON.stringify(proposal)).byteLength > 192 * 1024) throw new TypeError("Assurance pack proposal exceeds 192 KiB.");
+  const designModel = Object.hasOwn(row, "designModel")
+    ? parseDesignModelMaterial(row.designModel, boundIdentity, scopeBindings.map(binding => ({ id: binding.requirementId,
+      acceptanceCriteriaIds: binding.acIds })), pack, sourceRefs, true) : undefined;
+  const designModelDigest = designModel ? sha256(JSON.stringify(designModel)) : undefined;
+  const legacyRevisionId = specAssurancePackRevisionId(packId, pack.version, boundIdentity, designModelDigest);
+  const currentBaselineRevisionId = currentBaselineSpecAssurancePackRevisionId(packId, pack.version, boundIdentity,
+    row.baselineRevisionId as string, row.baselineSequence as number, sourceRefs, designModelDigest);
+  if (row.revisionId !== legacyRevisionId && row.revisionId !== currentBaselineRevisionId) {
+    throw new TypeError("Pack revision ID must be stable for its exact pack, model, and specification pins.");
+  }
+  const fullProposal = { ...proposal, ...(designModel ? { designModel } : {}) };
+  if (utf8.encode(JSON.stringify(fullProposal)).byteLength > 192 * 1024) throw new TypeError("Assurance pack proposal exceeds 192 KiB.");
   const coverageInput: SpecCoverageInput = { identity: boundIdentity, scope: manifest.scope, rulesVersion: manifest.rulesVersion,
     manifest, materials: [], sourceRefs: sourceRefs as readonly CoverageSourceRef[], checks: [] };
   evaluateSpecCoverage(coverageInput);
-  return freezeTree(proposal);
+  return freezeTree(fullProposal);
+}
+
+function validateApproval(value: unknown, workspaceId: string, projectId: string, packId: string): SpecAssurancePackApproval {
+  const row = exactToolRecord(value, ["status", "revisionId", "workspaceId", "projectId", "packId", "proposalRevisionId",
+    "proposalDigest", "baselineRevisionId", "baselineSequence", "identity", "designModelDigest", "user"]);
+  const identity = exactToolRecord(row.identity, ["workspaceId", "projectId", "specRevisionId", "specDigest"]);
+  const user = exactToolRecord(row.user, ["userId", "approvedAt", "agentId", "sessionId", "selectionRevision"]);
+  if (row.status !== "APPROVED" || row.workspaceId !== workspaceId || row.projectId !== projectId || row.packId !== packId
+    || !ID(row.proposalRevisionId) || typeof row.proposalDigest !== "string" || !HEX.test(row.proposalDigest)
+    || !ID(row.baselineRevisionId) || !Number.isSafeInteger(row.baselineSequence) || (row.baselineSequence as number) < 1
+    || identity.workspaceId !== workspaceId || identity.projectId !== projectId || !ID(identity.specRevisionId)
+    || typeof identity.specDigest !== "string" || !HEX.test(identity.specDigest)
+    || row.designModelDigest !== null && (typeof row.designModelDigest !== "string" || !HEX.test(row.designModelDigest))
+    || !ID(user.userId) || !ID(user.agentId) || !ID(user.sessionId) || !Number.isSafeInteger(user.selectionRevision)
+    || (user.selectionRevision as number) < 1 || typeof user.approvedAt !== "string" || !Number.isFinite(Date.parse(user.approvedAt))
+    || new Date(user.approvedAt).toISOString() !== user.approvedAt) throw new TypeError("Invalid assurance pack user approval.");
+  const approval = { status: "APPROVED" as const, workspaceId, projectId, packId,
+    proposalRevisionId: row.proposalRevisionId, proposalDigest: row.proposalDigest,
+    baselineRevisionId: row.baselineRevisionId, baselineSequence: row.baselineSequence as number,
+    identity: Object.freeze({ workspaceId, projectId, specRevisionId: identity.specRevisionId as string,
+      specDigest: identity.specDigest as string }), designModelDigest: row.designModelDigest as string | null,
+    user: Object.freeze({ userId: user.userId as string, approvedAt: user.approvedAt as string,
+      agentId: user.agentId as string, sessionId: user.sessionId as string,
+      selectionRevision: user.selectionRevision as number }) };
+  if (row.revisionId !== specAssurancePackApprovalRevisionId(approval)) throw new TypeError("Pack approval revision ID is not stable for its exact pins.");
+  return freezeTree({ ...approval, revisionId: row.revisionId as string });
 }
 
 /** Immutable per-pack project revisions; proposal records are never coverage or approval evidence. */
@@ -152,10 +215,21 @@ export function createSpecAssurancePackStore(workspaceId: string, projectId: str
       revisionId: value => value.revisionId,
     });
   };
+  const approvalJournalFor = (packId: string) => {
+    if (!ID(packId)) throw new TypeError("A valid Domain Pack ID is required.");
+    const prefix = `d3-approval-${sha256(packId).slice(0, 32)}`;
+    return createRevisionJournal(workspaceId, projectId, state, {
+      prefix,
+      parse: value => validateApproval(value, workspaceId, projectId, packId),
+      revisionId: value => value.revisionId,
+    });
+  };
   return Object.freeze({
     current(packId: string) { return journalFor(packId).current(); },
     get(packId: string, revisionId: string) { return journalFor(packId).publishedRevision(revisionId); },
     recent(packId: string, limit?: number) { return journalFor(packId).recent(limit); },
+    currentApproval(packId: string) { return approvalJournalFor(packId).current(); },
+    getApproval(packId: string, revisionId: string) { return approvalJournalFor(packId).publishedRevision(revisionId); },
     async publish(packId: string, patch: unknown) {
       const journal = journalFor(packId);
       const input = exactToolRecord(patch, ["expectedBaseRevisionId", "revision"]);
@@ -166,6 +240,17 @@ export function createSpecAssurancePackStore(workspaceId: string, projectId: str
         return Object.freeze({ status: "replayed" as const, sequence: prior.sequence, revision: prior.revision });
       }
       return journal.publish({ expectedBaseRevisionId: input.expectedBaseRevisionId, revision: proposal });
+    },
+    async publishApproval(packId: string, patch: unknown) {
+      const journal = approvalJournalFor(packId);
+      const input = exactToolRecord(patch, ["expectedBaseRevisionId", "revision"]);
+      const approval = validateApproval(input.revision, workspaceId, projectId, packId);
+      const prior = await journal.publishedRevision(approval.revisionId);
+      if (prior) {
+        if (JSON.stringify(prior.revision) !== JSON.stringify(approval)) throw new TypeError("Pack approval revision ID already contains different immutable content.");
+        return Object.freeze({ status: "replayed" as const, sequence: prior.sequence, revision: prior.revision });
+      }
+      return journal.publish({ expectedBaseRevisionId: input.expectedBaseRevisionId, revision: approval });
     },
   });
 }

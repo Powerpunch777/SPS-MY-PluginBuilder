@@ -1,7 +1,57 @@
+const proposalStaticId = { type: "string", minLength: 1, maxLength: 160 };
+const proposalStaticIdList = (maxItems, minItems = 0) => ({ type: "array", minItems, maxItems, uniqueItems: true, items: proposalStaticId });
+const proposalStaticPredicate = { type: "object", additionalProperties: false, properties: {
+  all: proposalStaticIdList(1000), any: proposalStaticIdList(1000), none: proposalStaticIdList(1000),
+} };
+const proposalStaticDesignModel = { type: "object", additionalProperties: false,
+  required: ["facts", "rulesVersion", "coverageRules", "coverageTargets", "scenarios", "itemDecisions", "acceptanceCriteria"],
+  properties: {
+    facts: proposalStaticIdList(1000), rulesVersion: proposalStaticId,
+    coverageRules: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false,
+      required: ["id", "requiresCheck", "requiredEvidenceKinds"], properties: {
+        id: proposalStaticId, requiresCheck: { type: "boolean" },
+        requiredEvidenceKinds: { type: "array", maxItems: 5, uniqueItems: true,
+          items: { type: "string", enum: ["specification", "workstream", "task", "question", "source"] } },
+      } } },
+    coverageTargets: { type: "array", maxItems: 101000, items: { type: "object", additionalProperties: false,
+      required: ["targetKind", "targetId", "ruleIds"], properties: {
+        targetKind: { type: "string", enum: ["requirement", "ac"] }, targetId: proposalStaticId, ruleIds: proposalStaticIdList(1000),
+      } } },
+    scenarios: { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+      required: ["id", "state", "event", "nextState", "exceptionId"], properties: {
+        id: proposalStaticId, state: proposalStaticId, event: proposalStaticId, nextState: proposalStaticId,
+        exceptionId: { type: ["string", "null"], minLength: 1, maxLength: 160 },
+      } } },
+    itemDecisions: { type: "array", maxItems: 1000, items: { type: "object", additionalProperties: false,
+      required: ["requirementId", "status", "reason", "sourceIds"], properties: {
+        requirementId: proposalStaticId,
+        status: { type: "string", enum: ["RESOLVED", "DELEGATED", "UNDECIDED", "NOT_APPLICABLE", "NOT_CHECKED", "INCONCLUSIVE"] },
+        reason: { type: "string", minLength: 1, maxLength: 4096 }, sourceIds: proposalStaticIdList(1000),
+      } } },
+    acceptanceCriteria: { type: "array", maxItems: 10000, items: { type: "object", additionalProperties: false,
+      required: ["requirementId", "acId", "sourceId", "quote"], properties: {
+        requirementId: proposalStaticId, acId: proposalStaticId, sourceId: proposalStaticId,
+        quote: { type: "string", minLength: 1, maxLength: 8192 },
+      } } },
+  } };
+
+export const CONFIRM_CURRENT_BASELINE_SPEC_ASSURANCE_PACK_ACTION = Object.freeze({
+  key: "builder.confirm-current-baseline-spec-assurance-pack",
+  displayName: "Confirm the current specification assurance pack",
+  description: "An authenticated user confirms the exact current Main-proposed pack and optional static design model. This does not publish or approve a Baseline, assert runtime QA, or grant technical execution authority.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
+    required: ["projectId", "packId", "expectedProposalRevisionId", "expectedBaselineRevisionId", "expectedApprovalRevisionId"],
+    properties: { projectId: { type: "string", minLength: 1, maxLength: 160 }, packId: { type: "string", minLength: 1, maxLength: 160 },
+      expectedProposalRevisionId: { type: "string", minLength: 1, maxLength: 160 },
+      expectedBaselineRevisionId: { type: "string", minLength: 1, maxLength: 160 },
+      expectedApprovalRevisionId: { type: ["string", "null"], maxLength: 160 },
+    } }),
+});
+
 export const SPEC_ASSURANCE_PACK_PROPOSAL_TOOL = Object.freeze({
   name: "builder.propose-spec-assurance-pack",
   displayName: "Propose a specification assurance pack",
-  description: "Only Main stores a versioned Domain Pack proposal for the current approved specification. Source IDs name the baseline's actual Main user source; digests and specification identity are server-derived. This proposal is not approval, source coverage, QA or execution permission.",
+  description: "Only Main stores a versioned Domain Pack proposal for the current approved specification. Optional designModel contains explicit facts, coverage rules/targets, finite design scenarios, source-linked item decisions and exact AC quotes from the current Main user turn. Source IDs name the baseline's actual Main user source; digests and specification identity are server-derived. Proposal data is not user confirmation, source-coverage evidence, runtime QA or execution permission.",
   parametersSchema: Object.freeze({ type: "object", additionalProperties: false,
     required: ["projectId", "expectedBaseRevisionId", "packId", "version", "applicability", "rules", "transitions", "exceptions",
       "excludedCombinations", "rulesVersion", "coverageRules", "coverageTargets", "sourceRefs"],
@@ -15,6 +65,7 @@ export const SPEC_ASSURANCE_PACK_PROPOSAL_TOOL = Object.freeze({
         items: { type: "object", additionalProperties: false, required: ["requirementId", "acId", "sourceId"], properties: {
           requirementId: { type: "string" }, acId: { type: ["string", "null"] }, sourceId: { type: "string" },
         } } },
+      designModel: proposalStaticDesignModel,
     },
   }),
 });

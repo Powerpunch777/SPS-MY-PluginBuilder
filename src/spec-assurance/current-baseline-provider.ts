@@ -5,12 +5,15 @@ import { firstDesignReviewApprovalRevision, type DesignBaseline } from "../domai
 import type { DesignDraft } from "../domain/design-drafts.ts";
 import type { BuilderLeadSessions } from "../domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "../domain/snapshot.ts";
+import { parseLeadAgentBinding } from "../domain/lead-agent.ts";
+import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import { readLeadUserSource, readLeadUserTurn } from "../lead-conversations.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
-import type { CoverageMaterial, CoverageScope } from "../spec-coverage/evaluator.ts";
+import type { CoverageMaterial, CoverageRulesManifest, CoverageScope } from "../spec-coverage/evaluator.ts";
 import { readFirstDesignReviewRevision } from "./review-first-design.ts";
 import { evaluateSpecAssurance, type AssuranceCoverageProvider, type AssuranceCoverageQuery, type DomainPack, type SpecAssuranceAuthoritySnapshot } from "./evaluator.ts";
-import { rebindDesignModelMaterial } from "./design-model-material.ts";
+import { designModelMaterialDigest, rebindDesignModelMaterial } from "./design-model-material.ts";
+import { createSpecAssurancePackStore } from "./pack-store.ts";
 import { coverageRulesManifestDigest, type CoverageCheck } from "../spec-coverage/evaluator.ts";
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -76,9 +79,9 @@ function rebindApprovedPack(bundle: NonNullable<Awaited<ReturnType<typeof readFi
   return Object.freeze({ ...pack, identity });
 }
 /**
- * Bind assurance reads to the current Builder Baseline and its actual approval source.
- * This verifies the approved relations and source bytes. It does not establish per-requirement
- * provenance or supply a Domain Pack/rule authority; those stay absent and coverage stays UNKNOWN.
+ * Bind assurance reads to the current Builder Baseline and actual source bytes. A later Main
+ * baseline may use only the server-selected pack ID after its exact proposal and model receive
+ * authenticated user confirmation. Static findings never grant runtime QA or execution authority.
  * Construct this in server-owned code with current Host/session records, never from client data.
  */
 export function createCurrentBaselineAssuranceProvider(input: Readonly<{
@@ -86,9 +89,10 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
   projectId: string;
   sessions: BuilderLeadSessions;
   platform: SpsPlatformInvocationContext;
+  packId?: string;
 }>): AssuranceCoverageProvider {
   if (!input || input.sessions.workspaceId !== input.workspaceId) throw new TypeError("Lead sessions must match the bound Workspace.");
-  const { workspaceId, projectId, sessions, platform } = input;
+  const { workspaceId, projectId, sessions, platform, packId } = input;
   const store = createDesignBaselineStore(workspaceId, projectId, platform.state as typeof platform.state & RevisionState);
 
   return async (query: AssuranceCoverageQuery): Promise<SpecAssuranceAuthoritySnapshot | null> => {
@@ -273,6 +277,126 @@ export function createCurrentBaselineAssuranceProvider(input: Readonly<{
       || latestTurn.runId !== sourceTurn.runId || latestTurn.selectionRevision !== sourceTurn.selectionRevision
       || latestSource.id !== source.id || sha256(latestSource.text) !== sourceDigest) {
       throw sourceFailure("original-source-changed-during-read");
+    }
+
+    if (packId) {
+      const assurancePacks = createSpecAssurancePackStore(workspaceId, projectId, platform.state as unknown as RevisionState);
+      const [storedProposal, storedApproval] = await Promise.all([assurancePacks.current(packId), assurancePacks.currentApproval(packId)]);
+      const proposal = storedProposal?.revision;
+      const approval = storedApproval?.revision;
+      const invalidPins = [
+        !proposal && "proposal-missing", !approval && "approval-missing",
+        proposal && proposal.status !== "PROPOSED" && "proposal-status", approval && approval.status !== "APPROVED" && "approval-status",
+        proposal && proposal.pack.packId !== packId && "pack-id", proposal && proposal.baselineRevisionId !== baseline.revisionId && "proposal-baseline",
+        proposal && proposal.baselineSequence !== first.sequence && "proposal-sequence",
+        approval && proposal && approval.proposalRevisionId !== proposal.revisionId && "proposal-revision",
+        approval && proposal && approval.proposalDigest !== sha256(JSON.stringify(proposal)) && "proposal-digest",
+        approval && approval.baselineRevisionId !== baseline.revisionId && "approval-baseline",
+        approval && approval.baselineSequence !== first.sequence && "approval-sequence",
+        proposal && JSON.stringify(proposal.identity) !== JSON.stringify(identity) && "proposal-identity",
+        approval && JSON.stringify(approval.identity) !== JSON.stringify(identity) && "approval-identity",
+        proposal && approval && (proposal.designModel ? approval.designModelDigest !== designModelMaterialDigest(proposal.designModel)
+          : approval.designModelDigest !== null) && "model-digest",
+        proposal?.sourceRefs.some(ref => ref.sourceId !== source.id || ref.sourceDigest !== sourceDigest
+          || ref.revisionId !== specification.revisionId) && "source-pins",
+      ].filter((value): value is string => typeof value === "string");
+      if (invalidPins.length) {
+        throw new Error(`No exact user-approved current-Baseline assurance pack and model binding is available (${invalidPins.join(", ")}).`);
+      }
+      if (!proposal || !approval) throw new Error("No exact user-approved current-Baseline assurance pack and model binding is available.");
+      const assertCurrentApprovalSelection = async () => {
+        const binding = parseLeadAgentBinding(await platform.state.get({ scopeKind: "company", scopeId: workspaceId,
+          namespace: "sonpark.my-builder", stateKey: "lead-agent.v1" }), workspaceId);
+        const currentSessions = parseLeadSessions(await platform.state.get({ scopeKind: "company", scopeId: workspaceId,
+          namespace: "sonpark.my-builder", stateKey: `lead-sessions.v1.${binding.revision}` }), workspaceId);
+        if (binding.revision !== approval.user.selectionRevision || binding.selectedAgentId !== approval.user.agentId
+          || currentSessions.selectionRevision !== binding.revision || currentSessions.agentId !== binding.selectedAgentId
+          || currentSessions.sessions.main !== approval.user.sessionId
+          || sessions.selectionRevision !== binding.revision || sessions.agentId !== binding.selectedAgentId
+          || sessions.sessions.main !== approval.user.sessionId) {
+          throw new Error("Lead selection changed since the user confirmed this assurance pack.");
+        }
+      };
+      await assertCurrentApprovalSelection();
+      const scopedSourceRefs = Object.freeze(proposal.sourceRefs.filter(ref => requirementIds.includes(ref.requirementId)));
+      const sourceEntities = Object.freeze([Object.freeze({ kind: "source" as const, id: source.id, bodyDigest: sourceDigest,
+        relationIds: Object.freeze([...new Set(scopedSourceRefs.flatMap(ref => [ref.requirementId,
+          ...(ref.acId === null ? [] : [ref.acId])]))].sort()) })]);
+      const model = proposal.designModel;
+      for (const ac of model?.acceptanceCriteria ?? []) {
+        if (ac.sourceId !== source.id || ac.sourceDigest !== sourceDigest || !source.text.includes(ac.text)
+          || sha256(ac.text) !== ac.textSha256) throw sourceFailure("original-source-digest-mismatch");
+      }
+      const materials: CoverageMaterial[] = [
+        Object.freeze({ kind: "specification", identity, presence: completeRequirementLookup ? "present" : "partial",
+          verification: completeRequirementLookup ? "validated" : "unknown",
+          entities: Object.freeze([...scopedRequirements.map(requirement => Object.freeze({ kind: "requirement" as const,
+            id: requirement.id, bodyDigest: sha256(JSON.stringify(requirement)),
+            relationIds: Object.freeze([...requirement.acceptanceCriteriaIds]) })),
+          ...[...new Map((model?.acceptanceCriteria ?? []).filter(ac => scope.acIds.includes(ac.acId))
+            .map(ac => [ac.acId, Object.freeze({ kind: "ac" as const, id: ac.acId, bodyDigest: ac.textSha256,
+              relationIds: Object.freeze([ac.requirementId, ac.sourceId]) })])).values()]]) }),
+        Object.freeze({ kind: "source", identity, presence: scopedSourceRefs.length > 0 ? "present" : "partial",
+          verification: scopedSourceRefs.length > 0 ? "validated" : "unknown", entities: sourceEntities }),
+      ];
+      const baseManifest = model?.rulesManifest ?? proposal.rulesManifest;
+      const manifestScope: CoverageScope = scope;
+      let manifestBase: CoverageRulesManifest = { ...baseManifest, scope: manifestScope,
+        targets: baseManifest.targets.filter(target => (target.targetKind === "requirement"
+          ? scope.requirementIds : scope.acIds).includes(target.targetId)), digest: "0".repeat(64) };
+      const facts = model?.facts ?? [];
+      const scenarios = model?.scenarios ?? [];
+      const checks: CoverageCheck[] = [];
+      if (model) {
+        const factSet = new Set(facts);
+        const matches = (predicate: DomainPack["applicability"]) => (predicate.all ?? []).every(fact => factSet.has(fact))
+          && (!predicate.any?.length || predicate.any.some(fact => factSet.has(fact)))
+          && !(predicate.none ?? []).some(fact => factSet.has(fact));
+        const analysis = await evaluateSpecAssurance({ identity, scope: { requirementIds }, facts, packs: [proposal.pack], scenarios });
+        const ruleById = new Map(proposal.pack.rules.map(rule => [rule.id, rule]));
+        manifestBase = { ...manifestBase, rules: manifestBase.rules.map(rule => {
+          const domainRule = ruleById.get(rule.id)!;
+          return matches(proposal.pack.applicability) && matches(domainRule.appliesWhen) ? rule
+            : { ...rule, requiresCheck: false, requiredEvidenceKinds: [] };
+        }), digest: "0".repeat(64) };
+        for (const target of manifestBase.targets) for (const ruleId of target.ruleIds) {
+          if (!manifestBase.rules.find(rule => rule.id === ruleId)?.requiresCheck) continue;
+          const linked = target.targetKind === "requirement" ? [target.targetId]
+            : scopedRequirements.filter(requirement => requirement.acceptanceCriteriaIds.includes(target.targetId)).map(requirement => requirement.id);
+          const results = analysis.checkerResults.filter(result => result.ruleId === ruleId && linked.includes(result.requirementId));
+          const status = results.some(result => result.status === "FAIL") ? "failed"
+            : linked.length > 0 && linked.every(id => results.some(result => result.requirementId === id && result.status === "PASS"))
+              ? "passed" : "not-run";
+          const refs = scopedSourceRefs.filter(ref => target.targetKind === "requirement"
+            ? ref.requirementId === target.targetId && ref.acId === null : ref.acId === target.targetId);
+          checks.push(Object.freeze({ targetId: target.targetId, targetKind: target.targetKind, ruleId, status,
+            evidenceRefs: Object.freeze(status === "not-run" ? [] : [...new Set([target.targetId, ...refs.map(ref => ref.sourceId)])]) }));
+        }
+      }
+      const manifest = Object.freeze({ ...manifestBase, digest: coverageRulesManifestDigest(manifestBase) });
+      const latestBaseline = await store.current();
+      const latestProposal = await assurancePacks.current(packId);
+      const latestApproval = await assurancePacks.currentApproval(packId);
+      const finalTurn = await readLeadUserTurn(requestId, sessions, platform);
+      const finalSource = await readLeadUserSource(requestId, sessions, platform);
+      await assertCurrentApprovalSelection();
+      if (!latestBaseline || latestBaseline.sequence !== first.sequence || JSON.stringify(latestBaseline.revision) !== JSON.stringify(baseline)
+        || latestProposal?.revision.revisionId !== proposal.revisionId || sha256(JSON.stringify(latestProposal.revision)) !== sha256(JSON.stringify(proposal))
+        || latestApproval?.revision.revisionId !== approval.revisionId || sha256(JSON.stringify(latestApproval.revision)) !== sha256(JSON.stringify(approval))
+        || finalTurn.workspaceId !== sourceTurn.workspaceId || finalTurn.sessionId !== sourceTurn.sessionId
+        || finalTurn.runId !== sourceTurn.runId || finalTurn.selectionRevision !== sourceTurn.selectionRevision
+        || finalSource.id !== source.id || sha256(finalSource.text) !== sourceDigest) {
+        throw new Error("Current Baseline, approved pack/model, or Main source changed during assurance lookup.");
+      }
+      return Object.freeze({ coverageInput: Object.freeze({ identity, scope, rulesVersion: manifest.rulesVersion,
+        manifest, materials: Object.freeze(materials), sourceRefs: scopedSourceRefs, checks: Object.freeze(checks) }),
+        domainPacks: Object.freeze([proposal.pack]), facts: Object.freeze(facts), ...(model ? {
+          scenarios: Object.freeze(scenarios),
+          designModelEvidence: Object.freeze({ kind: "design-model-v1" as const, approvalRevisionId: approval.revisionId,
+            materialSha256: designModelMaterialDigest(model) }),
+          itemDecisions: Object.freeze(model.itemDecisions.filter(item => requirementIds.includes(item.requirementId))
+            .map(item => Object.freeze({ requirementId: item.requirementId, status: item.status, reason: item.reason }))),
+        } : {}) });
     }
 
     const materials: CoverageMaterial[] = [
