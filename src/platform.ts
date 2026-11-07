@@ -872,10 +872,23 @@ async function notifyFinalReview(job: { companyId?: string; eventId?: string; tr
   return withConversation(companyId, platform, async store => {
     const current = (await createFinalPacketStore(companyId, companyId, platform.state).current()).revisions[0]?.revision;
     if (!current || current.kind !== "main-attestation" || current.eventId !== eventId) return { status: "stale" as const };
-    const view = await finalReviewView(companyId, platform);
-    if (view.status !== "ready" || view.mainAttestation?.eventId !== eventId || view.snapshot.g7 !== "PASS") return { status: "stale" as const };
+    const author = current.attestation!;
     const binding = await readLeadAgentBinding(companyId, platform);
+    const sessions = await leadSessionsFor(companyId, binding, platform);
+    if (author.mainLeadAgentId !== binding.selectedAgentId || author.mainLeadSelectionRevision !== binding.revision
+      || author.mainLeadSessionId !== sessions.sessions.main) return { status: "stale" as const };
+    const packet = await readCurrentIntegrationPacket(companyId, platform);
+    if (packet.status === "stale") return { status: "stale" as const };
+    if (packet.status !== "available") throw new Error("Final review evidence is unconfirmed; preserve the job.");
+    const run = await platform.agents.sessions.getRun(author.mainLeadSessionId, companyId, author.mainLeadRunId);
+    if (run.runId !== author.mainLeadRunId || run.status !== "succeeded" || run.cancellationRequested
+      || run.termination !== "not_applicable") throw new Error("Main attestation run has not completed successfully; preserve the review job.");
+    const view = await finalReviewView(companyId, platform);
+    if (view.status !== "ready" || view.mainAttestation?.eventId !== eventId || view.snapshot.g7 !== "PASS") {
+      throw new Error("Current Main attestation evidence is unavailable; do not consume its review job.");
+    }
     await assertLeadSelection(companyId, binding, platform);
+    if (await createFinalPacketStore(companyId, companyId, platform.state).headRevisionId() !== eventId) return { status: "stale" as const };
     return dispatchFinalReview(store, integrationPacketMainRequestId(companyId, binding.revision, `review:${eventId}`), current);
   });
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { readDeliveryInventory } from "../src/delivery-evidence/delivery-inventory.ts";
-import { A, S, W, ctx, mapKey, now } from "./fixtures/cto-platform.ts";
+import { A, S, W, ctx, key, mapKey, now } from "./fixtures/cto-platform.ts";
 import { progressTool, validationFixture, validationTool } from "./fixtures/integration-manager-platform.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import { createFinalPacketStore } from "../src/delivery-evidence/final-packet.ts";
@@ -327,9 +327,10 @@ test("Main attestation atomically queues the existing Review session, which can 
   let reviewSends = 0;
   sessions.getRequest = async (session: string, company: string, request: string) => session === reviewSession
     ? requests.get(request) ?? null : getRequest(session, company, request);
-  sessions.getRun = async (session: string, company: string, run: string) => session === reviewSession
-    ? { runId: run, status: "running", cancellationRequested: false, termination: "not_applicable", error: null, errorCode: null,
-      output: { state: "not_ready", text: null } } : getRun(session, company, run);
+  let mainStatus = "running";
+  sessions.getRun = async (session: string, company: string, run: string) => session === reviewSession || session === S
+    ? { runId: run, status: session === S ? mainStatus : "running", cancellationRequested: false, termination: "not_applicable",
+      error: null, errorCode: null, output: { state: "not_ready", text: null } } : getRun(session, company, run);
   sessions.sendMessage = async (session: string, company: string, options: any) => {
     assert.equal(session, reviewSession); assert.equal(company, W);
     assert.ok(options.executionPolicy.toolNames.includes("builder.request-final-review"));
@@ -340,6 +341,24 @@ test("Main attestation atomically queues the existing Review session, which can 
   };
   const job = createBuilderPlatform().jobs!.find(job => job.jobKey === wakes[0].jobKey)!;
   const event = { jobKey: job.jobKey, eventId: input.eventId, companyId: W, trigger: "event", runId: "ffffffff-ffff-4fff-8fff-ffffffffffff" } as any;
+  await assert.rejects(async () => job.handler(event, platform), /not completed successfully/u);
+  mainStatus = "failed";
+  await assert.rejects(async () => job.handler(event, platform), /not completed successfully/u);
+  assert.equal(reviewSends, 0);
+  mainStatus = "succeeded";
+  const artifacts = (platform as any).artifacts, listArtifacts = artifacts.list;
+  artifacts.list = async () => { throw new Error("temporary receipt read failure"); };
+  await assert.rejects(async () => job.handler(event, platform), /unconfirmed|unavailable/u);
+  assert.equal(reviewSends, 0);
+  artifacts.list = listArtifacts;
+  const leadKey = mapKey(key("lead-agent.v1")), initialLead = f.f.values.get(leadKey)!;
+  const initialSessions = f.f.values.get(mapKey(key("lead-sessions.v1.1")))! as any;
+  f.f.values.set(leadKey, { workspaceId: W, revision: 2, selectedAgentId: A });
+  f.f.values.set(mapKey(key("lead-sessions.v1.2")), { ...initialSessions, selectionRevision: 2 });
+  await job.handler(event, platform);
+  assert.equal(reviewSends, 0, "a later Lead selection never receives the previous selection's review wake");
+  f.f.values.set(leadKey, initialLead);
+  f.f.values.delete(mapKey(key("lead-sessions.v1.2")));
   await job.handler(event, platform);
   await job.handler(event, platform);
   assert.equal(reviewSends, 1);
