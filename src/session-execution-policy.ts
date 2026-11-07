@@ -38,6 +38,7 @@ import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_
   RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL } from "./spec-assurance/tool-declarations.mjs";
 import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
+import { PROPOSE_DELIVERY_DOCUMENTS_TOOL, READ_DELIVERY_DOCUMENTS_TOOL } from "./project-documents/tool-declarations.mjs";
 import { READ_REUSE_CANDIDATES_TOOL, RECORD_REUSE_CANDIDATE_TOOL } from "./reuse-first/tool-declarations.mjs";
 
 export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
@@ -73,7 +74,8 @@ export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
   DISPATCH_CTO_WORKSTREAM_TOOL.name,
   READ_CTO_WORKSTREAM_DELIVERY_TOOL.name,
   CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.name,
-  ...(SESSION_POLICY_TOOL_LIMIT > 32 ? [PUBLISH_INTEGRATION_PLAN_TOOL.name] : []),
+  ...(SESSION_POLICY_TOOL_LIMIT > 32 ? [PUBLISH_INTEGRATION_PLAN_TOOL.name,
+    PROPOSE_DELIVERY_DOCUMENTS_TOOL.name, READ_DELIVERY_DOCUMENTS_TOOL.name] : []),
 ].sort());
 
 export const CTO_WORKSTREAM_TOOL_NAMES = Object.freeze([
@@ -118,6 +120,7 @@ export const INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY: SessionExecutionPolic
 
 const names = (...toolNames: string[]) => Object.freeze([...new Set(toolNames)].sort());
 const LEAD_READ_TOOL_NAMES = names(
+  READ_DELIVERY_DOCUMENTS_TOOL.name,
   READ_UI_CONTRACTS_TOOL.name,
   READ_SOLUTION_TOOL.name, READ_DESIGN_DRAFT_TOOL.name, READ_DESIGN_SOURCES_TOOL.name,
   READ_LEAD_MEMORY_TOOL.name, LIST_CTOS_TOOL.name, READ_DESIGN_BASELINE_TOOL.name,

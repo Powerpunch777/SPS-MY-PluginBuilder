@@ -153,6 +153,27 @@
 로컬 fixture·브라우저 미리보기 결과는 실제 Host·AI·실기기 인수나 원문 AC 전체 합격이 아니다.
 다음 상위 인수는 현재 Gate reader와 원자 이벤트 발행의 실제 Core 연결, 승인된 Manager Git·CI 실행, 그리고 같은 현재 핀·완전 inventory를 읽는 Final Packet·원자적 사용자 승인이다. Core/Host 증거가 없으면 해당 기능은 계속 `UNKNOWN`/blocked이며 helper·fixture만으로 승격하지 않는다.
 
+### Revision 저장과 납품 문서 후속 연결
+
+- 실제 PG를 경유하는 Worker 연결 시험에서 JSONB의 객체 키 순서 변경이 기존 Revision
+  digest를 깨뜨리는 실패를 확인했다. `077e9a0`은 기존 업무 ID를 바꾸지 않는 wire v2의
+  순서 메타데이터를 도입했고, `cdce9bd`는 일반 객체 의미와 동시 설계 승인 충돌 처리를
+  고쳤다. 기존 실패와 v1 기록은 보존하며 손상된 과거 기록을 임의 복구하지 않는다.
+  `cdce9bd`의 정확 사본과 물리 고정 SDK에서 타입 검사·빌드·전체 1015개 테스트를
+  통과했다. 최초 v2 사본의 전체 검사 6개 실패는 수정 후 결과와 별도 보존한다.
+  `ad1854a`는 유효한 v1 staged entry를 덮어쓰지 않고 같은 불변 내용만 재사용한다.
+  실제 Worker의 PG 재시험과 독립 검사는 별도 증거다.
+- `e00b114`는 기존 설계 검토 묶음을 후속 기준선에도 사용한다. 같은 사용자 승인에서
+  설계와 규칙 팩을 함께 고정하며, 별도 팩 승인이나 일반 Main 대화를 최종 승인으로
+  대체하지 않는다. 기존 첫 검토의 해시와 이력은 유지한다.
+- `38bd70a`의 설치법·사용법 초안은 기존 문서 Revision journal에 본문·해시와 현재
+  Baseline/UI/계획/계획 기준 Source Commit·Tree를 고정한다. Main 작성 도구, Lead 읽기
+  도구와 문서 data 경로를 등록했다. 초안은 `unapproved`, 완성도는 `unknown`이며 실제
+  통합 후보·Final Packet·QA·G7·사용자 납품 승인으로 승격하지 않는다. Main의 새 도구는
+  후보 SDK의 64개 정책 지원 시에만 노출하고 고정 SDK의 32개 정책은 유지한다.
+  해당 등록 경로·권한 분리·manifest 집중 검사 26개와 타입 검사는 통과했다. 실제 앱
+  화면, AI 작성, Manager 최종 패킷 생산은 별도 연결·검증이 남아 있다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)

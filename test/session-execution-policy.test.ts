@@ -44,7 +44,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
     "builder.read-task-source-file", "builder.write-task-source-file", "builder.delete-task-source-file", "builder.submit-task-source",
     "builder.request-protected-task-qa", "builder.publish-task-qa-report",
     ...INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames,
-    ...(SESSION_POLICY_TOOL_LIMIT === 32 ? ["builder.publish-integration-plan"] : []),
+    ...(SESSION_POLICY_TOOL_LIMIT === 32 ? ["builder.publish-integration-plan", "builder.propose-delivery-documents", "builder.read-delivery-documents"] : []),
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());
@@ -107,6 +107,8 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
     assert.equal(allowed.has("builder.record-reuse-candidate"), channel === "background");
     assert.equal(allowed.has("builder.read-spec-assurance-gaps"), channel === "main");
     assert.equal(allowed.has("builder.read-cto-questions"), channel === "cto-inbox");
+    assert.equal(allowed.has("builder.propose-delivery-documents"), channel === "main" && SESSION_POLICY_TOOL_LIMIT > 32);
+    assert.equal(allowed.has("builder.read-delivery-documents"), channel !== "main" || SESSION_POLICY_TOOL_LIMIT > 32);
     assert.equal(allowed.has("builder.review-cto-question"), channel === "cto-inbox");
     if (channel === "main") for (const write of formalWrites) assert.ok(allowed.has(write), write);
     else for (const write of formalWrites) assert.ok(!allowed.has(write), `${channel} must not have ${write}`);

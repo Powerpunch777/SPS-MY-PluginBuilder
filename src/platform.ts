@@ -60,6 +60,8 @@ import { createProductSelectionStore, saveProductSelectionAction } from "./produ
 import { createConsultationAnalysisStore, consultationAnalysisPrompt } from "./consultation-analysis.ts";
 import { READ_CONSULTATION_ANALYSIS_TOOL } from "./tool-declarations.mjs";
 import { createBaselineBodySource } from "./project-documents/baseline-body-source.ts";
+import { proposeDeliveryDocuments, readCurrentDeliveryDocuments } from "./project-documents/delivery-documents.ts";
+import { PROPOSE_DELIVERY_DOCUMENTS_TOOL, READ_DELIVERY_DOCUMENTS_TOOL } from "./project-documents/tool-declarations.mjs";
 import { proposeSpecAssurancePack } from "./spec-assurance/pack-producer.ts";
 import { createSpecAssurancePackStore } from "./spec-assurance/pack-store.ts";
 import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,
@@ -849,6 +851,29 @@ export function createBuilderPlatform() {
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
     handler: (params, context, platform) => readLeadSolution(params, context, platform) },
+    { name: PROPOSE_DELIVERY_DOCUMENTS_TOOL.name, declaration: PROPOSE_DELIVERY_DOCUMENTS_TOOL,
+      handler: (params, context, platform) => {
+        const run = parseLeadToolContext(context);
+        return serialize(run.companyId, async () => ({
+          content: "Stored Main delivery guide drafts only. Exact plan-base source pins are not an integrated delivery candidate, QA, G7 or user approval.",
+          data: await proposeDeliveryDocuments(params, run, platform) as unknown as JsonValue,
+        }));
+      } },
+    { name: READ_DELIVERY_DOCUMENTS_TOOL.name, declaration: READ_DELIVERY_DOCUMENTS_TOOL,
+      handler: (params, context, platform) => {
+        const run = parseLeadToolContext(context);
+        return serialize(run.companyId, async () => {
+          const input = exactToolRecord(params, ["projectId"]);
+          if (input.projectId !== run.companyId || run.projectId !== undefined && run.projectId !== run.companyId) {
+            throw new Error("Delivery documents require the authenticated Workspace project.");
+          }
+          const authority = await resolveLeadToolAuthority(run, platform);
+          const read = await readCurrentDeliveryDocuments(run.companyId, platform);
+          await authority.check();
+          return { content: "Pinned unapproved delivery guide drafts. This read does not attest G7, approve delivery or execute AI.",
+            data: { workspaceId: run.companyId, projectId: run.companyId, read } as unknown as JsonValue };
+        });
+      } },
     { name: READ_CHANGE_IMPACT_TOOL.name, declaration: READ_CHANGE_IMPACT_TOOL,
       handler: async (params, context, platform) => {
         const input = exactToolRecord(params,
@@ -1141,7 +1166,12 @@ export function createBuilderPlatform() {
         const companyId = workspaceId(context.companyId);
         return serialize(companyId, () => submitTaskWorkerSource(params, runContext, platform));
       } }],
-    data: [{ key: "builder.reuse-candidates", handler: async (params, platform) => {
+    data: [{ key: "builder.delivery-documents", handler: async (params, platform) => {
+      exactToolRecord(params, ["companyId"], ["renderEnvironment"]);
+      const companyId = workspaceId(params.companyId);
+      return serialize(companyId, async () => ({ workspaceId: companyId, projectId: companyId,
+        read: await readCurrentDeliveryDocuments(companyId, platform) }) as unknown as JsonValue);
+    } }, { key: "builder.reuse-candidates", handler: async (params, platform) => {
       exactToolRecord(params, ["companyId"], ["renderEnvironment"]);
       const companyId = workspaceId(params.companyId);
       const current = await readReuseFirstRevision({ workspaceId: companyId, projectId: companyId }, platform.state);

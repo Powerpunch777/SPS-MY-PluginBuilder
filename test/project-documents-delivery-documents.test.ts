@@ -7,6 +7,11 @@ import { createRevisionJournal } from "../src/solution-revision-store.ts";
 import { parseUiRevision, type UiRevision } from "../src/ui-contracts/domain.ts";
 import { createIntegrationPlanStore, type IntegrationPlan } from "../src/builder-gates/integration-plan.ts";
 import { proposeDeliveryDocuments, readCurrentDeliveryDocuments } from "../src/project-documents/delivery-documents.ts";
+import { createBuilderPlatform } from "../src/platform.ts";
+import { key, mapKey } from "./fixtures/cto-platform.ts";
+
+const { default: manifest } = await import(new URL("../src/manifest.mjs", import.meta.url).href);
+const manifestTools = (manifest as { tools: Array<{ name: string }> }).tools;
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const SOURCE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -69,6 +74,37 @@ test("Main saves immutable guide drafts pinned to current Baseline, formal UI, p
   const replay = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: f.documents }, ctx(), f.platform);
   assert.equal(replay.status, "published");
   if (replay.status === "published") assert.equal(replay.replayed, true);
+});
+
+test("registered Main tool and document data path expose the same unapproved revision without AI", async () => {
+  const f = await setup();
+  const contract = createBuilderPlatform();
+  const propose = contract.tools!.find(tool => tool.name === "builder.propose-delivery-documents")!;
+  const read = contract.tools!.find(tool => tool.name === "builder.read-delivery-documents")!;
+  assert.ok(manifestTools.some(tool => tool.name === propose.name));
+  assert.ok(manifestTools.some(tool => tool.name === read.name));
+  const result = await propose.handler!({ projectId: W, expectedBaseRevisionId: null, documents: f.documents }, ctx(), f.platform);
+  const stored = result.data as unknown as { status: string; revision: { revisionId: string } };
+  assert.equal(stored.status, "published");
+  const data = contract.data!.find(source => source.key === "builder.delivery-documents")!;
+  const shown = await data.handler({ companyId: W }, f.platform) as unknown as { workspaceId: string; projectId: string;
+    read: Awaited<ReturnType<typeof readCurrentDeliveryDocuments>> };
+  assert.equal(shown.workspaceId, W);
+  assert.equal(shown.projectId, W);
+  assert.equal(shown.read.document?.revisionId, stored.revision.revisionId);
+  assert.equal(shown.read.confirmed, false);
+  assert.equal(shown.read.completeness, "unknown");
+  assert.equal(shown.read.document?.approvalStatus, "unapproved");
+  assert.deepEqual((await read.handler!({ projectId: W }, ctx(), f.platform)).data, shown);
+  assert.equal(f.sends, 0);
+  await assert.rejects(async () => await read.handler!({ projectId: SOURCE }, ctx(), f.platform), /authenticated Workspace/u);
+  await assert.rejects(async () => await data.handler({ companyId: W, confirmed: true }, f.platform), /fields/u);
+  f.values.set(mapKey(key("lead-sessions.v1.1")), { workspaceId: W, selectionRevision: 1, agentId: A,
+    sessions: { main: S, "ui-design": C, background: null, decisions: null, "cto-inbox": null, "integration-review": null } });
+  assert.deepEqual((await read.handler!({ projectId: W }, ctx(C), f.platform)).data, shown);
+  await assert.rejects(async () => await propose.handler!({ projectId: W, expectedBaseRevisionId: stored.revision.revisionId,
+    documents: f.documents }, ctx(C), f.platform), /Only the Main/u);
+  await assert.rejects(async () => await read.handler!({ projectId: W }, { ...ctx(), agentId: SOURCE }, f.platform), /current Builder Lead/u);
 });
 
 test("a changed Source Git tip is stale and does not replace the immutable document", async () => {
