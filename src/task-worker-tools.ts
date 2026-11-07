@@ -67,8 +67,9 @@ function dependenciesMatchCurrent(record: TaskPacketRecord, packets: readonly Ta
 }
 
 type TaskWorkerToolContext = Readonly<{ companyId: string; agentId: string; runId: string; sessionId: string; projectId: string }>;
-type CurrentTaskWorkerBinding = Readonly<{ context: TaskWorkerToolContext; ctoId: string; worker: TaskWorkerRecord;
-  packet: TaskPacketRecord; binding: TaskWorkerFileBinding }>;
+export type CurrentTaskWorkerBinding = Readonly<{ context: TaskWorkerToolContext; ctoId: string; worker: TaskWorkerRecord;
+  packet: TaskPacketRecord; currentPackets: readonly TaskPacketRecord[]; workerRecords: readonly TaskWorkerRecord[];
+  binding: TaskWorkerFileBinding }>;
 
 function parseTaskWorkerToolContext(value: unknown): TaskWorkerToolContext {
   const row = exactToolRecord(value, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
@@ -150,7 +151,7 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
 
   const ctos = await readProjectCtos(context.companyId, context.projectId, platform);
   await assertOtherRoleContext(context, ctos, platform, owned);
-  const matches: Array<{ ctoId: string; worker: TaskWorkerRecord }> = [];
+  const matches: Array<{ ctoId: string; worker: TaskWorkerRecord; workerRecords: readonly TaskWorkerRecord[] }> = [];
   for (const cto of ctos.ctos) {
     const key = registryKey(context.companyId, context.projectId, cto.ctoId);
     const raw = await platform.state.get(key);
@@ -164,7 +165,7 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
     if (logical.size > 1) throw new Error("One Host session is registered to multiple Task Worker roles.");
     if (!related.length) continue;
     const latest = related.at(-1)!;
-    matches.push({ ctoId: cto.ctoId, worker: latest });
+    matches.push({ ctoId: cto.ctoId, worker: latest, workerRecords: registry.records });
   }
   if (matches.length !== 1) throw new Error("The active Host run must match exactly one registered Task Worker or QA identity.");
   const { ctoId, worker } = matches[0]!;
@@ -210,10 +211,11 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
   if (!request || request.requestId !== requestId || request.state !== "submitted" || request.runId !== context.runId) {
     throw new Error("The active Run is not the exact current Task dispatch request for this Worker identity.");
   }
-  return Object.freeze({ context, ctoId, worker, packet, binding });
+  return Object.freeze({ context, ctoId, worker, packet, currentPackets: board!.revision.packets,
+    workerRecords: matches[0]!.workerRecords, binding });
 }
 
-async function resolveTaskWorkerFileCall(runContext: unknown, platform: SpsPlatformInvocationContext) {
+export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseTaskWorkerToolContext(runContext);
   let current = await readCurrentTaskWorkerBinding(context, platform);
   const assertCurrent = async () => {
@@ -228,6 +230,8 @@ async function resolveTaskWorkerFileCall(runContext: unknown, platform: SpsPlatf
   };
   return { current, assertCurrent };
 }
+
+const resolveTaskWorkerFileCall = resolveCurrentTaskWorkerToolCall;
 
 function taskToolUnsupported(reason: string) {
   return { content: "Task Worker integration is unsupported by the current Host API. No fallback was used.",

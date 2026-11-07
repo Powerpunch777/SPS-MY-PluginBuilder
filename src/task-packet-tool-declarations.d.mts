@@ -11,3 +11,6 @@ export const DELETE_TASK_SOURCE_FILE_TOOL: Tool<"builder.delete-task-source-file
 export const SUBMIT_TASK_SOURCE_TOOL: Tool<"builder.submit-task-source">;
 export const READ_TASK_SOURCE_SUBMISSIONS_TOOL: Tool<"builder.read-task-source-submissions">;
 export const ACCEPT_TASK_SOURCE_SUBMISSION_TOOL: Tool<"builder.accept-task-source-submission">;
+export const REQUEST_PROTECTED_TASK_QA_TOOL: Tool<"builder.request-protected-task-qa">;
+export const READ_PROTECTED_TASK_QA_TOOL: Tool<"builder.read-protected-task-qa">;
+export const READ_PROTECTED_TASK_QA_HISTORY_TOOL: Tool<"builder.read-protected-task-qa-history">;

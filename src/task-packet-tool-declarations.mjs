@@ -119,3 +119,27 @@ export const ACCEPT_TASK_SOURCE_SUBMISSION_TOOL = Object.freeze({
   description: "Only the assigned active CTO may acknowledge the exact immutable submitted commit once. This records receipt, not branch freshness, QA, Task completion, or VERIFIED.",
   parametersSchema: taskSourceHandoffScope,
 });
+
+const protectedTaskQaPlan = { approvalId: { type: "string", format: "uuid" },
+  planSha256: { type: "string", pattern: "^[a-f0-9]{64}$" } };
+export const REQUEST_PROTECTED_TASK_QA_TOOL = Object.freeze({
+  name: "builder.request-protected-task-qa", displayName: "Request protected QA for this exact Task",
+  description: "Only the exact active QA Worker for its current prepared QA Task and active dispatch Run may request protected execution after the current development dependency has durable CTO acceptance and exact current Host Git proofs. Core validates the supplied approved protected plan ID and hash. Request identity is derived from the Task and acceptance; retry only the same Core idempotency request. This queues technical execution, not QA PASS, completion, or VERIFIED.",
+  parametersSchema: { type: "object", additionalProperties: false, required: ["approvalId", "planSha256"], properties: protectedTaskQaPlan },
+});
+export const READ_PROTECTED_TASK_QA_TOOL = Object.freeze({
+  name: "builder.read-protected-task-qa", displayName: "Read protected QA status for this exact Task",
+  description: "The current CTO for this Workstream, or the exact current QA Worker, may observe only a Core run bound to this Task and acceptance. Observation is read-only and remains available after the QA model Run ends; source drift is reported as stale while retaining the protected receipt.",
+  parametersSchema: { type: "object", additionalProperties: false,
+    required: ["projectId", "ctoId", "workstreamId", "qaTaskId", "approvalId", "planSha256", "runId"],
+    properties: { projectId: id, ctoId: id, workstreamId: id, qaTaskId: id, ...protectedTaskQaPlan,
+      runId: { type: "string", format: "uuid" } } },
+});
+export const READ_PROTECTED_TASK_QA_HISTORY_TOOL = Object.freeze({
+  name: "builder.read-protected-task-qa-history", displayName: "Read protected QA run history for this Task",
+  description: "Only the exact active CTO for this Workstream may page through immutable Task-to-Core-run references. Historical pins remain visible after packet/source changes; Core is queried for current technical run status, and no QA verdict or completion is inferred.",
+  parametersSchema: { type: "object", additionalProperties: false,
+    required: ["projectId", "ctoId", "workstreamId", "qaTaskId"],
+    properties: { projectId: id, ctoId: id, workstreamId: id, qaTaskId: id,
+      cursor: { type: ["string", "null"], maxLength: 512 } } },
+});

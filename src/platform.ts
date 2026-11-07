@@ -29,7 +29,10 @@ import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CT
 import { answerCtoQuestion, readCtoQuestionAnswer, acknowledgeCtoQuestionAnswer } from "./cto-question-reply-tools.ts";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
   DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL,
-  SUBMIT_TASK_SOURCE_TOOL, READ_TASK_SOURCE_SUBMISSIONS_TOOL, ACCEPT_TASK_SOURCE_SUBMISSION_TOOL } from "./task-packet-tool-declarations.mjs";
+  SUBMIT_TASK_SOURCE_TOOL, READ_TASK_SOURCE_SUBMISSIONS_TOOL, ACCEPT_TASK_SOURCE_SUBMISSION_TOOL,
+  REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_HISTORY_TOOL } from "./task-packet-tool-declarations.mjs";
+import { requestProtectedTaskQa, readProtectedTaskQa } from "./task-protected-qa.ts";
+import { readProtectedTaskQaHistory } from "./task-protected-qa-history.ts";
 import { acceptCtoTaskSourceSubmission, readCtoTaskSourceSubmission } from "./task-source-acceptance.ts";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
@@ -1036,6 +1039,24 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => serialize(context.companyId, async () => ({
         content: "Receipt is not current Git tip, Task completion, or QA.",
         data: await acceptCtoTaskSourceSubmission(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: REQUEST_PROTECTED_TASK_QA_TOOL.name, declaration: { displayName: REQUEST_PROTECTED_TASK_QA_TOOL.displayName,
+      description: REQUEST_PROTECTED_TASK_QA_TOOL.description, parametersSchema: REQUEST_PROTECTED_TASK_QA_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Protected execution was requested only for the exact accepted Task/source and approved plan. Technical status is not QA PASS.",
+        data: await requestProtectedTaskQa(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: READ_PROTECTED_TASK_QA_TOOL.name, declaration: { displayName: READ_PROTECTED_TASK_QA_TOOL.displayName,
+      description: READ_PROTECTED_TASK_QA_TOOL.description, parametersSchema: READ_PROTECTED_TASK_QA_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Protected Node technical run status only; no QA verdict or task completion is inferred.",
+        data: await readProtectedTaskQa(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: READ_PROTECTED_TASK_QA_HISTORY_TOOL.name, declaration: { displayName: READ_PROTECTED_TASK_QA_HISTORY_TOOL.displayName,
+      description: READ_PROTECTED_TASK_QA_HISTORY_TOOL.description, parametersSchema: READ_PROTECTED_TASK_QA_HISTORY_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Historical Task-to-Core-run references and technical status only; no QA verdict or completion is inferred.",
+        data: await readProtectedTaskQaHistory(params, context, platform) as unknown as JsonValue,
       })) },
     { name: READ_TASK_SOURCE_FILE_TOOL.name, declaration: { displayName: READ_TASK_SOURCE_FILE_TOOL.displayName,
       description: READ_TASK_SOURCE_FILE_TOOL.description, parametersSchema: READ_TASK_SOURCE_FILE_TOOL.parametersSchema },

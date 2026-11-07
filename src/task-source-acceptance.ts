@@ -18,7 +18,7 @@ const bounded = (value: unknown, label: string) => {
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const json = (value: unknown) => value as JsonValue;
 
-type CtoTaskSourceAcceptance = Readonly<{
+export type CtoTaskSourceAcceptance = Readonly<{
   schemaVersion: 1;
   acceptanceId: string;
   submissionId: string;
@@ -74,6 +74,44 @@ function submissionBinding(current: Current, task: TaskPacketRecord, packetDiges
     dependencyPins: task.dependencyPins, role: worker.role, agentId: worker.agentId, sessionId: worker.sessionId,
     source: Object.freeze({ sourceId: access.sourceId, folderKey: access.folderKey, branch: access.branch,
       expectedHead: access.expectedHead }), readPaths: access.readPaths, writePaths: access.writePaths, qaWritePaths: access.qaWritePaths });
+}
+
+export type TaskQaSourceAcceptanceRead = Readonly<{ status: "accepted"; submission: TaskSourceSubmission;
+  acceptance: CtoTaskSourceAcceptance }> | Readonly<{ status: "stale" | "unknown" | "unsupported"; reason: string }>;
+
+/** Reads the immutable implementation submission/acceptance under an already-authenticated current QA Worker binding. */
+export async function readAcceptedTaskSourceForQa(input: Readonly<{ workspaceId: string; projectId: string; ctoId: string;
+  workstreamId: string; task: TaskPacketRecord; packets: readonly TaskPacketRecord[]; workerRecords: readonly TaskWorkerRecord[];
+  state: RevisionState; platform: SpsPlatformInvocationContext; assertCurrent(): Promise<void> }>): Promise<TaskQaSourceAcceptanceRead> {
+  const task = input.task;
+  const packetDigest = taskPacketRecordDigest(task, input.projectId, input.ctoId, input.workstreamId);
+  const workers = input.workerRecords.filter(worker => worker.role === "worker" && worker.workstreamId === input.workstreamId
+    && worker.taskId === task.packet.taskId && worker.packetRevision === task.packet.revision && worker.packetRecordSha256 === packetDigest);
+  if (workers.length !== 1) return Object.freeze({ status: "unknown", reason: "current-development-worker-identity-not-unique" });
+  const worker = workers[0]!;
+  const current: Current = Object.freeze({ workspaceId: input.workspaceId, projectId: input.projectId, ctoId: input.ctoId,
+    workstreamId: input.workstreamId, taskId: task.packet.taskId, ctoAgentId: "", ctoSessionId: "", ctoRunId: "", task,
+    packetDigest, packets: input.packets, workerRecords: input.workerRecords, submissionCandidates: Object.freeze([]),
+    dependencyPins: task.dependencyPins, assertCurrent: input.assertCurrent });
+  const binding = submissionBinding(current, task, packetDigest, worker);
+  const state: RevisionState = { get: async key => { await input.assertCurrent(); const value = await input.state.get(key);
+    await input.assertCurrent(); return value; } };
+  const claimed = await readTaskSourceClaim({ state, binding });
+  if (claimed.status !== "submitted") return Object.freeze({ status: "unknown", reason: claimed.status === "ineligible"
+    ? claimed.reason : "current-development-task-has-no-definitive-submission" });
+  const submission = claimed.submission;
+  const stale = staleReason(current, submission);
+  if (stale) return Object.freeze({ status: "stale", reason: stale });
+  const root = await sourceRootCurrent(submission, input.platform);
+  await input.assertCurrent();
+  if (root !== "current") return Object.freeze({ status: root === "unsupported" ? "unsupported" : "stale",
+    reason: root === "unsupported" ? "source-root-match-api-unavailable" : "task-source-root-changed" });
+  const producerRun = await verifyProducerRun(current, submission, input.platform);
+  if (producerRun === "unsupported") return Object.freeze({ status: "unsupported", reason: "task-session-run-receipt-api-unavailable" });
+  const acceptance = await readCtoTaskSourceAcceptanceForSubmission({ workspaceId: input.workspaceId, submission, state });
+  await input.assertCurrent();
+  if (!acceptance) return Object.freeze({ status: "unknown", reason: "durable-cto-acceptance-not-found" });
+  return Object.freeze({ status: "accepted", submission, acceptance });
 }
 
 async function resolveCurrent(input: { projectId: string; ctoId: string; workstreamId: string; taskId: string }, runContext: unknown,
@@ -188,7 +226,7 @@ function acceptanceKey(workspaceId: string, submissionId: string) {
     stateKey: `task-source-acceptance.v1.${submissionId}` };
 }
 
-function parseAcceptance(value: unknown, submission: TaskSourceSubmission): CtoTaskSourceAcceptance {
+export function parseCtoTaskSourceAcceptance(value: unknown, submission: TaskSourceSubmission): CtoTaskSourceAcceptance {
   const row = exactToolRecord(value, ["schemaVersion", "acceptanceId", "submissionId", "workspaceId", "projectId", "ctoId",
     "workstreamId", "taskId", "packetRevision", "packetRecordSha256", "dependencyPins", "source", "commitSha", "treeSha",
     "changedPaths", "receivedBy", "receivedAt", "meaning"]);
@@ -212,6 +250,12 @@ function parseAcceptance(value: unknown, submission: TaskSourceSubmission): CtoT
     commitSha: submission.commitSha, treeSha: submission.treeSha, changedPaths: submission.changedPaths,
     receivedBy: Object.freeze({ agentId: receivedBy.agentId as string, sessionId: receivedBy.sessionId as string,
       runId: receivedBy.runId as string }), receivedAt: row.receivedAt, meaning: "cto-received-exact-submitted-commit" });
+}
+
+export async function readCtoTaskSourceAcceptanceForSubmission(input: Readonly<{ workspaceId: string;
+  submission: TaskSourceSubmission; state: RevisionState }>): Promise<CtoTaskSourceAcceptance | null> {
+  const value = await input.state.get(acceptanceKey(input.workspaceId, input.submission.submissionId));
+  return value === null ? null : parseCtoTaskSourceAcceptance(value, input.submission);
 }
 
 async function verifyProducerRun(current: Current, submission: TaskSourceSubmission, platform: SpsPlatformInvocationContext) {
@@ -279,7 +323,7 @@ export async function recordCtoTaskSourceAcceptance(input: Readonly<{
     } : undefined,
   };
   const existing = await guardedState.get(key);
-  if (existing !== null) return Object.freeze({ status: "existing", acceptance: parseAcceptance(existing, submission) });
+  if (existing !== null) return Object.freeze({ status: "existing", acceptance: parseCtoTaskSourceAcceptance(existing, submission) });
   if (typeof guardedState.compareAndSet !== "function") return Object.freeze({ status: "unsupported",
     reason: "atomic-cto-submission-acceptance-unavailable" });
   const acceptanceId = digest(["builder-task-source-acceptance-v1", submission.submissionId]);
@@ -299,7 +343,7 @@ export async function recordCtoTaskSourceAcceptance(input: Readonly<{
   }
   if (!swapped) {
     const raced = await guardedState.get(key);
-    if (raced !== null) return Object.freeze({ status: "existing", acceptance: parseAcceptance(raced, submission) });
+    if (raced !== null) return Object.freeze({ status: "existing", acceptance: parseCtoTaskSourceAcceptance(raced, submission) });
     return Object.freeze({ status: "unknown", reason: "acceptance-cas-conflict-unresolved" });
   }
   return Object.freeze({ status: "accepted", acceptance });
@@ -371,7 +415,7 @@ async function intake(params: unknown, runContext: unknown, platform: SpsPlatfor
   };
   const existing = await guardedState.get(key);
   if (existing !== null) {
-    const acceptance = parseAcceptance(existing, submission);
+    const acceptance = parseCtoTaskSourceAcceptance(existing, submission);
     return Object.freeze({ status: accept ? "existing" : "accepted", submissionId, submission, acceptance,
       qaPreparation: submission.role === "qa" ? "unknown" : "not-applicable",
       qaExecution: submission.role === "qa" ? "unknown" : "not-applicable", qaVerdict: "not-established" });
