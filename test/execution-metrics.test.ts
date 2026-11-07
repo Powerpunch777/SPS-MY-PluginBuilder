@@ -60,10 +60,81 @@ test("exact Run timing aggregates observed AI duration without Task or QA author
   const result = await readBuilderExecutionMetrics(W, f.platform);
   assert.equal(result.status, "ready");
   if (result.status !== "ready") return;
-  assert.deepEqual(result.summary, { observedRuns: 2, normalEndedRuns: 2, measuredRuns: 2, totalExecutionMs: 10000, totalQueueMs: 4000 });
+  assert.deepEqual(result.summary, { observedRuns: 2, normalEndedRuns: 2, measuredRuns: 2, totalExecutionMs: 10000,
+    totalQueueMs: 4000, commitAcceptanceCount: 1, totalCommitAcceptanceMs: result.runs.find(run => run.role === "worker")!.commitAcceptanceMs });
   assert.deepEqual(result.runs.map(run => [run.role, run.executionMs, run.queueMs]), [["worker", 5000, 2000], ["qa", 5000, 2000]]);
   assert.equal(result.completionAuthority, "not-established");
   assert.equal(result.unmeasured.taskCompletionMs, null);
+});
+
+test("current Worker submission and exact CTO acceptance add only their recorded timestamp interval", async () => {
+  const { f } = await setupVerifiedWorkstreamPlatform();
+  const result = await readBuilderExecutionMetrics(W, f.platform);
+  assert.equal(result.status, "ready");
+  if (result.status !== "ready") return;
+  const worker = result.runs.find(run => run.role === "worker");
+  const qa = result.runs.find(run => run.role === "qa");
+  assert.ok(worker);
+  assert.ok(worker.commitAcceptanceMs !== null && worker.commitAcceptanceMs >= 0);
+  assert.equal(qa?.commitAcceptanceMs, null, "a QA source report is not a Worker implementation submission");
+  assert.deepEqual([result.summary.commitAcceptanceCount, result.summary.totalCommitAcceptanceMs],
+    [1, worker.commitAcceptanceMs]);
+});
+
+test("missing or invalid exact CTO acceptance timestamps remain unmeasured", async () => {
+  const missing = await setupVerifiedWorkstreamPlatform();
+  const acceptanceKey = [...missing.f.values.keys()].find(address => {
+    const parsed = JSON.parse(address) as { stateKey?: string };
+    return parsed.stateKey?.startsWith("task-source-acceptance.v1.");
+  });
+  assert.ok(acceptanceKey);
+  missing.f.values.delete(acceptanceKey!);
+  const withoutAcceptance = await readBuilderExecutionMetrics(W, missing.f.platform);
+  assert.equal(withoutAcceptance.status, "ready");
+  if (withoutAcceptance.status === "ready") {
+    assert.ok(withoutAcceptance.runs.filter(run => run.role === "worker").every(run => run.commitAcceptanceMs === null));
+    assert.equal(withoutAcceptance.summary.commitAcceptanceCount, 0);
+    assert.equal(withoutAcceptance.summary.totalCommitAcceptanceMs, null);
+  }
+
+  const malformed = await setupVerifiedWorkstreamPlatform();
+  const address = [...malformed.f.values.keys()].find(value => JSON.parse(value).stateKey?.startsWith("task-source-acceptance.v1."));
+  assert.ok(address);
+  const receipt = structuredClone(malformed.f.values.get(address!)) as Record<string, unknown>;
+  receipt.receivedAt = "not-a-timestamp";
+  malformed.f.values.set(address!, receipt as never);
+  const invalidTime = await readBuilderExecutionMetrics(W, malformed.f.platform);
+  assert.equal(invalidTime.status, "ready");
+  if (invalidTime.status === "ready") {
+    assert.ok(invalidTime.runs.filter(run => run.role === "worker").every(run => run.commitAcceptanceMs === null));
+    assert.equal(invalidTime.summary.commitAcceptanceCount, 0);
+  }
+
+  const invalidSubmission = await setupVerifiedWorkstreamPlatform();
+  const outcomeAddress = [...invalidSubmission.f.values.keys()].find(value => JSON.parse(value).stateKey?.startsWith("task-source-outcome.v2."));
+  assert.ok(outcomeAddress);
+  const outcome = structuredClone(invalidSubmission.f.values.get(outcomeAddress!)) as any;
+  outcome.outcome.submission.submittedAt = "not-a-timestamp";
+  invalidSubmission.f.values.set(outcomeAddress!, outcome);
+  const invalidSubmittedAt = await readBuilderExecutionMetrics(W, invalidSubmission.f.platform);
+  assert.equal(invalidSubmittedAt.status, "ready");
+  if (invalidSubmittedAt.status === "ready") {
+    assert.ok(invalidSubmittedAt.runs.filter(run => run.role === "worker").every(run => run.commitAcceptanceMs === null));
+    assert.equal(invalidSubmittedAt.summary.commitAcceptanceCount, 0);
+  }
+
+  const reversed = await setupVerifiedWorkstreamPlatform();
+  const reversedAcceptanceKey = [...reversed.f.values.keys()].find(value => JSON.parse(value).stateKey?.startsWith("task-source-acceptance.v1."));
+  assert.ok(reversedAcceptanceKey);
+  const reversedAcceptance = structuredClone(reversed.f.values.get(reversedAcceptanceKey!)) as any;
+  reversedAcceptance.receivedAt = "2000-01-01T00:00:00.000Z";
+  reversed.f.values.set(reversedAcceptanceKey!, reversedAcceptance);
+  const reversedResult = await readBuilderExecutionMetrics(W, reversed.f.platform);
+  assert.equal(reversedResult.status, "ready");
+  if (reversedResult.status === "ready") {
+    assert.ok(reversedResult.runs.filter(run => run.role === "worker").every(run => run.commitAcceptanceMs === null));
+    assert.equal(reversedResult.summary.commitAcceptanceCount, 0);
+  }
 });
 
 test("failed or cancellation-requested Run cannot become normally ended", async () => {

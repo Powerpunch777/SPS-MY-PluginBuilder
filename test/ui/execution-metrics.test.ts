@@ -43,6 +43,14 @@ function metrics(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function metricsWithCommitAcceptance(overrides: Record<string, unknown> = {}) {
+  const base = metrics();
+  const runs = base.runs.map((run, index) => ({ ...run, commitAcceptanceMs: index === 0 ? 1_500 : null }));
+  return { ...base, ...overrides, runs: (overrides.runs as typeof runs | undefined) ?? runs,
+    summary: { ...base.summary, commitAcceptanceCount: 1, totalCommitAcceptanceMs: 1_500,
+      ...(overrides.summary as Record<string, unknown> | undefined) } };
+}
+
 async function loadMetricsPanel() {
   const temporary = await mkdtemp(path.join(projectRoot, PANEL_TEMP_PREFIX));
   const output = path.join(temporary, "ExecutionMetricsSection.mjs");
@@ -80,7 +88,7 @@ test("metrics projection distinguishes unknown, unmeasured timings, Run end, and
     assert.match(unavailable, /현재 실행 지표를 확인할 수 없습니다/u);
     assert.doesNotMatch(unavailable, /fixture only|0초|0.00초/u);
 
-    const current = renderPanel(Panel, metrics());
+    const current = renderPanel(Panel, metricsWithCommitAcceptance());
     assert.match(current, /정상 종료 Run/u);
     assert.match(current, /Run 종료는 Task·QA·프로젝트 완료가 아닙니다/u);
     assert.match(current, /worker/u);
@@ -90,6 +98,8 @@ test("metrics projection distinguishes unknown, unmeasured timings, Run end, and
     assert.match(current, /1\.25초/u);
     assert.match(current, /0\.5초/u);
     assert.match(current, /Task 완료 시간/u);
+    assert.match(current, /Commit 인수 대기/u);
+    assert.match(current, /1\.5초/u);
     assert.match(current, /미측정/u);
 
     const unresolved = metrics({ runs: [...metrics().runs,
@@ -128,13 +138,18 @@ test("strict metrics parser rejects false, incomplete, foreign, role-invalid, an
       enumerable: true, get() { getterReads += 1; return 1; },
     });
 
-    for (const value of [omitted, invalidRole, falseSummary, extra, foreign, accessor, nestedAccessor]) {
+    const falseCommitSummary = metricsWithCommitAcceptance({ summary: { ...metricsWithCommitAcceptance().summary,
+      commitAcceptanceCount: 0 } });
+    const qaCommitInterval = metricsWithCommitAcceptance({ runs: metricsWithCommitAcceptance().runs.map((run, index) =>
+      index === 1 ? { ...run, commitAcceptanceMs: 1 } : run) });
+    for (const value of [omitted, invalidRole, falseSummary, extra, foreign, accessor, nestedAccessor, falseCommitSummary, qaCommitInterval]) {
       assert.equal(parseDTO(value, WORKSPACE), null);
       const html = renderPanel(Panel, value);
       assert.match(html, /현재 실행 지표를 확인할 수 없습니다/u);
       assert.doesNotMatch(html, /task-worker|task-qa|fixture only/u);
     }
     assert.equal(getterReads, 0, "DTO accessors must not execute while parsing Host data");
+    assert.ok(parseDTO(valid, WORKSPACE), "the exact legacy metrics DTO remains readable");
   } finally { await removeOwnedTemp(temporary, PANEL_TEMP_PREFIX); }
 });
 
