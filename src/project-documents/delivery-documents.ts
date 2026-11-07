@@ -50,6 +50,14 @@ export type DeliveryDocumentsRead = Readonly<{
   completeness: "unknown";
 }>;
 
+export function deliveryDocumentPin(bundle: PublishedDeliveryDocuments, index: number): DeliverySourcePin {
+  const document = bundle.documents[index];
+  const suffix = /^delivery-documents-v1:([a-f0-9]{64})$/u.exec(bundle.revisionId)?.[1];
+  if (!document || !suffix) throw new TypeError("Invalid delivery document reference.");
+  return { sourceId: `delivery-document:${bundle.workspaceId}/${bundle.projectId}:${index + 1}:${document.kind}`,
+    revisionId: `delivery-document-rev:${suffix}:${index + 1}`, sha256: document.bodySha256 };
+}
+
 function record(value: unknown, required: readonly string[], optional: readonly string[] = []) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError("Invalid delivery document record.");

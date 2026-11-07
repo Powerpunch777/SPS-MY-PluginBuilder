@@ -73,8 +73,8 @@ export async function preparedFixture(withValidation = false, withRegression = f
     lastRunId: null, lastError: null, contextState: "valid", managedAgentOwnership: "owned" }];
   sessions.sendMessage = async (sessionId: string, companyId: string, input: any) => {
     assert.equal(sessionId, MANAGER_SESSION); assert.equal(companyId, W);
-    assert.deepEqual([...input.executionPolicy.toolNames], ["builder.integrate-verified-task", "builder.read-integration-progress",
-      "builder.read-verified-workstream", "builder.request-integration-validation"]);
+    assert.deepEqual([...input.executionPolicy.toolNames], ["builder.integrate-verified-task", "builder.publish-integration-packet",
+      "builder.read-integration-progress", "builder.read-verified-workstream", "builder.request-integration-validation"]);
     const old = [...receipts.values()].find(item => item.requestId === input.requestId);
     if (old) return { runId: old.runId };
     sends++;

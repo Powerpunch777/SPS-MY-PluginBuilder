@@ -5,3 +5,4 @@ export const READ_VERIFIED_WORKSTREAM_TOOL: Tool<"builder.read-verified-workstre
 export const INTEGRATE_VERIFIED_TASK_TOOL: Tool<"builder.integrate-verified-task">;
 export const READ_INTEGRATION_PROGRESS_TOOL: Tool<"builder.read-integration-progress">;
 export const REQUEST_INTEGRATION_VALIDATION_TOOL: Tool<"builder.request-integration-validation">;
+export const PUBLISH_INTEGRATION_PACKET_TOOL: Tool<"builder.publish-integration-packet">;

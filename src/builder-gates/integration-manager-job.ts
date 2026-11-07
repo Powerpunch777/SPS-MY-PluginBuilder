@@ -10,6 +10,7 @@ import { consumeVerifiedWorkstream, type ManagerDispatchRequest, type VerifiedWo
 import { readWorkstreams } from "../workstream-tools.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
 import type { IntegrationPlan } from "./integration-plan.ts";
+import { INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY } from "../session-execution-policy.ts";
 
 export const INTEGRATION_MANAGER_VERIFIED_READ_TOOL = "builder.read-verified-workstream";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
@@ -17,10 +18,7 @@ const ID = /^[^\u0000-\u001f\u007f]{1,160}$/u;
 const MANAGER_REQUEST_NAMESPACE = Buffer.from("5b6e9b0e5a2d4f0184a7d32c40c4a91f", "hex");
 const MAX_WORKSTREAMS = 128;
 const MAX_MANAGER_TOOL_RESPONSE_BYTES = 40 * 1024;
-const MANAGER_EXECUTION_TOOLS = Object.freeze([
-  "builder.integrate-verified-task", "builder.read-integration-progress", INTEGRATION_MANAGER_VERIFIED_READ_TOOL,
-  "builder.request-integration-validation",
-].sort());
+const MANAGER_EXECUTION_TOOLS = INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames;
 const REQUEST_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 type Host = SpsPlatformInvocationContext & {
   agents: SpsPlatformInvocationContext["agents"] & {
@@ -75,6 +73,7 @@ function managerPrompt(request: ManagerDispatchRequest, plan: CurrentIntegration
     + "Record integration work only through builder.integrate-verified-task under the approved plan. "
     + "After all ready Tasks are integrated, request the current candidate's CI and E2E through builder.request-integration-validation when Main has pinned their Host template references. Read actual results through builder.read-integration-progress. "
     + (plan.revision.validationPlans?.regression ? "Request the pinned regression phase for the same current candidate too. " : "")
+    + "Only when all evidence is current, hand it to Main using builder.publish-integration-packet with the current final-delivery journal head. Do not represent a queued test as passed. "
     + "This dispatch is admission only; it is not integration completion, CI success, or final delivery approval.";
   if (Buffer.byteLength(prompt, "utf8") > MAX_MANAGER_TOOL_RESPONSE_BYTES) throw new Error("manager-integration-request-exceeds-bounded-prompt");
   return prompt;

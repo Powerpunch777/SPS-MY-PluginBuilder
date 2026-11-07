@@ -1,6 +1,6 @@
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderLeadSessions } from "../domain/model.ts";
-import { readCurrentDeliveryDocuments, type DeliveryDocumentsRead } from "../project-documents/delivery-documents.ts";
+import { deliveryDocumentPin, readCurrentDeliveryDocuments, type DeliveryDocumentsRead } from "../project-documents/delivery-documents.ts";
 import type { createFinalPacketStore } from "./final-packet.ts";
 
 type Store = ReturnType<typeof createFinalPacketStore>;
@@ -33,10 +33,9 @@ export function resolveFinalReviewDeliveryDocuments(packet: ReviewEvidence["snap
     if (!suffix) return empty("unknown");
     for (const [index, candidate] of bundle.documents.entries()) {
       if (candidate.kind !== target.kind) continue;
-      const sourceId = `delivery-document:${workspaceId}/${projectId}:${index + 1}:${candidate.kind}`;
-      if (sourceId !== target.pin.sourceId) continue;
-      const revisionId = `delivery-document-rev:${suffix}:${index + 1}`;
-      if (target.pin.revisionId !== revisionId || target.pin.sha256 !== candidate.bodySha256) return empty("stale");
+      const pin = deliveryDocumentPin(bundle, index);
+      if (pin.sourceId !== target.pin.sourceId) continue;
+      if (target.pin.revisionId !== pin.revisionId || target.pin.sha256 !== pin.sha256) return empty("stale");
       return Object.freeze({ kind: target.kind, pin: target.pin, status: "available", path: candidate.path, body: candidate.body });
     }
     return empty(target.pin.sourceId.startsWith(`delivery-document:${workspaceId}/${projectId}:`) ? "stale" : "unavailable");

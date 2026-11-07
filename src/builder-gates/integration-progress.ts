@@ -254,8 +254,10 @@ export async function readIntegrationProgress(params: unknown, runContext: unkno
   const snapshot = await managerEvent({ workstreamId, eventId }, runContext, platform);
   if (row.projection === "delivery-inventory") {
     const result = await (await import("../delivery-evidence/delivery-inventory.ts")).readDeliveryInventory(context.companyId, platform);
+    const { createFinalPacketStore } = await import("../delivery-evidence/final-packet.ts");
+    const finalDeliveryHeadRevisionId = await createFinalPacketStore(context.companyId, context.companyId, platform.state).headRevisionId();
     await managerEvent({ workstreamId, eventId }, runContext, platform);
-    return result;
+    return { ...result, finalDeliveryHeadRevisionId };
   }
   if (row.projection === "candidate") {
     const result = await (await import("../delivery-evidence/integration-candidate.ts")).readIntegrationCandidate(context.companyId, platform);

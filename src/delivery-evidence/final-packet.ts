@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { SpsActionContext, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
-import { createRevisionJournal, type RevisionState } from "../solution-revision-store.ts";
+import { createRevisionJournal, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
+import { integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const ID = /^[^\u0000-\u001f\u007f]{1,200}$/u;
@@ -60,7 +61,7 @@ export type FinalEvidenceReader = () => Promise<Readonly<{ status: "available"; 
 export type FinalPacketJournalEvent = Readonly<{
   eventId: string;
   expectedBaseRevisionId: string | null;
-  kind: "main-attestation" | "approval-request" | "user-decision";
+  kind: "manager-packet" | "main-attestation" | "approval-request" | "user-decision";
   requestId: string;
   attestation: Readonly<{ packet: FinalPacket; snapshotSha256: string; currentPinsSha256: string; attestedAt: string;
     mainLeadAgentId: string; mainLeadSelectionRevision: number; mainLeadRunId: string; mainLeadSessionId: string }>| null;
@@ -69,6 +70,7 @@ export type FinalPacketJournalEvent = Readonly<{
     integrationReviewAgentId: string; integrationReviewRunId: string; integrationReviewSessionId: string }>| null;
   decision: Readonly<{ action: "approve" | "request-changes" | "hold"; userId: string; reason: string | null;
     decidedAt: string; sourceSnapshotSha256: string | null }>| null;
+  managerPacket?: Readonly<{ evidence: IntegrationPacketEvidence; sha256: string; agentId: string; sessionId: string; runId: string }>;
 }>;
 export type FinalAtomicApprovalCommitter = (input: Readonly<{ workspaceId: string; projectId: string; requestId: string;
   expectedJournalRevisionId: string | null; requestSnapshotSha256: string; currentSnapshotSha256: string;
@@ -167,10 +169,25 @@ function verifyPacketBytes(snapshot: FinalEvidenceSnapshot, value: FinalPacket):
   } catch { return false; }
 }
 function parseEvent(value: unknown): FinalPacketJournalEvent {
-  const row = record(value, ["eventId", "expectedBaseRevisionId", "kind", "requestId", "attestation", "request", "decision"]);
+  const row = exactToolRecord(value, ["eventId", "expectedBaseRevisionId", "kind", "requestId", "attestation", "request", "decision"], ["managerPacket"]);
   const eventId = id(row.eventId, "eventId");
   const expectedBaseRevisionId = row.expectedBaseRevisionId === null ? null : id(row.expectedBaseRevisionId, "expected base revision");
   const requestId = id(row.requestId, "requestId");
+  if (row.kind === "manager-packet" && row.attestation === null && row.request === null && row.decision === null) {
+    const payload = record(row.managerPacket, ["evidence", "sha256", "agentId", "sessionId", "runId"]);
+    const body = record(payload.evidence, ["workspaceId", "projectId", "candidate", "candidateEvidenceSha256", "plan", "baseline", "ui",
+      "boardRevisionId", "workstreams", "tasks", "scope", "validation", "buildOutputs", "manifest", "files", "documentRevisionId",
+      "documents", "finalReadiness", "deliveryAuthority"]);
+    const sha256 = digest(payload.sha256, "integration packet digest");
+    if (body.finalReadiness !== "main-g7-required" || body.deliveryAuthority !== "not-established"
+      || integrationPacketDigest(body) !== sha256 || requestId !== `integration-packet-v1:${sha256}`
+      || eventId !== managerEventId(requestId, expectedBaseRevisionId)) throw new TypeError("Invalid Manager packet identity.");
+    return freeze({ eventId, expectedBaseRevisionId, kind: "manager-packet", requestId,
+      managerPacket: { evidence: body as unknown as IntegrationPacketEvidence, sha256, agentId: id(payload.agentId, "Manager Agent"),
+        sessionId: id(payload.sessionId, "Manager session"), runId: id(payload.runId, "Manager run") },
+      attestation: null, request: null, decision: null });
+  }
+  if (Object.hasOwn(row, "managerPacket")) throw new TypeError("Unexpected Manager packet payload.");
   if (row.kind === "main-attestation" && row.attestation && row.request === null && row.decision === null) {
     const attestation = record(row.attestation, ["packet", "snapshotSha256", "currentPinsSha256", "attestedAt", "mainLeadAgentId",
       "mainLeadSelectionRevision", "mainLeadRunId", "mainLeadSessionId"]);
@@ -218,6 +235,10 @@ function parseEvent(value: unknown): FinalPacketJournalEvent {
   throw new TypeError("Invalid Final Packet journal event.");
 }
 
+function managerEventId(requestId: string, parent: string | null) {
+  return `integration-packet-event-v1:${hash(json([requestId, parent]))}`;
+}
+
 function eligible(snapshot: FinalEvidenceSnapshot, workspaceId: string, projectId: string): boolean {
   try {
     const parsedPacket = packet(snapshot.packet);
@@ -238,7 +259,12 @@ function eligible(snapshot: FinalEvidenceSnapshot, workspaceId: string, projectI
 export function createFinalPacketStore(workspaceId: string, projectId: string, state: RevisionState,
   readCurrentEvidence?: FinalEvidenceReader, commitApprovalAtomically?: FinalAtomicApprovalCommitter) {
   const journal = createRevisionJournal<FinalPacketJournalEvent>(workspaceId, projectId, state, { prefix: "final-delivery",
-    parse: parseEvent, revisionId: event => event.eventId });
+    parse(value) {
+      const event = parseEvent(value);
+      const packet = event.managerPacket?.evidence;
+      if (packet && (packet.workspaceId !== workspaceId || packet.projectId !== projectId)) throw new Error("Foreign Manager packet.");
+      return event;
+    }, revisionId: event => event.eventId });
   async function evidence() {
     if (!readCurrentEvidence) return null;
     try {
@@ -256,6 +282,27 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
   }
   return Object.freeze({
     async current() { return journal.recent(50); },
+    async headRevisionId() { return (await journal.current())?.revision.eventId ?? null; },
+    async currentManagerPacket() {
+      return (await journal.recent(50)).revisions.find(item => item.revision.kind === "manager-packet") ?? null;
+    },
+    async publishManagerPacket(input: Readonly<{ evidence: IntegrationPacketEvidence; sha256: string; expectedBaseRevisionId: string | null;
+      author: { agentId: string; sessionId: string; runId: string }; guards: readonly RevisionPublicationGuard[] }>) {
+      const requestId = `integration-packet-v1:${input.sha256}`;
+      const previous = (await journal.recent(50)).revisions.find(item => item.revision.kind === "manager-packet");
+      if (previous?.revision.requestId === requestId) return { status: "existing" as const, eventId: previous.revision.eventId,
+        packetRevisionId: requestId, sequence: previous.sequence };
+      const expected = input.expectedBaseRevisionId;
+      const eventId = managerEventId(requestId, expected);
+      const staged = await journal.stagedRevision(eventId, expected);
+      if (staged.status === "conflict") return { status: "conflict" as const, actualBaseRevisionId: staged.actualBaseRevisionId };
+      const revision = staged.status === "staged" ? staged.revision : parseEvent({ eventId, expectedBaseRevisionId: expected,
+        kind: "manager-packet", requestId, managerPacket: { evidence: input.evidence, sha256: input.sha256, ...input.author },
+        attestation: null, request: null, decision: null });
+      if (Buffer.byteLength(json(revision), "utf8") > 128 * 1024) return { status: "unsupported" as const, reason: "integration-packet-record-bound" };
+      const result = await journal.publishGuarded({ expectedBaseRevisionId: expected, revision }, input.guards);
+      return result.status === "published" ? { status: "published" as const, eventId, packetRevisionId: requestId, sequence: result.sequence } : result;
+    },
     async reviewEvidence() {
       const current = await evidence();
       if (!current || current.workspaceId !== workspaceId || current.projectId !== projectId) return null;

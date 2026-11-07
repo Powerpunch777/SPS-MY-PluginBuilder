@@ -2,8 +2,8 @@ const revisionId = { type: "string", minLength: 1, maxLength: 200 };
 const base = { eventId: revisionId, requestId: revisionId, expectedBaseRevisionId: { anyOf: [revisionId, { type: "null" }] } };
 
 export const READ_FINAL_REVIEW_TOOL = Object.freeze({ name: "builder.read-final-review", displayName: "Read final review records",
-  description: "Read pinned Final Packet review records and current evidence availability; never approve or deliver.",
-  parametersSchema: { type: "object", additionalProperties: false, properties: {} } });
+  description: "Read pinned final review records. projection=integration-packet reads the exact Manager handoff and verifies whether its evidence is still current. Never approve or deliver.",
+  parametersSchema: { type: "object", additionalProperties: false, properties: { projection: { type: "string", enum: ["integration-packet"] } } } });
 
 export const ATTEST_FINAL_PACKET_TOOL = Object.freeze({ name: "builder.attest-final-packet", displayName: "Attest Final Packet readiness",
   description: "Main only. Recheck current Final Packet and required QA/G6/G7 evidence before recording readiness. This is not user approval.",

@@ -43,7 +43,7 @@ import { publishIntegrationPlan } from "./builder-gates/integration-plan.ts";
 import { integrateVerifiedTask, readIntegrationProgress } from "./builder-gates/integration-progress.ts";
 import { requestIntegrationValidation } from "./builder-gates/integration-validation.ts";
 import { PUBLISH_INTEGRATION_PLAN_TOOL, READ_VERIFIED_WORKSTREAM_TOOL, INTEGRATE_VERIFIED_TASK_TOOL,
-  READ_INTEGRATION_PROGRESS_TOOL, REQUEST_INTEGRATION_VALIDATION_TOOL } from "./builder-gates/tool-declarations.mjs";
+  READ_INTEGRATION_PROGRESS_TOOL, REQUEST_INTEGRATION_VALIDATION_TOOL, PUBLISH_INTEGRATION_PACKET_TOOL } from "./builder-gates/tool-declarations.mjs";
 import { acceptCtoTaskSourceSubmission, readCtoTaskSourceSubmission } from "./task-source-acceptance.ts";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
@@ -73,6 +73,7 @@ import { uiReviewApprovalPrompt, uiReviewRequestId } from "./ui-contracts/review
 import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
 import { createFinalPacketStore } from "./delivery-evidence/final-packet.ts";
 import { readFinalReview } from "./delivery-evidence/final-review.ts";
+import { publishIntegrationPacket, readCurrentIntegrationPacket } from "./delivery-evidence/integration-packet.ts";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
 import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
@@ -904,12 +905,14 @@ export function createBuilderPlatform() {
       }) },
     { name: READ_FINAL_REVIEW_TOOL.name, declaration: READ_FINAL_REVIEW_TOOL,
       handler: (params, context, platform) => serialize(context.companyId, async () => {
-        exactToolRecord(params, []);
+        const input = exactToolRecord(params, [], ["projection"]);
+        if (input.projection !== undefined && input.projection !== "integration-packet") throw new TypeError("Invalid final review projection.");
         const run = parseLeadToolContext(context);
         if (run.projectId !== undefined && run.projectId !== run.companyId) throw new Error("Final review requires the authenticated Workspace project.");
         const authority = await resolveLeadToolAuthority(run, platform);
         if (authority.channel !== "main" && authority.channel !== "integration-review") throw new Error("Only Main and Integration Review may inspect Final Packet records.");
-        const view = await finalReviewView(run.companyId, platform);
+        const view = input.projection === "integration-packet" ? await readCurrentIntegrationPacket(run.companyId, platform)
+          : await finalReviewView(run.companyId, platform);
         await authority.check();
         return { content: "Final Packet review records only. UNKNOWN is not QA, user approval, or permission to deliver.", data: view as unknown as JsonValue };
       }) },
@@ -1128,6 +1131,11 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => serialize(context.companyId, async () => ({
         content: "Exact protected candidate test request only. Technical execution, authored QA, complete G6/G7 and user delivery approval remain distinct.",
         data: await requestIntegrationValidation(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: PUBLISH_INTEGRATION_PACKET_TOOL.name, declaration: PUBLISH_INTEGRATION_PACKET_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Manager evidence handoff only. Main G7 and authenticated user approval are separate.",
+        data: await publishIntegrationPacket(params, context, platform) as unknown as JsonValue,
       })) },
     { name: VERIFY_WORKSTREAM_TOOL.name, declaration: { displayName: VERIFY_WORKSTREAM_TOOL.displayName,
       description: VERIFY_WORKSTREAM_TOOL.description, parametersSchema: VERIFY_WORKSTREAM_TOOL.parametersSchema },

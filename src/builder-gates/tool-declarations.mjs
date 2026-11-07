@@ -37,3 +37,9 @@ export const REQUEST_INTEGRATION_VALIDATION_TOOL = Object.freeze({
   parametersSchema: { ...eventScope, required: [...eventScope.required, "taskId", "phase"],
     properties: { ...eventScope.properties, taskId: id, phase: { type: "string", enum: ["ci", "e2e", "regression"] } } },
 });
+export const PUBLISH_INTEGRATION_PACKET_TOOL = Object.freeze({
+  name: "builder.publish-integration-packet", displayName: "Hand integrated evidence to Main",
+  description: "Only the admitted Manager publishes the current complete Workstream/G6 and candidate CI/E2E/regression references with exact inventory and guides. Requires the current final-delivery journal head. Main still checks G7; this does not request or record user approval.",
+  parametersSchema: { ...eventScope, required: [...eventScope.required, "expectedBaseRevisionId"],
+    properties: { ...eventScope.properties, expectedBaseRevisionId: { anyOf: [{ type: "string", minLength: 1, maxLength: 200 }, { type: "null" }] } } },
+});

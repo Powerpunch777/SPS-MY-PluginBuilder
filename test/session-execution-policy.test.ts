@@ -78,7 +78,8 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   assert.deepEqual(LEAD_SESSION_EXECUTION_POLICY.toolNames, LEAD_PLANNING_TOOL_NAMES);
   assert.deepEqual(CTO_SESSION_EXECUTION_POLICY.toolNames, CTO_WORKSTREAM_TOOL_NAMES);
   assert.deepEqual(INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames, [
-    "builder.integrate-verified-task", "builder.read-integration-progress", "builder.read-verified-workstream", "builder.request-integration-validation",
+    "builder.integrate-verified-task", "builder.publish-integration-packet", "builder.read-integration-progress",
+    "builder.read-verified-workstream", "builder.request-integration-validation",
   ]);
   assert.ok(INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames.every(name => !new Set<string>(LEAD_PLANNING_TOOL_NAMES).has(name)
     && !new Set<string>(CTO_WORKSTREAM_TOOL_NAMES).has(name)));

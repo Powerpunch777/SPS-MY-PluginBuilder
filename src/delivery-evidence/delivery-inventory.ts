@@ -3,7 +3,7 @@ import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/pla
 import { readDesignBaseline } from "../design-baseline-tools.ts";
 import type { ApprovedSpecRevision, DeliveryTarget } from "../domain/specification-revisions.ts";
 import { exactToolRecord } from "../lead-tool-authority.ts";
-import { readIntegrationCandidate } from "./integration-candidate.ts";
+import { integrationCandidateEvidenceDigest, readIntegrationCandidate } from "./integration-candidate.ts";
 import { parseDeliverySourcePath, readDeliverySourceSnapshot } from "./source-snapshot.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -78,12 +78,12 @@ export async function readDeliveryInventory(workspaceId: string, platform: SpsPl
       }
     }
     const latest = await readIntegrationCandidate(workspaceId, platform);
-    const evidence = (value: typeof candidate) => [value.candidate, value.plan.revisionId, value.boardRevisionId,
-      value.attempts.map(attempt => attempt.revisionId), value.ci, value.e2e, value.regression ?? null];
-    if (latest.status !== "observed" || hash(evidence(latest)) !== hash(evidence(candidate))) {
+    const candidateEvidenceSha256 = integrationCandidateEvidenceDigest(candidate);
+    if (latest.status !== "observed" || integrationCandidateEvidenceDigest(latest) !== candidateEvidenceSha256) {
       return unavailable("stale", "delivery-inventory-evidence-changed-during-read");
     }
     return { status: "observed" as const, candidate: candidate.candidate, planRevisionId: candidate.plan.revisionId,
+      candidateEvidenceSha256,
       manifest: { path, sha256: manifestFile.sha256, sourceTreeManifestSha256: manifestRead.manifestSha256 },
       files: observed, deliveryAuthority: "not-established" as const };
   } catch {

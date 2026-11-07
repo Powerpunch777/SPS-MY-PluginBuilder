@@ -22,6 +22,11 @@ type TaskTrace = Readonly<{ workstreamId: string; verificationEventId: string; t
 
 type PhaseReference = Readonly<{ attempt: IntegrationAttempt; reference: IntegrationValidationReference }>;
 
+export function integrationCandidateEvidenceDigest(value: Extract<Awaited<ReturnType<typeof readIntegrationCandidate>>, { status: "observed" }>) {
+  return hash([value.candidate, value.plan.revisionId, value.boardRevisionId, value.snapshots.map(item => item.eventId),
+    value.attempts.map(item => item.revisionId), value.scopeTrace, value.ci, value.e2e, value.regression ?? null]);
+}
+
 /** Multiple local observations of a single Core request are not multiple tests.
  * Never select between contradictory receipts or distinct requests. */
 export function selectLogicalValidationRun(references: readonly PhaseReference[]) {

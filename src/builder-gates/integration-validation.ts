@@ -79,6 +79,7 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
       if (!reference) continue;
       let status: "pending" | "passed" | "failed" | "unknown" | "stale" = "unknown";
       let outputs: ProtectedOutputRead | null = null;
+      let receiptSha256: string | null = null;
       if (reference.runId && typeof api?.getRunV1 === "function") {
         try {
           const raw = await api.getRunV1(attempt.scope.workspaceId, reference.runId, reference.subjectKeySha256);
@@ -102,6 +103,7 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
               const latest = matchesRun(await api.getRunV1(attempt.scope.workspaceId, reference.runId, reference.subjectKeySha256), attempt, reference);
               if (technicalOutcome(latest) !== "passed" || completionIdentity(latest) !== observedCompletion) { status = "unknown"; outputs = null; }
               else if (!await tipCurrent()) { status = "stale"; outputs = null; }
+              else receiptSha256 = (latest.receipt as { digest: string }).digest;
             }
           }
         } catch {
@@ -110,7 +112,7 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
         }
       }
       results.push({ taskId: attempt.scope.taskId, phase, runId: reference.runId, commitSha: reference.commitSha,
-        treeSha: reference.treeSha, status, outputs, qaVerdict: "not-established" as const });
+        treeSha: reference.treeSha, status, receiptSha256, outputs, qaVerdict: "not-established" as const });
     }
   }
   return results;
