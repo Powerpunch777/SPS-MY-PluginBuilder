@@ -20,7 +20,6 @@ type CurrentManagerRead = Awaited<ReturnType<typeof readCurrentIntegrationPacket
 type TrustedAtomicApprovalDependencies = Readonly<{
   readCurrentEvidence?: (platform: SpsPlatformInvocationContext) => ReturnType<FinalEvidenceReader>;
   readCurrentManagerPacket?: (platform: SpsPlatformInvocationContext) => Promise<CurrentManagerRead>;
-  createApprovalJournal?: (state: RevisionState) => AtomicApprovalStore;
 }>;
 type AtomicApprovalStore = ReturnType<typeof createFinalPacketStore> & {
   publishApprovalDecisionGuarded?: (input: Readonly<{ expectedBaseRevisionId: string; decision: FinalPacketJournalEvent;
@@ -40,6 +39,33 @@ function cloneJson(value: unknown): JsonValue {
 
 function oid(value: unknown): value is string {
   return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value);
+}
+
+function hostAdvertisesGitRefCas(value: unknown): boolean {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== 3 || !["state", "contractVersion", "operations"].every(key => keys.includes(key))) return false;
+    const field = (key: string) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError();
+      return descriptor.value as unknown;
+    };
+    if (field("state") !== "reported" || field("contractVersion") !== "1.0") return false;
+    const operations = field("operations");
+    if (!Array.isArray(operations) || Object.getPrototypeOf(operations) !== Array.prototype || operations.length > 128
+      || Reflect.ownKeys(operations).length !== operations.length + 1) return false;
+    const seen = new Set<string>();
+    for (let index = 0; index < operations.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(operations, String(index));
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value") || typeof descriptor.value !== "string"
+        || descriptor.value.length > 80 || !/^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/u.test(descriptor.value)
+        || seen.has(descriptor.value)) return false;
+      seen.add(descriptor.value);
+    }
+    return seen.has("state.guardedGitRefCompareAndSetV1");
+  } catch { return false; }
 }
 
 function currentManagerPins(read: CurrentManagerRead) {
@@ -125,8 +151,10 @@ function createTrackedPlatform(platform: SpsPlatformInvocationContext, workspace
  * remains unchanged; only the head CAS is routed through Core's user/Git guard.
  */
 export function createFinalPacketAtomicApprovalCommitter(workspaceId: string, projectId: string,
-  platform: SpsPlatformInvocationContext, trustedDependencies: TrustedAtomicApprovalDependencies = {}): FinalAtomicApprovalCommitter {
+  platform: SpsPlatformInvocationContext, hostSupport: unknown,
+  trustedDependencies: TrustedAtomicApprovalDependencies = {}): FinalAtomicApprovalCommitter | undefined {
   if (!workspaceId || !projectId || workspaceId !== projectId) throw new TypeError("Final approval requires the authenticated Workspace project.");
+  if (!hostAdvertisesGitRefCas(hostSupport)) return undefined;
   const rawState = platform.state as typeof platform.state & RevisionState;
   const stateKey = `final-delivery-head.v1.${hash(projectId)}`;
   return async input => {
@@ -163,7 +191,7 @@ export function createFinalPacketAtomicApprovalCommitter(workspaceId: string, pr
       || managerPins.branch !== rawEvidence.value.packet.integration.branch) throw new Error("Current Manager packet and Final Packet Git pins disagree.");
 
     const state = trackedPlatform.state as typeof trackedPlatform.state & RevisionState;
-    const journal = (trustedDependencies.createApprovalJournal ?? (selected => createFinalPacketStore(workspaceId, projectId, selected) as AtomicApprovalStore))(state);
+    const journal = createFinalPacketStore(workspaceId, projectId, state) as AtomicApprovalStore;
     const history = await journal.current();
     const latest = history.revisions[0]?.revision;
     if (!latest || latest.kind !== "approval-request" || latest.eventId !== input.expectedJournalRevisionId
@@ -215,7 +243,7 @@ export function createFinalPacketAtomicApprovalCommitter(workspaceId: string, pr
       if (result.status === "conflict") return { status: "conflict" as const };
       throw new Error(`Core guarded Git-ref approval did not commit (${result.status}:${result.reason}).`);
     } };
-    const guardedJournal = (trustedDependencies.createApprovalJournal ?? (selected => createFinalPacketStore(workspaceId, projectId, selected) as AtomicApprovalStore))(guardedState);
+    const guardedJournal = createFinalPacketStore(workspaceId, projectId, guardedState) as AtomicApprovalStore;
     if (typeof guardedJournal.publishApprovalDecisionGuarded !== "function") {
       throw new Error("The existing final-delivery journal does not expose its atomic approval writer adapter.");
     }
@@ -228,7 +256,8 @@ export function createFinalPacketAtomicApprovalCommitter(workspaceId: string, pr
         return { status: "stale" };
       }
       if (published.status !== "published" || !Number.isSafeInteger(published.sequence) || published.sequence! < 1) {
-        throw new Error(`Atomic approval head write is unsupported (${published.reason ?? published.status}).`);
+        const reason = "reason" in published ? published.reason : published.status;
+        throw new Error(`Atomic approval head write is unsupported (${reason}).`);
       }
       const persisted = await publishedDecision();
       if (!persisted || persisted.sequence !== published.sequence || !equal(persisted.revision, decision)) {

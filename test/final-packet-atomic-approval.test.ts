@@ -6,12 +6,13 @@ import { createFinalPacketAtomicApprovalCommitter } from "../src/delivery-eviden
 import { createFinalPacketStore, finalPacketPinsDigest, sealFinalPacket, type FinalEvidenceSnapshot,
   type FinalPacketJournalEvent } from "../src/delivery-evidence/final-packet.ts";
 import { integrationPacketDigest } from "../src/delivery-evidence/integration-packet-evidence.ts";
-import { createRevisionJournal, type RevisionPublicationGuard, type RevisionState } from "../src/solution-revision-store.ts";
+import { createRevisionJournal, type RevisionState } from "../src/solution-revision-store.ts";
 import { mainG7ReviewFixture } from "./fixtures/main-g7-review-fixture.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const SOURCE = "22222222-2222-4222-8222-222222222222";
 const NOW = "2026-11-07T10:00:00.000Z";
+const HOST_SUPPORT = { state: "reported", contractVersion: "1.0", operations: ["state.guardedGitRefCompareAndSetV1"] };
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const json = (value: unknown) => JSON.stringify(value);
 const keyString = (key: SpsStateKey) => JSON.stringify([key.scopeKind, key.scopeId, key.namespace ?? "default", key.stateKey]);
@@ -112,17 +113,7 @@ function evidenceFixture() {
     return { status: "committed", proof: { sourceId: currentSource.sourceId, folderKey: currentSource.folderKey,
       branch: currentSource.branch, commitSha: currentSource.commitSha, treeSha: currentSource.treeSha } };
   };
-  const createApprovalJournal = (selectedState: RevisionState) => {
-    const selectedJournal = createRevisionJournal<FinalPacketJournalEvent>(WORKSPACE, WORKSPACE, selectedState,
-      { prefix: "final-delivery", parse: value => value as FinalPacketJournalEvent, revisionId: event => event.eventId });
-    return { ...createFinalPacketStore(WORKSPACE, WORKSPACE, selectedState),
-      async publishApprovalDecisionGuarded(input: { expectedBaseRevisionId: string; decision: FinalPacketJournalEvent;
-        guards: readonly RevisionPublicationGuard[] }) {
-        return selectedJournal.publishGuarded({ expectedBaseRevisionId: input.expectedBaseRevisionId, revision: input.decision }, input.guards);
-      } } as any;
-  };
-  const committer = createFinalPacketAtomicApprovalCommitter(WORKSPACE, WORKSPACE, platform, {
-    createApprovalJournal,
+  const committer = createFinalPacketAtomicApprovalCommitter(WORKSPACE, WORKSPACE, platform, HOST_SUPPORT, {
     async readCurrentEvidence(selectedPlatform) {
       await selectedPlatform.state.get(stateKey("evidence.mutable-head"));
       if (changeEvidenceAfterRead) values.set(keyString(stateKey("evidence.mutable-head")), { revision: 2 });
@@ -134,10 +125,11 @@ function evidenceFixture() {
       return managerRead as any;
     },
   });
+  if (!committer) throw new Error("The test Host fixture must advertise the guarded Git-ref operation.");
   const approval = { eventId: "user-decision-r1", expectedBaseRevisionId: approvalRequest.eventId,
     kind: "user-decision", requestId: packet.packetRevisionId, attestation: null, request: null,
     decision: { action: "approve", userId: "authenticated-user", reason: null, decidedAt: NOW, sourceSnapshotSha256: snapshotSha256 } } as FinalPacketJournalEvent;
-  return { values, state, plainHeadWrites: () => plainHeadWrites, snapshot, snapshotSha256, managerRead, approvalRequest,
+  return { values, state, platform, plainHeadWrites: () => plainHeadWrites, snapshot, snapshotSha256, managerRead, approvalRequest,
     approval, committer, calls, currentSource, seed,
     changeEvidenceDuringRead: () => { changeEvidenceAfterRead = true; },
     changeGitDuringRead: () => { changeGitAfterRead = true; } };
@@ -162,6 +154,19 @@ test("approves only the current raw snapshot and commits the same final-delivery
   const current = await createFinalPacketStore(WORKSPACE, WORKSPACE, f.state).current();
   assert.equal(current.revisions[0]?.revision.eventId, f.approval.eventId);
   assert.deepEqual(current.revisions[0]?.revision, f.approval);
+});
+
+test("unknown or unadvertised Host support leaves atomic approval unavailable", () => {
+  const f = evidenceFixture();
+  const withoutSupport = createFinalPacketAtomicApprovalCommitter(WORKSPACE, WORKSPACE, f.platform, undefined);
+  const malformedSupport = createFinalPacketAtomicApprovalCommitter(WORKSPACE, WORKSPACE, f.platform,
+    { state: "reported", contractVersion: "1.0", operations: ["state.guardedGitRefCompareAndSetV1", "state.guardedGitRefCompareAndSetV1"] });
+  const otherOperation = createFinalPacketAtomicApprovalCommitter(WORKSPACE, WORKSPACE, f.platform,
+    { state: "reported", contractVersion: "1.0", operations: ["state.compareAndSet"] });
+  assert.equal(withoutSupport, undefined);
+  assert.equal(malformedSupport, undefined);
+  assert.equal(otherOperation, undefined);
+  assert.equal(f.calls.length, 0, "support discovery never executes the writer");
 });
 
 test("reconciles an exact committed event after a lost Core response and never retries the Core write", async () => {
