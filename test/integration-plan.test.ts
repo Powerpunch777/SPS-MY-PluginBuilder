@@ -116,3 +116,10 @@ test("legacy integration plans retain their exact serialized identity without va
   assert.equal(revisionId, `integration-plan-v1:${hash(content)}`);
   assert.deepEqual(parseIntegrationPlan(saved), saved);
 });
+
+test("Main refuses branch names that cannot be used as Git refs", async () => {
+  const f = await setup();
+  for (const candidateBranch of [".hidden", "integration/", "integration/.hidden", "integration/a.lock", "integration/a..b"])
+    await assert.rejects(() => publishIntegrationPlan({ ...f.input, candidateBranch }, ctx(), f.platform), /integration plan/iu);
+  assert.equal(await createIntegrationPlanStore(W, f.state).current(), null);
+});

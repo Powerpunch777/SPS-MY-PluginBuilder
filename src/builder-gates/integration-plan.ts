@@ -12,7 +12,7 @@ const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
-const BRANCH = /^(?!\/)(?!.*(?:\.\.|\.lock(?:\/|$)|\/\.|\/\/|@\{))[A-Za-z0-9._/-]{1,240}(?<!\.)$/u;
+const BRANCH = /^(?![/.])(?!.*(?:\.\.|\.lock(?:\/|$)|\/\.|\/\/|@\{))[A-Za-z0-9._/-]{1,240}(?<![./])$/u;
 
 export type IntegrationValidationPlan = Readonly<{ approvalTemplateId: string; planSha256: string }>;
 export type IntegrationValidationPlans = Readonly<{ ci: IntegrationValidationPlan; e2e: IntegrationValidationPlan }>;
