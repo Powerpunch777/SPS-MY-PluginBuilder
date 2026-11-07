@@ -239,4 +239,3 @@ test("plan drift after uncertain reservation is stale and never creates a replac
   assert.equal(retry.data.status, "stale");
   assert.equal(gitCalls, 1);
 });
-
