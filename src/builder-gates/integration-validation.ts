@@ -23,7 +23,8 @@ function bounded(value: unknown): string {
 
 function matchesRun(raw: unknown, attempt: IntegrationAttempt, reference: IntegrationValidationReference) {
   const run = parseProtectedRun(raw);
-  if (reference.runId !== null && run.id !== reference.runId || reference.approvalId !== null && run.pins.approvalId !== reference.approvalId
+  if (run.pins.approvalId === reference.approvalTemplateId
+    || reference.runId !== null && run.id !== reference.runId || reference.approvalId !== null && run.pins.approvalId !== reference.approvalId
     || run.pins.sourceId !== attempt.effect.sourceId || run.pins.commitSha !== reference.commitSha
     || run.pins.treeSha !== reference.treeSha || run.pins.planSha256 !== reference.planSha256
     || run.pins.subjectKeySha256 !== reference.subjectKeySha256) throw new Error("Core validation run does not match the exact candidate reference.");
