@@ -13,6 +13,8 @@ import { createRevisionJournal, type RevisionState } from "../src/solution-revis
 import { parseWorkstreamBoard } from "../src/domain/workstreams.ts";
 import { createTaskPacketStore } from "../src/task-packet-tools.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
+import { validateG5Handoff } from "../src/workstream-tools.ts";
+import { parseWorkstreamChange, parseWorkstreamSpec } from "../src/domain/workstreams.ts";
 import { LEAD_CHANNELS } from "../src/domain/lead-sessions.ts";
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
@@ -139,7 +141,7 @@ async function pairedProjectionFixture() {
     const [baselineEntry, technologyEntry] = await instruction("ws-1", baselineRevisionId, technologyRevisionId);
     const baseline = baselineEntry!.revision, technology = technologyEntry!.revision;
     return { spec: { projectId: COMPANY, id: "ws-1", revision: 1, sourceSpecRevisionId: baseline.specification.revisionId,
-      assignedCtoId: CTO, title: "Fixture Workstream", goal: "Validate exact historical G5 source.", scopeNodeIds: ["node-1"],
+      assignedCtoId: CTO, title: "Fixture Workstream", goal: `Validate exact historical G5 source ${baselineRevisionId}.`, scopeNodeIds: ["node-1"],
       included: ["fixture scope"], excluded: [], dependencies: [], interfaceContracts: [], technologyDecisionsRef: technology.register.revisionId,
       reuseCandidates: [], acceptance: ["exact pair resolved"], evidenceRequired: ["publication pins"], openQuestions: [] },
       sourceBaselineRevisionId: baselineRevisionId, baselineDigest: sha(JSON.stringify(baseline)), technologyDigest: sha(JSON.stringify(technology)),
@@ -305,4 +307,44 @@ test("unauthorized Lead channel is rejected before any Workstream or Task pair r
   await assert.rejects(() => readG5Revalidation(f.params, runContext, f.platform), /limited to Main or Integration Review/);
   assert.equal(f.workstreamHeadReads, 0);
   assert.equal(f.taskHeadReads, 0);
+});
+
+test("G5 handoff proposal is derived from exact published pairs and a current CTO receipt acknowledges only that scoped instruction", async () => {
+  const f = await pairedProjectionFixture();
+  const first = await readG5Revalidation(f.params, f.runContext, f.platform);
+  const initial = first.data as unknown as { g5WorkstreamHandoffProposals: readonly { workstreamId: string; g5Handoff: Record<string, unknown> }[] };
+  const proposal = initial.g5WorkstreamHandoffProposals.find(item => item.workstreamId === "ws-1");
+  assert(proposal, "the exact changed Workstream should have an actionable G5 handoff proposal");
+  assert.equal(proposal.g5Handoff.taskImpactStatus, "UNKNOWN", "missing G5 dimensions remain explicit in the handoff");
+  const original = (await f.workstreamStore.publishedRevision("ws-new"))!.revision.workstreams[0]!;
+  const nextSpec = parseWorkstreamSpec({ ...original.spec, revision: 2 }, COMPANY);
+  const linkedChange = parseWorkstreamChange({ ...original.change, previousRevision: 1,
+    impactTaskIds: proposal.g5Handoff.affectedTaskIds,
+    g5Handoff: proposal.g5Handoff });
+  await validateG5Handoff(COMPANY, COMPANY, nextSpec, linkedChange, f.runContext, f.platform);
+  await assert.rejects(() => validateG5Handoff(COMPANY, COMPANY, nextSpec,
+    parseWorkstreamChange({ ...linkedChange, g5Handoff: { ...proposal.g5Handoff, impactSha256: "f".repeat(64) } }),
+    f.runContext, f.platform), /impact digest does not match/);
+
+  const acknowledged = { ...original, spec: nextSpec, change: linkedChange,
+    receipt: { revision: 2, agentId: original.ctoAgentId, sessionId: original.ctoSessionId, runId: RUN,
+      createdAt: "2026-11-07T00:00:00.000Z", readiness: "ready" as const,
+      note: "Fixture: exact G5-scoped Workstream instruction reviewed." } };
+  const saved = await f.workstreamStore.publish({ expectedBaseRevisionId: "ws-new", revision: {
+    projectId: COMPANY, revisionId: "ws-g5-acknowledged", workstreams: [acknowledged],
+  } });
+  assert.equal(saved.status, "published");
+  const after = await readG5Revalidation(f.params, f.runContext, f.platform);
+  const data = after.data as unknown as { g5WorkstreamHandoffAcceptance: readonly { workstreamId: string; status: string }[];
+    affectedTasks: readonly unknown[]; completeness: { priorExecutionEvidenceReuse: string } };
+  assert.deepEqual(data.g5WorkstreamHandoffAcceptance.map(item => [item.workstreamId, item.status]), [["ws-1", "ACKNOWLEDGED_SCOPED_HANDOFF"]]);
+  assert.deepEqual(data.affectedTasks, [], "an empty exact Task candidate set stays empty, not proof of no wider impact");
+  assert.equal(data.completeness.priorExecutionEvidenceReuse, "UNKNOWN_NO_RUN_RESULT_READER");
+
+  await f.taskStore.publish({ expectedBaseRevisionId: "task-new", revision: {
+    projectId: COMPANY, ctoId: CTO, workstreamId: "ws-1", revisionId: "task-current-drift", packets: [],
+  } });
+  const drifted = await readG5Revalidation(f.params, f.runContext, f.platform);
+  const driftedData = drifted.data as unknown as { g5WorkstreamHandoffAcceptance: readonly { status: string }[] };
+  assert.equal(driftedData.g5WorkstreamHandoffAcceptance[0]?.status, "STALE_TASK_SCOPE");
 });

@@ -151,6 +151,8 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
     Promise.all([taskStore.publishedRevision(oldTaskRevisionId), taskStore.publishedRevision(newTaskRevisionId)]),
   ]);
   if (!oldWs || !newWs || !oldTasks || !newTasks) throw new Error("An exact Workstream or Task board is not in its immutable published journal.");
+  const currentWorkstreamHead = await workstreamStore.current();
+  const currentTaskHead = await taskStore.current();
   await authority.check();
 
   const workstreams = { old: oldWs.revision.workstreams, current: newWs.revision.workstreams,
@@ -161,6 +163,52 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
   const taskCandidates = candidateIds(data.dimensions.tasks, "tasks");
   const affectedWorkstreams = projectExactCandidateRecords(workstreams, wsCandidates.ids, row => row.spec.id, wsCandidates.status, "Workstream");
   const affectedTasks = projectExactCandidateRecords(tasks, taskCandidates.ids, row => row.packet.taskId, taskCandidates.status, "Task");
+
+  const handoffImpactSha256 = hash({ sourcePins: data.sourcePins, dimensions: data.dimensions });
+  const handoffProposal = (workstreamId: string) => Object.freeze({
+    oldBaselineRevisionId: expectedG5Pins.oldBaselineRevisionId,
+    newBaselineRevisionId: expectedG5Pins.newBaselineRevisionId,
+    oldUiRevisionId: expectedG5Pins.oldUiRevisionId,
+    newUiRevisionId: expectedG5Pins.newUiRevisionId,
+    technology: expectedG5Pins.technology,
+    workstreams: expectedG5Pins.workstreams,
+    tasks: expectedG5Pins.tasks,
+    workstreamImpactStatus: wsCandidates.status === "NO_CANDIDATE_OBSERVED" ? "CANDIDATES" : wsCandidates.status,
+    taskImpactStatus: taskCandidates.status,
+    affectedTaskIds: Object.freeze([...taskCandidates.ids].sort()),
+    impactSha256: handoffImpactSha256,
+  });
+  const handoffAcceptance = affectedWorkstreams.map(item => {
+    const current = currentWorkstreamHead?.revision.workstreams.find(record => record.spec.id === item.id) ?? null;
+    const handoff = current?.change.g5Handoff;
+    if (!current || !handoff) return Object.freeze({ workstreamId: item.id, status: "NOT_LINKED" as const,
+      currentBoardRevisionId: currentWorkstreamHead?.revision.revisionId ?? null, specRevision: current?.spec.revision ?? null,
+      handoffProposal: handoffProposal(item.id) });
+    const exactSource = handoff.oldBaselineRevisionId === expectedG5Pins.oldBaselineRevisionId
+      && handoff.newBaselineRevisionId === expectedG5Pins.newBaselineRevisionId
+      && handoff.oldUiRevisionId === expectedG5Pins.oldUiRevisionId
+      && handoff.newUiRevisionId === expectedG5Pins.newUiRevisionId
+      && samePair(handoff.technology, expectedG5Pins.technology)
+      && samePair(handoff.workstreams, expectedG5Pins.workstreams)
+      && samePair(handoff.tasks, expectedG5Pins.tasks)
+      && handoff.workstreamImpactStatus === wsCandidates.status
+      && handoff.taskImpactStatus === taskCandidates.status
+      && handoff.impactSha256 === handoffImpactSha256
+      && handoff.tasks.ctoId === ctoId && handoff.tasks.workstreamId === item.id
+      && samePair([...handoff.affectedTaskIds].sort(), [...taskCandidates.ids].sort())
+      && samePair([...current.change.impactTaskIds].sort(), [...taskCandidates.ids].sort())
+      && current.sourceBaselineRevisionId === expectedG5Pins.newBaselineRevisionId;
+    const status = !exactSource ? "STALE" as const
+      : currentTaskHead?.revision.revisionId !== expectedG5Pins.tasks.newRevisionId ? "STALE_TASK_SCOPE" as const
+      : !current.receipt || current.receipt.revision !== current.spec.revision ? "PENDING" as const
+        : current.receipt.readiness === "ready" ? "ACKNOWLEDGED_SCOPED_HANDOFF" as const
+          : current.receipt.readiness === "blocked" ? "BLOCKED" as const : "NEEDS_CLARIFICATION" as const;
+    return Object.freeze({ workstreamId: item.id, status, currentBoardRevisionId: currentWorkstreamHead?.revision.revisionId ?? null,
+      specRevision: current.spec.revision, receiptRevision: current.receipt?.revision ?? null,
+      readiness: current.receipt?.readiness ?? null, currentTaskBoardRevisionId: currentTaskHead?.revision.revisionId ?? null,
+      sourcePins: handoff, handoffProposal: handoffProposal(item.id) });
+  });
+  const acceptanceByWorkstream = new Map(handoffAcceptance.map(item => [item.workstreamId, item.status]));
 
   const taskDetails = affectedTasks.map(item => {
     const oldRecord = item.oldRecord as TaskPacketRecord | null;
@@ -195,6 +243,7 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
         boardRevisionId: newRecord ? tasks.newRevisionId : tasks.oldRevisionId,
         sourceFreshness: freshness }),
       revalidationDecision: item.classification === "UNKNOWN" ? "UNKNOWN" as const : "REVALIDATE_REQUIRED" as const,
+      workstreamHandoffAcceptance: acceptanceByWorkstream.get(packet.packet.workstreamId) ?? "NOT_LINKED" as const,
       priorInstructionReuse: exactTaskRecordEquality ? "CANDIDATE_EXACT_INSTRUCTION_ONLY" as const : "NOT_ESTABLISHED" as const,
       priorExecutionEvidenceReuse: priorEvidenceReuse });
   });
@@ -216,6 +265,14 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
     || hash(oldTasksAgain.revision) !== hash(oldTasks.revision) || hash(newTasksAgain.revision) !== hash(newTasks.revision)) {
     throw new Error("An exact historical Workstream/Task publication changed or is no longer in its journal ancestry.");
   }
+  const currentWorkstreamAgain = await workstreamStore.current();
+  if (hash(currentWorkstreamAgain?.revision ?? null) !== hash(currentWorkstreamHead?.revision ?? null)) {
+    throw new Error("The current Workstream handoff/receipt changed during G5 projection reads.");
+  }
+  const currentTaskAgain = await taskStore.current();
+  if (hash(currentTaskAgain?.revision ?? null) !== hash(currentTaskHead?.revision ?? null)) {
+    throw new Error("The current Task board changed during G5 projection reads.");
+  }
   const comparisonAgain = await readG5ChangeImpactCandidates(input, runContext, platform);
   const finalG5 = comparisonAgain.data as unknown as ImpactData;
   if (!exactG5Pins(finalG5.sourcePins) || !samePair(finalG5.dimensions, data.dimensions)) {
@@ -223,7 +280,7 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
   }
   await authority.check();
   return {
-    content: "Read-only projection from exact published G5, Workstream, and Task revisions. Candidate absence does not prove no impact or authorize reapproval; prior execution evidence and G5 acknowledgment remain UNKNOWN.",
+    content: "Read-only projection from exact published G5, Workstream, and Task revisions. A matching current Workstream receipt acknowledges the exact G5-scoped instruction only; it is not evidence of task execution, QA, or delivery completion.",
     data: {
       projectId, sourcePins: { g5: data, workstreams: { oldRevisionId: workstreams.oldRevisionId, newRevisionId: workstreams.newRevisionId },
         tasks: { oldRevisionId: tasks.oldRevisionId, newRevisionId: tasks.newRevisionId } },
@@ -242,10 +299,14 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
             : { status: "REMOVED_FROM_CURRENT_PAIR" },
         };
       }), tasks: taskDetails.map(item => item.currentInstruction) },
-      workstreamReadinessReceipts: readinessReceipt, affectedTasks: taskDetails,
+      workstreamReadinessReceipts: readinessReceipt, g5WorkstreamHandoffAcceptance: handoffAcceptance,
+      g5WorkstreamHandoffProposals: handoffAcceptance.map(item => ({ workstreamId: item.workstreamId, g5Handoff: item.handoffProposal })),
+      affectedTasks: taskDetails,
       completeness: { exactPairRead: true, crossJournalAtomic: false,
         noCandidateMeaning: "UNKNOWN_NOT_PROOF_OF_NO_IMPACT", reapprovalAuthorized: false,
-        priorExecutionEvidenceReuse: "UNKNOWN_NO_RUN_RESULT_READER", g5Acknowledgment: "UNKNOWN_NO_ACK_SOURCE",
+        priorExecutionEvidenceReuse: "UNKNOWN_NO_RUN_RESULT_READER",
+        g5Acknowledgment: handoffAcceptance.length > 0 && handoffAcceptance.every(item => item.status === "ACKNOWLEDGED_SCOPED_HANDOFF")
+          ? "EXACT_CURRENT_RECEIPTS_FOR_SCOPED_HANDOFF" : "UNKNOWN_NO_ACK_SOURCE",
         inventoryLimits: data.inventoryLimits },
     } as unknown as JsonValue,
   };

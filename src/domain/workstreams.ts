@@ -35,6 +35,21 @@ export type WorkstreamChange = Readonly<{
   impactInterfaceContracts: readonly string[];
   impactTaskIds: readonly string[];
   effectiveFrom: string;
+  g5Handoff?: G5WorkstreamHandoff;
+}>;
+
+export type G5WorkstreamHandoff = Readonly<{
+  oldBaselineRevisionId: string;
+  newBaselineRevisionId: string;
+  oldUiRevisionId: string;
+  newUiRevisionId: string;
+  technology: null | Readonly<{ oldRevisionId: string; newRevisionId: string }>;
+  workstreams: Readonly<{ oldRevisionId: string; newRevisionId: string }>;
+  tasks: Readonly<{ ctoId: string; workstreamId: string; oldRevisionId: string; newRevisionId: string }>;
+  workstreamImpactStatus: "CANDIDATES" | "UNKNOWN";
+  taskImpactStatus: "CANDIDATES" | "NO_CANDIDATE_OBSERVED" | "UNKNOWN";
+  affectedTaskIds: readonly string[];
+  impactSha256: string;
 }>;
 
 export type WorkstreamRecord = Readonly<{
@@ -216,12 +231,15 @@ export function parseWorkstreamSpec(value: unknown, projectId: string): Workstre
 }
 
 export function parseWorkstreamChange(value: unknown): WorkstreamChange {
-  const row = record(value, [
-    "previousRevision", "reason", "diff", "impactNodeIds", "impactInterfaceContracts", "impactTaskIds", "effectiveFrom",
-  ], "workstreamChange");
+  const keys = ["previousRevision", "reason", "diff", "impactNodeIds", "impactInterfaceContracts", "impactTaskIds", "effectiveFrom"] as const;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("workstreamChange must be a plain record.");
+  const ownKeys = Reflect.ownKeys(value);
+  const hasG5Handoff = ownKeys.includes("g5Handoff");
+  const row = record(value, hasG5Handoff ? [...keys, "g5Handoff"] : keys, "workstreamChange");
   const previousRevision = row.previousRevision === null
     ? null
     : positiveSafeInteger(row.previousRevision, "workstreamChange.previousRevision");
+  const g5Handoff = hasG5Handoff ? parseG5WorkstreamHandoff(row.g5Handoff) : undefined;
   return Object.freeze({
     previousRevision,
     reason: text(row.reason, "workstreamChange.reason"),
@@ -230,6 +248,43 @@ export function parseWorkstreamChange(value: unknown): WorkstreamChange {
     impactInterfaceContracts: stringList(row.impactInterfaceContracts, "workstreamChange.impactInterfaceContracts", "id", false, true),
     impactTaskIds: stringList(row.impactTaskIds, "workstreamChange.impactTaskIds", "id", false, true),
     effectiveFrom: text(row.effectiveFrom, "workstreamChange.effectiveFrom"),
+    ...(g5Handoff ? { g5Handoff } : {}),
+  });
+}
+
+function parseG5WorkstreamHandoff(value: unknown): G5WorkstreamHandoff {
+  const row = record(value, ["oldBaselineRevisionId", "newBaselineRevisionId", "oldUiRevisionId", "newUiRevisionId",
+    "technology", "workstreams", "tasks", "workstreamImpactStatus", "taskImpactStatus", "affectedTaskIds", "impactSha256"], "workstreamChange.g5Handoff");
+  const pair = (value: unknown, label: string) => {
+    const pin = record(value, ["oldRevisionId", "newRevisionId"], label);
+    return Object.freeze({ oldRevisionId: identifier(pin.oldRevisionId, `${label}.oldRevisionId`),
+      newRevisionId: identifier(pin.newRevisionId, `${label}.newRevisionId`) });
+  };
+  let technology: G5WorkstreamHandoff["technology"];
+  if (row.technology === null) technology = null;
+  else technology = pair(row.technology, "workstreamChange.g5Handoff.technology");
+  const tasks = record(row.tasks, ["ctoId", "workstreamId", "oldRevisionId", "newRevisionId"], "workstreamChange.g5Handoff.tasks");
+  if (row.taskImpactStatus !== "CANDIDATES" && row.taskImpactStatus !== "NO_CANDIDATE_OBSERVED" && row.taskImpactStatus !== "UNKNOWN") {
+    throw new TypeError("workstreamChange.g5Handoff.taskImpactStatus is unsupported.");
+  }
+  if (row.workstreamImpactStatus !== "CANDIDATES" && row.workstreamImpactStatus !== "UNKNOWN") {
+    throw new TypeError("workstreamChange.g5Handoff.workstreamImpactStatus is unsupported.");
+  }
+  return Object.freeze({
+    oldBaselineRevisionId: identifier(row.oldBaselineRevisionId, "workstreamChange.g5Handoff.oldBaselineRevisionId"),
+    newBaselineRevisionId: identifier(row.newBaselineRevisionId, "workstreamChange.g5Handoff.newBaselineRevisionId"),
+    oldUiRevisionId: identifier(row.oldUiRevisionId, "workstreamChange.g5Handoff.oldUiRevisionId"),
+    newUiRevisionId: identifier(row.newUiRevisionId, "workstreamChange.g5Handoff.newUiRevisionId"),
+    technology,
+    workstreams: pair(row.workstreams, "workstreamChange.g5Handoff.workstreams"),
+    tasks: Object.freeze({ ctoId: identifier(tasks.ctoId, "workstreamChange.g5Handoff.tasks.ctoId"),
+      workstreamId: identifier(tasks.workstreamId, "workstreamChange.g5Handoff.tasks.workstreamId"),
+      oldRevisionId: identifier(tasks.oldRevisionId, "workstreamChange.g5Handoff.tasks.oldRevisionId"),
+      newRevisionId: identifier(tasks.newRevisionId, "workstreamChange.g5Handoff.tasks.newRevisionId") }),
+    workstreamImpactStatus: row.workstreamImpactStatus,
+    taskImpactStatus: row.taskImpactStatus,
+    affectedTaskIds: stringList(row.affectedTaskIds, "workstreamChange.g5Handoff.affectedTaskIds", "id", false, true),
+    impactSha256: digest(row.impactSha256, "workstreamChange.g5Handoff.impactSha256"),
   });
 }
 

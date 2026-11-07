@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
-import { parseWorkstreamBoard, parseWorkstreamChange, parseWorkstreamSpec, type WorkstreamRecord } from "./domain/workstreams.ts";
+import { parseWorkstreamBoard, parseWorkstreamChange, parseWorkstreamSpec, type WorkstreamChange, type WorkstreamRecord } from "./domain/workstreams.ts";
+import { parseTaskPacketBoard } from "./domain/task-packets.ts";
 import { parseLeadAgentBinding } from "./domain/lead-agent.ts";
 import { parseLeadSessions } from "./domain/lead-sessions.ts";
 import { createDesignBaselineStore, readDesignBaseline } from "./design-baseline-tools.ts";
@@ -9,6 +10,7 @@ import { readProjectCtos } from "./project-cto-tools.ts";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
 import { resolveCtoDeliveryRun, workstreamInstructionDigest } from "./cto-delivery-store.ts";
+import { readG5ChangeImpactCandidates } from "./g5-change-impact-tools.ts";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const asJson = (value: unknown) => value as JsonValue;
@@ -35,6 +37,49 @@ function conflict(actualBaseRevisionId: string | null) {
     data: asJson({ status: "conflict", actualBaseRevisionId, executionStarted: false }) };
 }
 
+export async function validateG5Handoff(workspaceId: string, projectId: string, spec: ReturnType<typeof parseWorkstreamSpec>,
+  change: WorkstreamChange, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const handoff = change.g5Handoff;
+  if (!handoff) return;
+  if (handoff.tasks.ctoId !== spec.assignedCtoId || handoff.tasks.workstreamId !== spec.id) {
+    throw new Error("G5 handoff scope does not match this assigned Workstream.");
+  }
+  const comparison = await readG5ChangeImpactCandidates({ projectId,
+    oldBaselineRevisionId: handoff.oldBaselineRevisionId, newBaselineRevisionId: handoff.newBaselineRevisionId,
+    oldUiRevisionId: handoff.oldUiRevisionId, newUiRevisionId: handoff.newUiRevisionId,
+    ...(handoff.technology ? { technology: handoff.technology } : {}),
+    workstreams: handoff.workstreams, tasks: handoff.tasks }, runContext, platform);
+  const data = comparison.data as unknown as { sourcePins: Record<string, unknown>; dimensions: Record<string, {
+    status: "CANDIDATES" | "NO_CANDIDATE_OBSERVED" | "UNKNOWN"; candidates: readonly { recordId: string }[] }> };
+  const ws = data.dimensions.ctoWorkstreams, tasks = data.dimensions.tasks;
+  if (!ws || !ws.candidates.some(candidate => candidate.recordId === spec.id)) {
+    throw new Error("G5 did not establish this Workstream as an affected candidate.");
+  }
+  if (handoff.workstreamImpactStatus !== ws.status) throw new Error("G5 Workstream impact status does not match the exact published pair.");
+  if (!tasks || tasks.status !== handoff.taskImpactStatus) throw new Error("G5 Task impact status does not match the exact published pair.");
+  const taskIds = tasks.candidates.map(candidate => candidate.recordId).sort();
+  const requestedTaskIds = [...handoff.affectedTaskIds].sort();
+  const declaredTaskIds = [...change.impactTaskIds].sort();
+  if (JSON.stringify(taskIds) !== JSON.stringify(requestedTaskIds)
+    || JSON.stringify(taskIds) !== JSON.stringify(declaredTaskIds)) {
+    throw new Error("G5 handoff Task scope must exactly match the observed candidate set; completeness remains the recorded G5 status.");
+  }
+  const impactSha256 = digest({ sourcePins: data.sourcePins, dimensions: data.dimensions });
+  if (handoff.impactSha256 !== impactSha256) throw new Error("G5 handoff impact digest does not match the exact published revision pair.");
+  const currentWorkstreams = await createWorkstreamStore(workspaceId, projectId, platform.state as RevisionState).current();
+  if (!currentWorkstreams || currentWorkstreams.revision.revisionId !== handoff.workstreams.newRevisionId) {
+    throw new Error("G5 handoff Workstream pair is no longer the current published board.");
+  }
+  const packetScope = createHash("sha256").update(JSON.stringify([projectId, handoff.tasks.ctoId, handoff.tasks.workstreamId]), "utf8").digest("hex");
+  const currentTasks = await createRevisionJournal(workspaceId, `packets:${packetScope}`, platform.state as RevisionState, {
+    prefix: "task-packets", parse: value => parseTaskPacketBoard(value, projectId, handoff.tasks.ctoId, handoff.tasks.workstreamId),
+    revisionId: value => value.revisionId,
+  }).current();
+  if (!currentTasks || currentTasks.revision.revisionId !== handoff.tasks.newRevisionId) {
+    throw new Error("G5 handoff Task pair is no longer the current published board.");
+  }
+}
+
 /** Stores a versioned instruction, not a dispatch or a grant to execute customer code. */
 export async function publishWorkstream(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["projectId", "expectedBaseRevisionId", "revisionId", "spec", "change"]);
@@ -45,6 +90,7 @@ export async function publishWorkstream(params: unknown, runContext: unknown, pl
   const authority = await resolveLeadToolAuthority(context, platform);
   requireLeadFormalPublicationAuthority(authority);
   const current = await readWorkstreams(context.companyId, projectId, platform);
+  await validateG5Handoff(context.companyId, projectId, spec, change, runContext, platform);
   if ((current?.revision.revisionId ?? null) !== expectedBaseRevisionId) return conflict(current?.revision.revisionId ?? null);
   const old = current?.revision.workstreams.find(record => record.spec.id === spec.id);
   if (spec.revision !== (old?.spec.revision ?? 0) + 1 || change.previousRevision !== (old?.spec.revision ?? null)) {
