@@ -6,7 +6,7 @@ import { createWorkstreamVerificationPublication } from "../src/builder-gates/wo
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { W, now } from "./fixtures/cto-platform.ts";
 
-test("unrelated Workstream B publication invalidates A's whole-board verification guard despite exact A evidence", async () => {
+test("unrelated Workstream B publication preserves A's exact verification and QA without a new run or event", async () => {
   const f = await setupVerifiedWorkstreamPlatform();
   const verified = await f.verify();
   assert.equal(verified.data.status, "published", JSON.stringify(verified.data));
@@ -29,7 +29,7 @@ test("unrelated Workstream B publication invalidates A's whole-board verificatio
     revisionId: "parallel-b-updated-and-acknowledged", workstreams: [a, b] } });
 
   const afterB = await publication.readCurrent(scope);
-  assert.equal(afterB.status, "stale", "A's source head guard is bound to the entire Workstream board revision");
+  assert.equal(afterB.status, "current", "only the unrelated board head changed; exact A evidence remains current");
   assert.equal(f.f.sends, sendsBefore, "B board update and A evidence observation did not start an Agent run");
   const reportBefore = (await f.reportStore().current())!.revision;
   const repro = await f.verify();
@@ -37,6 +37,43 @@ test("unrelated Workstream B publication invalidates A's whole-board verificatio
   assert.equal(f.f.sends, sendsBefore, "verification did not rerun Worker or QA sessions");
   assert.equal((await f.reportStore().current())!.revision.revisionId, reportBefore.revisionId,
     "A's authored QA history is preserved unchanged");
-  assert.equal((await publication.readCurrent(scope)).status, "stale",
-    "reusing the exact event does not refresh its stale whole-board publication guard");
+  assert.equal((await publication.readCurrent(scope)).status, "current");
+  assert.equal(f.wakes.length, 1, "observation and event reuse never create a new verification job");
+});
+
+test("a changed or removed A never inherits its earlier Workstream verification", async t => {
+  for (const mode of ["changed", "removed"] as const) await t.test(mode, async () => {
+    const f = await setupVerifiedWorkstreamPlatform(), verified = await f.verify();
+    const state = f.f.state as unknown as RevisionState, store = createWorkstreamStore(W, W, state);
+    const board = (await store.current())!.revision, a = board.workstreams[0]!;
+    const changed = { ...a, spec: { ...a.spec, goal: "Changed A instruction", ...(mode === "removed" ? { id: "ws-b" } : {}) } };
+    await store.publish({ expectedBaseRevisionId: board.revisionId, revision: { ...board, revisionId: `board-a-${mode}`,
+      workstreams: [changed] } });
+    const publication = createWorkstreamVerificationPublication(state);
+    assert.equal((await publication.readCurrent({ workspaceId: W, projectId: W, workstreamId: "ws-1",
+      eventId: verified.data.eventId })).status, "stale");
+    assert.equal(f.wakes.length, 1);
+  });
+});
+
+test("a board move during the scoped proof is rejected by the final atomic guard", async () => {
+  const f = await setupVerifiedWorkstreamPlatform(), verified = await f.verify();
+  const state = f.f.state as unknown as RevisionState, store = createWorkstreamStore(W, W, state);
+  const board = (await store.current())!.revision, a = board.workstreams[0]!;
+  const b = { ...a, spec: { ...a.spec, id: "ws-b" } };
+  await store.publish({ expectedBaseRevisionId: board.revisionId, revision: { ...board, revisionId: "board-b-advance", workstreams: [a, b] } });
+  const guarded = state.guardedCompareAndSet!;
+  let raced = false;
+  state.guardedCompareAndSet = async (...args) => {
+    if (!raced && args[0].stateKey.startsWith("workstream-verification-head.v1.")) {
+      raced = true;
+      await store.publish({ expectedBaseRevisionId: "board-b-advance", revision: { ...board, revisionId: "board-a-raced",
+        workstreams: [{ ...a, spec: { ...a.spec, goal: "Changed after proof" } }, b] } });
+    }
+    return guarded(...args);
+  };
+  const publication = createWorkstreamVerificationPublication(state);
+  assert.equal((await publication.readCurrent({ workspaceId: W, projectId: W, workstreamId: "ws-1",
+    eventId: verified.data.eventId })).status, "stale");
+  assert.equal(raced, true);
 });

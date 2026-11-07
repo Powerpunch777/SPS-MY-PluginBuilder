@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { JsonValue } from "@sonparkserver/plugin-sdk/platform";
 import { parseTaskPacketBoard, taskPacketRecordDigest, type TaskPacketBoard } from "../domain/task-packets.ts";
+import { parseWorkstreamBoard } from "../domain/workstreams.ts";
+import { exactToolRecord } from "../lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
 import { createWorkstreamVerificationProducer, type GateProofScope } from "./workstream-verification.ts";
 import { normalizeVerifiedWorkstreamSnapshot, validVerifiedWorkstreamSnapshot,
@@ -82,6 +84,40 @@ function guardCoverage(guards: readonly GuardBinding[], snapshot: VerifiedWorkst
   return pins.size === 0;
 }
 
+async function currentScopeGuards(scope: WorkstreamScope, stored: Stored, state: RevisionState) {
+  const sourceId = `builder-v1:workstream:${scope.workstreamId}`;
+  const expectedKey = `workstreams-head.v1.${createHash("sha256").update(scope.projectId, "utf8").digest("hex")}`;
+  const guards: RevisionPublicationGuard[] = [];
+  for (const binding of stored.guards) {
+    const guard = { stateKey: binding.stateKey, ...(binding.namespace === undefined ? {} : { namespace: binding.namespace }),
+      expectedValue: binding.expectedValue };
+    if (binding.stateKey !== expectedKey || binding.namespace !== "sonpark.my-builder") { guards.push(guard); continue; }
+    const address = { scopeKind: "company" as const, scopeId: scope.workspaceId, namespace: binding.namespace, stateKey: expectedKey };
+    const raw = await state.get(address);
+    if (hash(raw) === hash(binding.expectedValue)) { guards.push(guard); continue; }
+    // A shared board head may move because another CTO worked. Bind the new
+    // head atomically only after proving this exact scoped record is unchanged.
+    if (binding.sourceIds.length !== 1 || binding.sourceIds[0] !== sourceId) return null;
+    const pin = stored.snapshot.sourcePins.find(pin => pin.sourceId === sourceId);
+    if (!pin) return null;
+    const pointer = exactToolRecord(raw, ["revisionId", "sequence", "digest"]);
+    const oldPointer = exactToolRecord(binding.expectedValue, ["revisionId", "sequence", "digest"]);
+    if (typeof pointer.revisionId !== "string" || typeof oldPointer.revisionId !== "string"
+      || !Number.isSafeInteger(pointer.sequence) || !Number.isSafeInteger(oldPointer.sequence)
+      || (pointer.sequence as number) <= (oldPointer.sequence as number)) return null;
+    const board = createRevisionJournal(scope.workspaceId, scope.projectId, state, { prefix: "workstreams",
+      parse: value => parseWorkstreamBoard(value, scope.projectId), revisionId: value => value.revisionId });
+    const current = await board.current(), previous = await board.publishedRevision(oldPointer.revisionId);
+    if (!current || !previous || current.revision.revisionId !== pointer.revisionId || current.sequence !== pointer.sequence
+      || previous.sequence !== oldPointer.sequence) return null;
+    const before = previous.revision.workstreams.find(item => item.spec.id === scope.workstreamId);
+    const after = current.revision.workstreams.find(item => item.spec.id === scope.workstreamId);
+    if (!before || !after || pin.revisionId !== String(after.spec.revision) || hash(before) !== pin.sha256 || hash(after) !== pin.sha256) return null;
+    guards.push({ ...guard, expectedValue: raw! });
+  }
+  return guards;
+}
+
 /** Server-side composition only. The authority reader must resolve persisted
  * evidence and bind every source to its actual guard. No route accepts these
  * readers, expected values, or a caller-supplied verification result. */
@@ -95,9 +131,9 @@ export function createWorkstreamVerificationPublication(state: RevisionState, re
         return await store.publishedRevision(eventId) ? { status: "stale" }
           : { status: "unknown", reason: "verified-event-not-published" };
       }
-      const after = await store.currentGuarded(head.revision.guards.map(({ stateKey, namespace, expectedValue }) => ({
-        stateKey, ...(namespace === undefined ? {} : { namespace }), expectedValue,
-      })));
+      const guards = await currentScopeGuards({ workspaceId, projectId, workstreamId }, head.revision, state);
+      if (!guards) return { status: "stale" };
+      const after = await store.currentGuarded(guards);
       if (after.status === "unsupported") return { status: "unknown", reason: "atomic-current-verification-unavailable" };
       if (after.status !== "current" || after.revision.eventId !== eventId) return { status: "stale" };
       return { status: "current", snapshot: after.revision.snapshot };
