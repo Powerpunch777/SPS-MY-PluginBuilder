@@ -176,7 +176,41 @@ test("base branch drift before reservation does not call the Core Git effect", a
   const result = await tool.handler({ workstreamId: "ws-1", eventId: fixture.eventId, taskId: "task-dev" },
     fixture.managerContext, fixture.f.platform) as any;
   assert.equal(result.data.status, "stale");
+  assert.equal(result.data.reason, "approved-integration-base-branch-changed");
   assert.equal(gitCalls, 0);
+});
+
+test("unavailable base tip stays unknown without reserving, probing candidate, waking Manager, or attempting Git", async () => {
+  for (const status of ["denied", "unknown"] as const) {
+    const fixture = await preparedFixture();
+    const state = fixture.f.state as unknown as RevisionState;
+    const guardedCompareAndSet = state.guardedCompareAndSet;
+    const casTargets: string[] = [];
+    let gitCalls = 0, tipReads = 0;
+    state.guardedCompareAndSet = (async (...args: any[]) => {
+      casTargets.push(String((args[0] as { stateKey?: unknown })?.stateKey ?? ""));
+      return (guardedCompareAndSet as (...values: any[]) => Promise<unknown>)(...args);
+    }) as NonNullable<typeof guardedCompareAndSet>;
+    Object.assign(fixture.f.platform, { localFolders: {
+      async readWorkspaceSourceGitTipV1(_sourceId: string, _folderKey: string, branch: string) {
+        tipReads++;
+        assert.equal(branch, fixture.plan.baseBranch, "candidate tip must not be read after unavailable base proof");
+        return { status, reason: status === "denied" ? "permission_denied" : "observation_unavailable" };
+      },
+      async integrateWorkspaceSourceCommitV1() { gitCalls++; return { status: "unknown" }; },
+    } });
+    const sends = fixture.sends;
+    const tool = integrationTool(); assert.ok(tool);
+    const result = await tool.handler({ workstreamId: "ws-1", eventId: fixture.eventId, taskId: "task-dev" },
+      fixture.managerContext, fixture.f.platform) as any;
+    assert.deepEqual(result.data, { status: "unknown", reason: "integration-base-tip-not-authoritative" });
+    assert.equal(tipReads, 1);
+    assert.equal(casTargets.some(key => key.startsWith("integration-attempts")), false, JSON.stringify(casTargets));
+    assert.equal(gitCalls, 0);
+    assert.equal(fixture.sends, sends);
+    assert.equal(await createIntegrationAttemptStore({ workspaceId: W, workstreamId: "ws-1", eventId: fixture.eventId,
+      taskId: "task-dev" }, state).current(), null);
+  }
 });
 
 test("newer QA report head invalidates the admitted verification before Git", async () => {

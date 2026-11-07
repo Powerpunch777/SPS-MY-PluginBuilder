@@ -9,6 +9,7 @@ import { readWorkstreams } from "../workstream-tools.ts";
 import { readCurrentIntegrationPlan, checkIntegrationPrerequisites } from "./integration-plan.ts";
 import { readVerifiedWorkstreamForManager } from "./integration-manager-job.ts";
 import type { VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
+import { readWorkspaceSourceGitTipProof } from "../workspace-source-git-tip.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const textHash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -185,9 +186,10 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   if (typeof api?.readWorkspaceSourceGitTipV1 !== "function" || typeof api.integrateWorkspaceSourceCommitV1 !== "function") {
     return { status: "unsupported", reason: "guarded-git-integration-api-unavailable" };
   }
-  const base = exactToolRecord(await api.readWorkspaceSourceGitTipV1(plan.revision.sourceId, plan.revision.folderKey, plan.revision.baseBranch),
-    ["status"], ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt", "reason"]);
-  if (base.status !== "current" || base.sourceId !== plan.revision.sourceId || base.folderKey !== plan.revision.folderKey
+  const base = readWorkspaceSourceGitTipProof(await api.readWorkspaceSourceGitTipV1(plan.revision.sourceId,
+    plan.revision.folderKey, plan.revision.baseBranch));
+  if (base.status !== "current") return { status: "unknown", reason: "integration-base-tip-not-authoritative" };
+  if (base.sourceId !== plan.revision.sourceId || base.folderKey !== plan.revision.folderKey
     || base.branch !== plan.revision.baseBranch || base.commitSha !== plan.revision.baseCommit || base.treeSha !== plan.revision.baseTree) {
     return { status: "stale", reason: "approved-integration-base-branch-changed" };
   }
