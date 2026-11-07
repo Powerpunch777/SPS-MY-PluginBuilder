@@ -31,8 +31,15 @@ async function canonicalDigest(value: unknown): Promise<string | null> {
   } catch { return null; }
 }
 
-export async function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown): Promise<BuilderSnapshot> {
-  if (value === null) return snapshot;
+interface ParsedBaselineView {
+  snapshot: BuilderSnapshot;
+  baseline: DesignBaseline;
+  expectedDigest: string | undefined;
+  baselineId: string;
+}
+
+function parseBaselineView(snapshot: BuilderSnapshot, value: unknown): ParsedBaselineView | null {
+  if (value === null) return null;
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid design baseline view.");
   const hasDigest = Object.hasOwn(value, "baselineDigest");
   const row = exactRecord(value, hasDigest
@@ -51,12 +58,8 @@ export async function projectDesignBaseline(snapshot: BuilderSnapshot, value: un
   }
 
   const baseline: DesignBaseline = parseDesignBaseline(row.baseline, snapshot.workspaceId);
-  const digest = expectedDigest !== undefined ? await canonicalDigest(baseline) : null;
-  if (expectedDigest !== undefined && digest !== null && digest !== expectedDigest) {
-    throw new TypeError("Design baseline digest does not match the normalized baseline.");
-  }
   const baselineId = `design-baseline:${baseline.revisionId}`;
-  return {
+  return { baseline, expectedDigest, baselineId, snapshot: {
     ...snapshot,
     documents: [...snapshot.documents, {
       id: baselineId,
@@ -69,14 +72,32 @@ export async function projectDesignBaseline(snapshot: BuilderSnapshot, value: un
       }, null, 2),
       category: "design", sourceKind: "design-baseline", approvalStatus: "unknown", freshnessStatus: "unknown",
       bodyAvailable: true,
-      sourcePins: [
-        ...(digest !== null && expectedDigest !== undefined ? [{ sourceId: baselineId, revisionId: baseline.revisionId,
-          sha256: expectedDigest }] : []),
-        { sourceId: `design-draft:${baseline.sourceDraftRevisionId}`, revisionId: baseline.sourceDraftRevisionId,
-          sha256: baseline.draftDigest },
-      ],
+      sourcePins: [{ sourceId: `design-draft:${baseline.sourceDraftRevisionId}`, revisionId: baseline.sourceDraftRevisionId,
+        sha256: baseline.draftDigest }],
       relatedIds: [baseline.sourceDraftRevisionId, baseline.specification.revisionId, baseline.graph.graphRevisionId,
         ...baseline.specification.requirements.map(requirement => requirement.id)],
+    }],
+  } };
+}
+
+export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown): BuilderSnapshot {
+  return parseBaselineView(snapshot, value)?.snapshot ?? snapshot;
+}
+
+export async function verifyDesignBaselineDigest(snapshot: BuilderSnapshot, value: unknown): Promise<BuilderSnapshot> {
+  const parsed = parseBaselineView(snapshot, value);
+  if (!parsed || parsed.expectedDigest === undefined) return parsed?.snapshot ?? snapshot;
+  const digest = await canonicalDigest(parsed.baseline);
+  if (digest === null) return parsed.snapshot;
+  if (digest !== parsed.expectedDigest) throw new TypeError("Design baseline digest does not match the normalized baseline.");
+
+  const document = parsed.snapshot.documents.at(-1);
+  if (!document || document.id !== parsed.baselineId) throw new TypeError("Design baseline projection is unavailable.");
+  return {
+    ...parsed.snapshot,
+    documents: [...parsed.snapshot.documents.slice(0, -1), {
+      ...document,
+      sourcePins: [{ sourceId: parsed.baselineId, revisionId: parsed.baseline.revisionId, sha256: digest }, ...(document.sourcePins ?? [])],
     }],
   };
 }

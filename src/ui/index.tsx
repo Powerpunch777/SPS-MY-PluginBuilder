@@ -19,7 +19,7 @@ import type { BuilderSnapshot, LeadChannel } from "../domain/model.ts";
 import { parseQuestionContext, type QuestionContext } from "../domain/question-context.ts";
 import { parseLeadConversationPage } from "../lead-conversations.ts";
 import { parseDesignDraftView, projectDesignDraft } from "../domain/design-draft-view.ts";
-import { projectDesignBaseline } from "../domain/design-baseline-view.ts";
+import { projectDesignBaseline, verifyDesignBaselineDigest } from "../domain/design-baseline-view.ts";
 import { projectBaselineDocument } from "../domain/project-documents-view.ts";
 import { projectDeliveryDocuments } from "../domain/delivery-documents-view.ts";
 import { projectTechnologyDecisions } from "../domain/technology-decisions-view.ts";
@@ -136,9 +136,9 @@ export function BuilderPage() {
     if (designBaseline.error) {
       publish(sourceSnapshot, "설계 기준을 불러오지 못했습니다. 새로고침해 주세요.");
     } else if (designBaseline.loading || data === null) {
-      publish(sourceSnapshot, null);
+      return () => { cancelled = true; };
     } else {
-      void projectDesignBaseline(sourceSnapshot, data).then(snapshot => publish(snapshot, null))
+      void verifyDesignBaselineDigest(sourceSnapshot, data).then(snapshot => publish(snapshot, null))
         .catch(() => publish(sourceSnapshot, "설계 기준을 확인하지 못했습니다. 새로고침해 주세요."));
     }
     return () => { cancelled = true; };
@@ -147,10 +147,14 @@ export function BuilderPage() {
     if (!memoryView.snapshot) return { snapshot: null, error: null };
     if (designBaseline.error) return { snapshot: memoryView.snapshot, error: "설계 기준을 불러오지 못했습니다. 새로고침해 주세요." };
     if (designBaseline.loading || designBaseline.data === null) return { snapshot: memoryView.snapshot, error: null };
+    let projected: BuilderSnapshot;
+    try { projected = projectDesignBaseline(memoryView.snapshot, designBaseline.data); }
+    catch { return { snapshot: memoryView.snapshot, error: "설계 기준을 확인하지 못했습니다. 새로고침해 주세요." }; }
     const current = baselineProjection;
     if (!current || current.workspaceId !== context.companyId || current.data !== designBaseline.data
-      || current.sourceSnapshot !== memoryView.snapshot) return { snapshot: memoryView.snapshot, error: null };
-    return { snapshot: current.snapshot, error: current.error };
+      || current.sourceSnapshot !== memoryView.snapshot) return { snapshot: projected, error: null };
+    if (current.error) return { snapshot: memoryView.snapshot, error: current.error };
+    return { snapshot: current.snapshot, error: null };
   }, [context.companyId, memoryView.snapshot, designBaseline.data, designBaseline.loading, designBaseline.error, baselineProjection]);
   const technologyView = useMemo(() => {
     if (!baselineView.snapshot) return { snapshot: null, error: null };
