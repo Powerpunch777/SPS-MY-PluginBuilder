@@ -1,9 +1,47 @@
 import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderLeadSessions } from "../domain/model.ts";
+import { readCurrentDeliveryDocuments, type DeliveryDocumentsRead } from "../project-documents/delivery-documents.ts";
 import type { createFinalPacketStore } from "./final-packet.ts";
 
 type Store = ReturnType<typeof createFinalPacketStore>;
 type ReviewEvidence = NonNullable<Awaited<ReturnType<Store["reviewEvidence"]>>>;
+
+export type FinalReviewDeliveryDocument = Readonly<{
+  kind: "installation-guide" | "user-guide" | "other";
+  pin: Readonly<{ sourceId: string; revisionId: string; sha256: string }>;
+  status: "available" | "stale" | "unknown" | "unavailable";
+  path: string | null;
+  body: string | null;
+}>;
+
+/** Exposes only bodies whose exact producer pins match the displayed current packet. */
+export function resolveFinalReviewDeliveryDocuments(packet: ReviewEvidence["snapshot"]["packet"], workspaceId: string,
+  projectId: string, read: DeliveryDocumentsRead | null, packetIsCurrent: boolean): readonly FinalReviewDeliveryDocument[] {
+  return Object.freeze(packet.documents.map(target => {
+    const empty = (status: FinalReviewDeliveryDocument["status"]): FinalReviewDeliveryDocument => Object.freeze({
+      kind: target.kind, pin: target.pin, status, path: null, body: null,
+    });
+    if (!packetIsCurrent) return empty("stale");
+    if (!read || read.status !== "available" || !read.document) return empty("unavailable");
+    if (read.source === "unknown") return empty("unknown");
+    if (read.source === "stale") return empty("stale");
+    const bundle = read.document;
+    if (bundle.workspaceId !== workspaceId || bundle.projectId !== projectId || bundle.status !== "draft"
+      || bundle.approvalStatus !== "unapproved" || bundle.completeness.status !== "unknown"
+      || read.confirmed !== false || read.completeness !== "unknown" || read.currentRevisionId !== bundle.revisionId) return empty("unknown");
+    const suffix = /^delivery-documents-v1:([a-f0-9]{64})$/u.exec(bundle.revisionId)?.[1];
+    if (!suffix) return empty("unknown");
+    for (const [index, candidate] of bundle.documents.entries()) {
+      if (candidate.kind !== target.kind) continue;
+      const sourceId = `delivery-document:${workspaceId}/${projectId}:${index + 1}:${candidate.kind}`;
+      if (sourceId !== target.pin.sourceId) continue;
+      const revisionId = `delivery-document-rev:${suffix}:${index + 1}`;
+      if (target.pin.revisionId !== revisionId || target.pin.sha256 !== candidate.bodySha256) return empty("stale");
+      return Object.freeze({ kind: target.kind, pin: target.pin, status: "available", path: candidate.path, body: candidate.body });
+    }
+    return empty(target.pin.sourceId.startsWith(`delivery-document:${workspaceId}/${projectId}:`) ? "stale" : "unavailable");
+  }));
+}
 
 export async function readFinalReview(store: Store, sessions: BuilderLeadSessions, platform: SpsPlatformInvocationContext) {
   const [history, evidence] = await Promise.all([store.current(), store.reviewEvidence()]);
@@ -29,6 +67,9 @@ export async function readFinalReview(store: Store, sessions: BuilderLeadSession
     g6: "UNKNOWN", g7: "UNKNOWN", qa: "UNKNOWN",
   } : null);
   if (!snapshot) return { status: "unknown" as const };
+  const deliveryRead = await readCurrentDeliveryDocuments(sessions.workspaceId, platform);
+  const deliveryDocuments = resolveFinalReviewDeliveryDocuments(snapshot.packet, snapshot.workspaceId, snapshot.projectId,
+    deliveryRead, Boolean(candidate && currentJournal && !changedRevision && !conflictingRevision));
 
   async function receipt(sessionId: string, runId: string, agentId: string) {
     try {
@@ -52,6 +93,7 @@ export async function readFinalReview(store: Store, sessions: BuilderLeadSession
   const eligible = Boolean(pinnedEvidence?.eligible && payload && latest?.eventId === request?.eventId && mainReceipt && integrationReviewReceipt
     && payload.snapshotSha256 === pinnedEvidence.snapshotSha256 && payload.currentPinsSha256 === snapshot.currentPinsSha256);
   return { status: "ready" as const, snapshot, mainAttestation: attestation, approvalRequest: request, decision,
+    deliveryDocuments,
     mainReceipt, integrationReviewReceipt, approvalEligibility: { status: eligible ? "eligible" as const : pinnedEvidence ? "blocked" as const : "unknown" as const,
       ...(changedRevision ? { reason: "The current packet revision needs its own Main attestation and approval request." }
         : conflictingRevision ? { reason: "The current packet hash conflicts with the recorded immutable revision." } : {}) },

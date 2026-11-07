@@ -48,6 +48,7 @@ function fixture(eligible: "eligible" | "blocked" | "unknown" = "eligible"): Ext
   return { status: "ready", snapshot, mainAttestation, approvalRequest: request, decision: null,
     mainReceipt: { verification: "verified", workspaceId, agentId, sessionId, runId },
     integrationReviewReceipt: { verification: "verified", workspaceId, agentId, sessionId: reviewSessionId, runId: reviewRunId },
+    deliveryDocuments: packet.documents.map(document => ({ ...document, status: "unavailable" as const, path: null, body: null })),
     approvalEligibility: { status: eligible, ...(eligible === "eligible" ? {} : { reason: "fixture gate is not eligible" }) },
     history: [{ eventId: "request-event-fixture", kind: "approval-request" as const, requestId: "packet-rev-fixture", decision: null }] };
 }
@@ -88,10 +89,38 @@ test("renders exact pins, files, guides, gates, limits and history as escaped re
     assert.match(html, /SHA-256/u);
     assert.match(html, /QA: PASS/u);
     assert.match(html, /Synthetic test fixture only/u);
-    assert.match(html, /본문 확인은 unavailable/u);
+    assert.match(html, /정확히 일치하는 현재 문서를 찾지 못했습니다/u);
     assert.match(html, /실제 고객 전달·배포와 별개/u);
     assert.match(html, /<button[^>]*disabled=""[^>]*>수정 요청/u);
     assert.match(html, /<button[^>]*disabled=""[^>]*>보류/u);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("only exact current Packet document pins render their body and reading does not alter approval", async () => {
+  const { Panel, parseDTO, temporary } = await loadPanel();
+  try {
+    const base = fixture("eligible");
+    const deliveryDocuments = base.snapshot.packet.documents.map((document, index) => ({ ...document,
+      status: "available" as const, path: index === 0 ? "docs/install.md" : "docs/use.md",
+      body: index === 0 ? "<script>installation text</script>" : "Exact user guide body." }));
+    const parsed = parseDTO({ ...base, deliveryDocuments });
+    assert.equal(parsed.status, "ready");
+    if (parsed.status !== "ready") return;
+    assert.equal(parsed.approvalEligibility.status, "eligible");
+    const html = renderToStaticMarkup(createElement(Panel, { view: parsed, onApprove() {} }));
+    assert.match(html, /docs\/install\.md/u);
+    assert.match(html, /&lt;script&gt;installation text&lt;\/script&gt;/u);
+    assert.match(html, /Exact user guide body/u);
+
+    const stale = { ...base, deliveryDocuments: base.deliveryDocuments.map(document => ({ ...document,
+      status: "stale" as const, path: null, body: null })) };
+    const staleView = parseDTO(stale);
+    assert.equal(staleView.status, "ready");
+    if (staleView.status !== "ready") return;
+    const staleHtml = renderToStaticMarkup(createElement(Panel, { view: staleView }));
+    assert.doesNotMatch(staleHtml, /Exact user guide body|installation text/u);
+    assert.match(staleHtml, /Packet 핀 또는 현재 문서가 변경되어 본문을 표시하지 않습니다/u);
+    assert.equal(staleView.approvalEligibility.status, "eligible", "document read state is not an eligibility input");
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
@@ -105,6 +134,9 @@ test("read DTO rejects binary payloads and shows older decisions only as history
   assert.equal("fileBytes" in read.snapshot, false);
   const withBinary = { ...fixture(), snapshot: { ...fixture().snapshot, commitObjectBytes: [1, 2, 3] } };
   assert.deepEqual(parseDTO(withBinary), { status: "unknown", reason: "Final Review read data is incomplete or malformed." });
+  const bodyOnStalePin = { ...fixture(), deliveryDocuments: fixture().deliveryDocuments.map(document => ({ ...document,
+    status: "stale" as const, path: "docs/old.md", body: "stale body must not render" })) };
+  assert.deepEqual(parseDTO(bodyOnStalePin), { status: "unknown", reason: "Final Review read data is incomplete or malformed." });
   const current = { ...fixture("blocked"), approvalRequest: null, mainAttestation: null, mainReceipt: null,
     integrationReviewReceipt: null, history: [{ eventId: "older-event", kind: "user-decision" as const,
       requestId: "another-packet", decision: { action: "approve" as const, userId: "approver-fixture", reason: null,

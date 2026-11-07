@@ -65,6 +65,14 @@ export type IntegrationReviewHistoryEntry = Readonly<{
   decision: IntegrationReviewDecision | null;
 }>;
 
+export type IntegrationReviewDeliveryDocument = Readonly<{
+  kind: "installation-guide" | "user-guide" | "other";
+  pin: IntegrationReviewPin;
+  status: "available" | "stale" | "unknown" | "unavailable";
+  path: string | null;
+  body: string | null;
+}>;
+
 export type IntegrationReviewRunReceipt = Readonly<{
   verification: "verified";
   workspaceId: string;
@@ -97,6 +105,7 @@ export type IntegrationReviewDTO =
     decision: IntegrationReviewJournalEvent | null;
     mainReceipt: IntegrationReviewRunReceipt | null;
     integrationReviewReceipt: IntegrationReviewRunReceipt | null;
+    deliveryDocuments: readonly IntegrationReviewDeliveryDocument[];
     approvalEligibility: Readonly<{ status: "eligible" | "blocked" | "unknown"; reason?: string }>;
     history: readonly IntegrationReviewHistoryEntry[];
   }>;
@@ -169,6 +178,19 @@ function validSnapshot(value: unknown): value is IntegrationReviewSnapshotDTO {
     && ["PASS", "FAIL", "UNKNOWN"].includes(String(row.g6)) && ["PASS", "FAIL", "UNKNOWN"].includes(String(row.g7))
     && ["PASS", "FAIL", "UNKNOWN"].includes(String(row.qa)) && isDigest(row.currentPinsSha256));
 }
+function validDeliveryDocuments(value: unknown, packet: IntegrationReviewPacket): value is readonly IntegrationReviewDeliveryDocument[] {
+  if (!Array.isArray(value) || value.length !== packet.documents.length) return false;
+  return value.every((documentValue, index) => {
+    const row = exact(documentValue, ["kind", "pin", "status", "path", "body"]);
+    const target = packet.documents[index];
+    if (!row || !target || row.kind !== target.kind || !validPin(row.pin)
+      || row.pin.sourceId !== target.pin.sourceId || row.pin.revisionId !== target.pin.revisionId || row.pin.sha256 !== target.pin.sha256
+      || !["available", "stale", "unknown", "unavailable"].includes(String(row.status))) return false;
+    if (row.status !== "available") return row.path === null && row.body === null;
+    return isText(row.path) && typeof row.body === "string" && Boolean(row.body.trim())
+      && new TextEncoder().encode(row.body).byteLength <= 192 * 1024;
+  });
+}
 function validEvent(value: unknown): value is IntegrationReviewJournalEvent {
   const row = exact(value, ["eventId", "expectedBaseRevisionId", "kind", "requestId", "attestation", "request", "decision"]);
   if (!row || !isText(row.eventId) || row.expectedBaseRevisionId !== null && !isText(row.expectedBaseRevisionId)
@@ -223,9 +245,10 @@ export function parseIntegrationReviewDTO(value: unknown): IntegrationReviewDTO 
     return Object.freeze({ status: "unknown", ...(isText(statusRow.reason) ? { reason: statusRow.reason } : {}) });
   }
   const ready = exact(value, ["status", "snapshot", "mainAttestation", "approvalRequest", "decision", "mainReceipt",
-    "integrationReviewReceipt", "approvalEligibility", "history"]);
+    "integrationReviewReceipt", "deliveryDocuments", "approvalEligibility", "history"]);
   const eligibility = ready && exact(ready.approvalEligibility, ["status"], ["reason"]);
   if (!ready || ready.status !== "ready" || !validSnapshot(ready.snapshot)
+    || !validDeliveryDocuments(ready.deliveryDocuments, (ready.snapshot as IntegrationReviewSnapshotDTO).packet)
     || ready.mainAttestation !== null && !validEvent(ready.mainAttestation)
     || ready.approvalRequest !== null && !validEvent(ready.approvalRequest)
     || ready.decision !== null && !validEvent(ready.decision)
@@ -240,6 +263,7 @@ export function parseIntegrationReviewDTO(value: unknown): IntegrationReviewDTO 
     approvalRequest: ready.approvalRequest as IntegrationReviewJournalEvent | null, decision: ready.decision as IntegrationReviewJournalEvent | null,
     mainReceipt: ready.mainReceipt as IntegrationReviewRunReceipt | null,
     integrationReviewReceipt: ready.integrationReviewReceipt as IntegrationReviewRunReceipt | null,
+    deliveryDocuments: Object.freeze([...(ready.deliveryDocuments as IntegrationReviewDeliveryDocument[])]),
     approvalEligibility: Object.freeze({ status: eligibility.status as "eligible" | "blocked" | "unknown",
       ...(isText(eligibility.reason) ? { reason: eligibility.reason } : {}) }),
     history: Object.freeze([...(ready.history as IntegrationReviewHistoryEntry[])]) });
@@ -270,6 +294,7 @@ const STYLE = `
 .sps-ir-table tr:last-child td{border-bottom:0}
 .sps-ir-list{display:grid;gap:6px;margin:0;padding:0;list-style:none}
 .sps-ir-list li{border-left:2px solid #686868;padding:3px 8px;color:var(--ir-muted);overflow-wrap:anywhere}
+.sps-ir-body{max-height:420px;overflow:auto;margin:8px 0 0;border:1px solid var(--ir-border);border-radius:5px;background:#1b1b1b;padding:10px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}
 .sps-ir-status{border:1px solid var(--ir-border);border-radius:6px;background:var(--ir-panel);padding:12px;color:var(--ir-muted)}
 .sps-ir-status[role=alert]{color:var(--ir-bad)}
 .sps-ir-gates{display:flex;flex-wrap:wrap;gap:6px}
@@ -412,9 +437,18 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
           </table></div>
         </section>
         <section className="sps-ir-section" aria-label="설치법과 사용법 문서">
-          <h3>설치법·사용법</h3><p className="sps-ir-status">현재 read contract는 문서 원문이 아니라 immutable revision과 SHA-256 pin만 제공합니다. 실제 검증 reader가 연결될 때까지 본문 확인은 unavailable입니다.</p>
+          <h3>설치법·사용법</h3><p className="sps-ir-status">Packet에 고정된 정확한 문서 핀만 표시합니다. 본문 조회는 승인 여부나 QA 판정에 영향을 주지 않습니다.</p>
           <div className="sps-ir-grid">{ready!.snapshot.packet.documents.map(document => <PinCard
             key={`${document.kind}:${document.pin.sourceId}`} label={document.kind === "installation-guide" ? "설치법" : document.kind === "user-guide" ? "사용법" : "기타 문서"} pin={document.pin} />)}</div>
+          <div className="sps-ir-grid" style={{ marginTop: 8 }}>{ready!.deliveryDocuments.map((document, index) => <article className="sps-ir-item"
+            key={`${document.kind}:${document.pin.sourceId}:${document.pin.revisionId}`}>
+            <strong>{document.kind === "installation-guide" ? "설치법 본문" : document.kind === "user-guide" ? "사용법 본문" : "기타 문서 본문"}</strong>
+            {document.status === "available" ? <><small className="sps-ir-mono">{document.path}</small>
+              <pre className="sps-ir-body">{document.body}</pre></>
+              : <small role="status">{document.status === "stale" ? "Packet 핀 또는 현재 문서가 변경되어 본문을 표시하지 않습니다."
+                : document.status === "unknown" ? "현재 문서 상태를 확인할 수 없어 본문을 표시하지 않습니다."
+                  : "Packet과 정확히 일치하는 현재 문서를 찾지 못했습니다."}</small>}
+          </article>)}</div>
         </section>
         <section className="sps-ir-section" aria-label="알려진 제한">
           <h3>알려진 제한</h3><ul className="sps-ir-list">{ready!.snapshot.packet.limits.map((limit, index) => <li key={`${index}:${limit}`}>{limit}</li>)}</ul>

@@ -4,7 +4,8 @@ import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createFinalPacketStore, type FinalAtomicApprovalCommitter, type FinalEvidenceSnapshot, type FinalPacketJournalEvent } from "../src/delivery-evidence/final-packet.ts";
 import { createRevisionJournal, type RevisionState } from "../src/solution-revision-store.ts";
-import { readFinalReview } from "../src/delivery-evidence/final-review.ts";
+import { readFinalReview, resolveFinalReviewDeliveryDocuments } from "../src/delivery-evidence/final-review.ts";
+import type { DeliveryDocumentsRead } from "../src/project-documents/delivery-documents.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
@@ -232,6 +233,7 @@ test("registered review exposes no bytes or approval eligibility from historical
   assert.equal(active.status, "ready");
   if (active.status !== "ready") throw new Error("Unexpected fixture view.");
   assert.equal(active.approvalEligibility.status, "blocked");
+  assert.ok(active.deliveryDocuments.every(document => document.status === "unavailable" && document.body === null));
   assert.equal(Object.hasOwn(active.snapshot, "fileBytes"), false);
   assert.equal(Object.hasOwn(active.snapshot, "commitObjectBytes"), false);
 
@@ -253,6 +255,46 @@ test("registered review exposes no bytes or approval eligibility from historical
   assert.equal(replay.replayed, true);
   await assert.rejects(async () => restarted({ ...hold, reason: "Different" }, ctx), /different immutable content/);
   await assert.rejects(async () => restarted({ ...hold, eventId: "new-id" }, ctx), /receipts could not be verified/);
+});
+
+test("Final Review exposes only exact current delivery guide pins and never older or unknown draft bodies", () => {
+  const f = fixture();
+  const suffix = "e".repeat(64), revisionId = `delivery-documents-v1:${suffix}`;
+  const documents = [
+    { kind: "installation-guide" as const, path: "docs/install.md", classification: "guide", scope: "Install",
+      body: "Exact installation body.", bodySha256: sha("Exact installation body.") },
+    { kind: "user-guide" as const, path: "docs/use.md", classification: "guide", scope: "Use",
+      body: "Exact user body.", bodySha256: sha("Exact user body.") },
+  ];
+  const packet = { ...f.snapshot.packet, documents: documents.map((document, index) => ({ kind: document.kind,
+    pin: { sourceId: `delivery-document:${COMPANY}/${COMPANY}:${index + 1}:${document.kind}`,
+      revisionId: `delivery-document-rev:${suffix}:${index + 1}`, sha256: document.bodySha256 } })) };
+  const read = { status: "available" as const, reason: null, document: { schemaVersion: 1 as const,
+    workspaceId: COMPANY, projectId: COMPANY, revisionId, createdAt: "2026-11-07T12:00:00.000Z", status: "draft" as const,
+    approvalStatus: "unapproved" as const, author: { agentId: AGENT, sessionId: MAIN_SESSION, runId: RUN, selectionRevision: 1 },
+    baseline: { sourceId: `${COMPANY}/${COMPANY}`, revisionId: "baseline", sha256: "a".repeat(64), sequence: 1 },
+    ui: { sourceId: `${COMPANY}/${COMPANY}`, revisionId: "ui", sha256: "b".repeat(64) },
+    integrationPlan: { sourceId: `${COMPANY}/${COMPANY}`, revisionId: "plan", sha256: "c".repeat(64) },
+    source: { sourceId: AGENT, folderKey: "source", branch: "main", commitSha: "1".repeat(40), treeSha: "2".repeat(40), sha256: "d".repeat(64) },
+    documents, completeness: { status: "unknown" as const, reason: "Not verified." } }, source: "current" as const,
+    currentRevisionId: revisionId, confirmed: false as const, completeness: "unknown" as const } satisfies DeliveryDocumentsRead;
+
+  const exact = resolveFinalReviewDeliveryDocuments(packet, COMPANY, COMPANY, read, true);
+  assert.deepEqual(exact.map(document => [document.status, document.path, document.body]), [
+    ["available", "docs/install.md", "Exact installation body."], ["available", "docs/use.md", "Exact user body."],
+  ]);
+  const changedPinPacket = { ...packet, documents: packet.documents.map((document, index) => index === 1
+    ? { ...document, pin: { ...document.pin, sha256: "f".repeat(64) } } : document) };
+  const changed = resolveFinalReviewDeliveryDocuments(changedPinPacket, COMPANY, COMPANY, read, true);
+  assert.equal(changed[0]?.body, "Exact installation body.");
+  assert.equal(changed[1]?.status, "stale");
+  assert.equal(changed[1]?.body, null);
+  assert.ok(resolveFinalReviewDeliveryDocuments(packet, COMPANY, COMPANY, { ...read, source: "stale" }, true)
+    .every(document => document.status === "stale" && document.body === null));
+  assert.ok(resolveFinalReviewDeliveryDocuments(packet, COMPANY, COMPANY, { ...read, source: "unknown" }, true)
+    .every(document => document.status === "unknown" && document.body === null));
+  assert.ok(resolveFinalReviewDeliveryDocuments(packet, COMPANY, COMPANY, read, false)
+    .every(document => document.status === "stale" && document.body === null));
 });
 
 test("a changed delivery guide needs a new packet approval without erasing the prior decision", async () => {
