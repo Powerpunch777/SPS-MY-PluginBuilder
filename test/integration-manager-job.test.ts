@@ -3,13 +3,16 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { createVerifiedWorkstreamManagerReadHandler, consumeVerifiedWorkstreamJob,
+  consumeManagerSessionTerminalJob,
   INTEGRATION_MANAGER_VERIFIED_READ_TOOL, managerRequestUuidForLedgerKey,
   resolveCurrentIntegrationManagerAuthority, type VerifiedEventLookup } from "../src/builder-gates/integration-manager-job.ts";
 import { consumeVerifiedWorkstream, type ManagerDispatchPort, type VerifiedSnapshotRead,
   type VerifiedWorkstreamSnapshot } from "../src/builder-gates/workstream-verification-consumer.ts";
 import { integrationManagerSessionStateKey, integrationManagerSessionTaskKey,
   integrationManagerStateKey } from "../src/domain/integration-manager.ts";
-import { WORKSTREAM_VERIFIED_JOB } from "../src/builder-gates/workstream-verification-publication.ts";
+import { WORKSTREAM_VERIFIED_EVENT, WORKSTREAM_VERIFIED_JOB } from "../src/builder-gates/workstream-verification-publication.ts";
+import { mapKey } from "./fixtures/cto-platform.ts";
+import { validationFixture, validationTool, progressTool, MANAGER_RUN as FIXTURE_MANAGER_RUN } from "./fixtures/integration-manager-platform.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const SESSION = "22222222-2222-4222-8222-222222222222";
@@ -181,4 +184,173 @@ test("Manager read cannot use another project, another run, or a null request re
     companyId: WORKSPACE, agentId: MANAGER, sessionId: SESSION, runId: "55555555-5555-4555-8555-555555555555",
   }, f.host), /exact Core request receipt/u);
   assert.equal(INTEGRATION_MANAGER_VERIFIED_READ_TOOL, "builder.read-verified-workstream");
+});
+
+async function preparedTerminalFixture(managerStatus: "running" | "succeeded" = "succeeded",
+  phase: "ci" | "e2e" | "regression" = "ci", withRegression = false) {
+  const validation = await validationFixture(withRegression);
+  const fixture = validation.f;
+  const admitted = await validationTool().handler({ ...validation.input, phase }, validation.managerContext, fixture.platform) as any;
+  const reference = admitted.data.reference;
+  const sessions = fixture.platform.agents.sessions as typeof fixture.platform.agents.sessions & Record<string, any>;
+  const coreRequests = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
+  const sends: Array<{ requestId: string; runId: string; prompt: string }> = [];
+  let originalManagerStatus = managerStatus;
+  const priorGetRequest = sessions.getRequest.bind(sessions);
+  sessions.getRequest = async (sessionId: string, companyId: string, requestId: string) =>
+    coreRequests.get(requestId) ?? priorGetRequest(sessionId, companyId, requestId);
+  sessions.getRun = async (_sessionId: string, _companyId: string, runId: string) => ({ runId,
+    status: runId === FIXTURE_MANAGER_RUN ? originalManagerStatus : "running", cancellationRequested: false,
+    termination: "not_applicable",
+    errorCode: null, error: null });
+  sessions.sendMessage = async (_sessionId: string, _companyId: string, options: { requestId: string; prompt: string }) => {
+    const runId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    sends.push({ requestId: options.requestId, runId, prompt: options.prompt });
+    coreRequests.set(options.requestId, { requestId: options.requestId, state: "submitted", runId });
+    return { runId };
+  };
+  const run = validation.runs.get(reference.runId)!;
+  run.status = "succeeded"; run.termination = "confirmed";
+  run.receipt = { digest: "a".repeat(64), status: "completed", stdoutSha256: "b".repeat(64), stderrSha256: null,
+    stdoutBytes: 1, stderrBytes: 0, processExitCode: 0, timedOut: false, cancelled: false, outputLimit: false,
+    appContainerVerified: true, capabilitiesCount: 0, childTerminationConfirmed: true, jobEmpty: true,
+    profileCleanupSucceeded: true, sandboxCleanupSucceeded: true, fixtureMustBeRetained: false };
+  const folders = (fixture.platform as unknown as { localFolders: Record<string, (...args: string[]) => Promise<unknown>> }).localFolders;
+  folders.matchWorkspaceSourceV1 = async (folderKey, sourceId) => ({ folderKey, workspaceSourceId: sourceId, match: "same_root" });
+  const payload = { schemaVersion: 1, kind: "protected-node-test-v1", companyId: WORKSPACE,
+    pluginId: "com.sonparkserver.my-plugin-builder", pluginKey: "com.sonparkserver.my-plugin-builder",
+    runId: reference.runId, status: run.status, receiptDigest: run.receipt.digest,
+    subjectKeySha256: reference.subjectKeySha256 };
+  const terminalEventId = `sps-protected-test-terminal-v1:${reference.runId}:${run.receipt.digest}:${reference.subjectKeySha256}:job`;
+  assert.ok(terminalEventId.length > 160);
+  return { fixture, eventId: validation.eventId, payload, terminalEventId, sends, coreRequests, reference,
+    setOriginalManagerStatus(status: "running" | "succeeded") { originalManagerStatus = status; } };
+}
+
+for (const phase of ["ci", "e2e", "regression"] as const) test(`current ${phase} terminal receipt resumes the exact Manager session once`, async () => {
+  const f = await preparedTerminalFixture("succeeded", phase, phase === "regression");
+  const job = { jobKey: WORKSTREAM_VERIFIED_JOB, runId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", trigger: "event",
+    eventId: f.terminalEventId, companyId: WORKSPACE, event: { eventType: "sps.protected-test.terminal", payload: f.payload } };
+  const first = await consumeVerifiedWorkstreamJob(job, f.fixture.platform);
+  assert.equal(first.status, "accepted", JSON.stringify(first));
+  assert.equal(f.sends.length, 1);
+  assert.ok(f.sends[0]!.prompt.includes(f.reference.runId));
+  assert.ok(f.sends[0]!.prompt.includes("never as QA PASS or final approval"));
+  const replay = await consumeVerifiedWorkstreamJob(job, f.fixture.platform);
+  assert.equal(replay.status, "accepted");
+  assert.equal(f.sends.length, 1, "receipt/event replay must not create another Manager request");
+
+  const readTool = createVerifiedWorkstreamManagerReadHandler();
+  const result = await readTool({ workstreamId: "ws-1", eventId: f.eventId }, {
+    companyId: WORKSPACE, agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", runId: f.sends[0]!.runId,
+  }, f.fixture.platform);
+  assert.equal((result.data as { eventId: string }).eventId, f.eventId);
+  await assert.rejects(readTool({ workstreamId: "ws-1", eventId: f.eventId }, {
+    companyId: WORKSPACE, agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", runId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+  }, f.fixture.platform), /exact Core request receipt/u);
+});
+
+test("changed current candidate tip or terminal subject pin blocks Manager continuation", async t => {
+  await t.test("Source branch tip moved", async () => {
+    const f = await preparedTerminalFixture();
+    const folders = (f.fixture.platform as unknown as { localFolders: Record<string, (...args: string[]) => Promise<any>> }).localFolders;
+    const prior = folders.readWorkspaceSourceGitTipV1;
+    folders.readWorkspaceSourceGitTipV1 = async (...args) => {
+      const tip = await prior!(...args);
+      return { ...tip, commitSha: "9".repeat(40) };
+    };
+    const result = await consumeVerifiedWorkstreamJob({ jobKey: WORKSTREAM_VERIFIED_JOB,
+      runId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", trigger: "event", eventId: f.terminalEventId,
+      companyId: WORKSPACE, event: { eventType: "sps.protected-test.terminal", payload: f.payload } }, f.fixture.platform);
+    assert.equal(result.status, "stale");
+    assert.equal(f.sends.length, 0);
+  });
+  await t.test("different subject digest", async () => {
+    const f = await preparedTerminalFixture();
+    const result = await consumeVerifiedWorkstreamJob({ jobKey: WORKSTREAM_VERIFIED_JOB,
+      runId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", trigger: "event", eventId: f.terminalEventId,
+      companyId: WORKSPACE, event: { eventType: "sps.protected-test.terminal",
+        payload: { ...f.payload, subjectKeySha256: "f".repeat(64) } } }, f.fixture.platform);
+    assert.equal(result.status, "stale");
+    assert.equal(f.sends.length, 0);
+  });
+  await t.test("Core succeeded status with a contradictory receipt is unknown", async () => {
+    const f = await preparedTerminalFixture();
+    const run = (await (f.fixture.platform as any).protectedTests.getRunV1(WORKSPACE, f.reference.runId, f.reference.subjectKeySha256)) as any;
+    run.receipt.status = "failed";
+    const result = await consumeVerifiedWorkstreamJob({ jobKey: WORKSTREAM_VERIFIED_JOB,
+      runId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", trigger: "event", eventId: f.terminalEventId,
+      companyId: WORKSPACE, event: { eventType: "sps.protected-test.terminal", payload: f.payload } }, f.fixture.platform);
+    assert.equal(result.status, "unknown");
+    assert.equal(f.sends.length, 0);
+  });
+});
+
+test("active Manager terminal race records waiting and queues only one bounded recheck", async () => {
+  const f = await preparedTerminalFixture("running");
+  const state = f.fixture.state as typeof f.fixture.state & { guardedCompareAndSetWithJobWakeV1?: (...args: any[]) => Promise<unknown> };
+  const wakes: any[] = [];
+  state.guardedCompareAndSetWithJobWakeV1 = async (address: any, expected: any, value: JsonValue, wake: unknown) => {
+    const target = mapKey({ scopeKind: address.scopeKind, scopeId: address.scopeId, namespace: address.namespace, stateKey: address.stateKey });
+    for (const guard of address.guards) {
+      const guardKey = mapKey({ scopeKind: "company", scopeId: address.scopeId, namespace: guard.namespace, stateKey: guard.stateKey });
+      if (JSON.stringify(f.fixture.values.get(guardKey)) !== JSON.stringify(guard.expectedValue)) return { status: "conflict" };
+    }
+    const old = f.fixture.values.get(target);
+    if (expected.exists ? JSON.stringify(old) !== JSON.stringify(expected.value) : old !== undefined) return { status: "conflict" };
+    f.fixture.values.set(target, structuredClone(value)); wakes.push(structuredClone(wake)); return { status: "committed" };
+  };
+  const job = { jobKey: WORKSTREAM_VERIFIED_JOB, runId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", trigger: "event",
+    eventId: f.terminalEventId, companyId: WORKSPACE, event: { eventType: "sps.protected-test.terminal", payload: f.payload } };
+  const waiting = await consumeVerifiedWorkstreamJob(job, f.fixture.platform);
+  if (waiting.status !== "waiting") throw new Error(JSON.stringify(waiting));
+  assert.equal(waiting.status, "waiting", JSON.stringify(waiting));
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].name, "sps.protected-test.continuation-recheck");
+  assert.equal(Object.keys(wakes[0].payload).length, 10, JSON.stringify(wakes[0].payload));
+  assert.equal(f.sends.length, 0);
+  const again = await consumeVerifiedWorkstreamJob({ ...job, eventId: wakes[0].eventId,
+    event: { eventType: wakes[0].name, payload: wakes[0].payload } }, f.fixture.platform);
+  if (again.status !== "waiting") throw new Error(JSON.stringify(again));
+  assert.equal(again.status, "waiting");
+  assert.equal(wakes.length, 1, "active Manager must not cause an unbounded wake loop");
+  assert.equal(f.sends.length, 0);
+  f.setOriginalManagerStatus("succeeded");
+  const row = f.fixture.values.get(mapKey(requestKey)) as { events: Array<{ requestId: string }> };
+  const originalRequestId = managerRequestUuidForLedgerKey(row.events[0]!.requestId);
+  const resumed = await consumeManagerSessionTerminalJob({ jobKey: "agent-session-terminal",
+    runId: "99999999-9999-4999-8999-999999999999", trigger: "event", eventId: `agent-session-terminal-v1:${"a".repeat(64)}`,
+    companyId: WORKSPACE, event: { eventType: "agent.session.run.terminal", payload: { schemaVersion: 1,
+      runId: FIXTURE_MANAGER_RUN, sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", requestId: originalRequestId,
+      status: "succeeded", resultSha256: "c".repeat(64), finishedAt: "2026-11-07T01:00:00.000Z" } } }, f.fixture.platform);
+  assert.equal(resumed.status, "accepted", JSON.stringify(resumed));
+  assert.equal(f.sends.length, 1, "durable Manager terminal notification should resume the same session once");
+});
+
+test("unrelated and legacy untyped events are filtered before verified-event reads", async () => {
+  let reads = 0;
+  const platform = { state: { async get() { reads++; return null; } } } as unknown as SpsPlatformInvocationContext;
+  const base = { jobKey: WORKSTREAM_VERIFIED_JOB, runId: RUN, trigger: "event", companyId: WORKSPACE };
+  const ignored = await consumeVerifiedWorkstreamJob({ ...base, eventId: "other-event",
+    event: { eventType: "unrelated.event", payload: {} } }, platform);
+  assert.equal(ignored.status, "ignored");
+  const legacy = await consumeVerifiedWorkstreamJob({ ...base, eventId: "x".repeat(235) }, platform);
+  assert.equal(legacy.status, "unsupported");
+  assert.equal(reads, 0);
+  const verified = await consumeVerifiedWorkstreamJob({ ...base, eventId: "x".repeat(235),
+    event: { eventType: WORKSTREAM_VERIFIED_EVENT, payload: {} } }, platform);
+  assert.equal(verified.reason, "verified-event-id-invalid");
+  assert.equal(reads, 0);
+});
+
+test("unrelated typed Manager-terminal event is ignored before Workspace reads", async () => {
+  let reads = 0;
+  const platform = { state: { async get() { reads++; return null; } } } as unknown as SpsPlatformInvocationContext;
+  const result = await consumeManagerSessionTerminalJob({ jobKey: "agent-session-terminal",
+    runId: RUN, trigger: "event", eventId: "agent-session-terminal-v1:fixture", companyId: WORKSPACE,
+    event: { eventType: "unrelated.event", payload: {} } }, platform);
+  assert.equal(result.status, "ignored");
+  assert.equal(reads, 0);
 });

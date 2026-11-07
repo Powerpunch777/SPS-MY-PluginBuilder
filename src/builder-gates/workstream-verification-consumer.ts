@@ -54,6 +54,18 @@ type StateClient = Readonly<{
 export type VerifiedSnapshotReader = (input: Readonly<{ workspaceId: string; projectId: string; workstreamId: string; eventId: string }>) => Promise<VerifiedSnapshotRead>;
 
 type StoredReceipt = Readonly<{ receiptId: string; runId: string }>;
+export type ProtectedContinuation = Readonly<{
+  terminalEventId: string;
+  protectedRunId: string;
+  receiptDigest: string;
+  subjectKeySha256: string;
+  phase: "ci" | "e2e" | "regression";
+  requestId: string;
+  status: "waiting" | "pending" | "uncertain" | "accepted";
+  dispatchAttempts: 0 | 1;
+  recoveryWakeCount: 0 | 1;
+  receipt: StoredReceipt | null;
+}>;
 type Reservation = Readonly<{
   eventId: string;
   evidenceDigest: string;
@@ -61,6 +73,7 @@ type Reservation = Readonly<{
   status: "pending" | "uncertain" | "accepted";
   dispatchAttempts: number;
   receipt: StoredReceipt | null;
+  continuations?: readonly ProtectedContinuation[];
 }>;
 type Ledger = Readonly<{
   schemaVersion: 2;
@@ -73,7 +86,9 @@ type Ledger = Readonly<{
 
 const HASH = /^[a-f0-9]{64}$/u;
 const ID = /^[^\u0000-\u001f\u007f]{1,160}$/u;
+const EVENT_ID = /^[^\u0000-\u001f\u007f]{1,512}$/u;
 const MAX_EVENTS = 2048;
+const MAX_CONTINUATIONS = 32;
 const MAX_DISPATCH_ATTEMPTS = 2;
 const MAX_CAS_REQUEST_BYTES = 220_000;
 const encoder = new TextEncoder();
@@ -157,7 +172,8 @@ export function normalizeVerifiedWorkstreamSnapshot(snapshot: VerifiedWorkstream
 }
 
 function parseReservation(value: unknown): Reservation {
-  if (!isRecord(value) || Reflect.ownKeys(value).length !== 6 || typeof value.eventId !== "string" || !ID.test(value.eventId)
+  if (!isRecord(value) || (Reflect.ownKeys(value).length !== 6 && Reflect.ownKeys(value).length !== 7)
+    || typeof value.eventId !== "string" || !ID.test(value.eventId)
     || typeof value.evidenceDigest !== "string" || !HASH.test(value.evidenceDigest)
     || !(value.requestId === null || typeof value.requestId === "string" && /^builder-ws-dispatch-v1:[a-f0-9]{64}$/u.test(value.requestId))
     || !["pending", "uncertain", "accepted"].includes(value.status as string)
@@ -173,8 +189,46 @@ function parseReservation(value: unknown): Reservation {
   if ((value.status === "accepted") !== (receipt !== null) || (value.status === "accepted" && value.requestId === null)) {
     throw new TypeError("Manager dispatch reservation state does not match its receipt.");
   }
+  let continuations: ProtectedContinuation[] | undefined;
+  if (Object.hasOwn(value, "continuations")) {
+    if (!Array.isArray(value.continuations) || value.continuations.length > MAX_CONTINUATIONS) throw new TypeError("Malformed bounded Manager continuation history.");
+    continuations = value.continuations.map(parseContinuation);
+    if (new Set(continuations.map(item => `${item.terminalEventId}\0${item.protectedRunId}\0${item.receiptDigest}`)).size !== continuations.length) {
+      throw new TypeError("Duplicate Manager continuation identity.");
+    }
+  }
   return { eventId: value.eventId, evidenceDigest: value.evidenceDigest, requestId: value.requestId as string | null,
-    status: value.status as Reservation["status"], dispatchAttempts: value.dispatchAttempts as number, receipt };
+    status: value.status as Reservation["status"], dispatchAttempts: value.dispatchAttempts as number, receipt,
+    ...(continuations ? { continuations } : {}) };
+}
+
+function parseContinuation(value: unknown): ProtectedContinuation {
+  if (!isRecord(value) || Reflect.ownKeys(value).length !== 10
+    || typeof value.terminalEventId !== "string" || !EVENT_ID.test(value.terminalEventId)
+    || typeof value.protectedRunId !== "string" || !ID.test(value.protectedRunId)
+    || typeof value.receiptDigest !== "string" || !HASH.test(value.receiptDigest)
+    || typeof value.subjectKeySha256 !== "string" || !HASH.test(value.subjectKeySha256)
+    || !["ci", "e2e", "regression"].includes(value.phase as string)
+    || typeof value.requestId !== "string" || !/^builder-ws-continuation-v1:[a-f0-9]{64}$/u.test(value.requestId)
+    || !["waiting", "pending", "uncertain", "accepted"].includes(value.status as string)
+    || !Number.isSafeInteger(value.dispatchAttempts) || ![0, 1].includes(value.dispatchAttempts as number)
+    || !Number.isSafeInteger(value.recoveryWakeCount) || ![0, 1].includes(value.recoveryWakeCount as number)) {
+    throw new TypeError("Malformed protected-receipt continuation.");
+  }
+  let receipt: StoredReceipt | null = null;
+  if (value.receipt !== null) {
+    if (!isRecord(value.receipt) || Reflect.ownKeys(value.receipt).length !== 2
+      || typeof value.receipt.receiptId !== "string" || !ID.test(value.receipt.receiptId)
+      || typeof value.receipt.runId !== "string" || !ID.test(value.receipt.runId)) throw new TypeError("Malformed continuation receipt.");
+    receipt = { receiptId: value.receipt.receiptId, runId: value.receipt.runId };
+  }
+  if ((value.status === "waiting" && (value.dispatchAttempts !== 0 || receipt !== null))
+    || (value.status === "pending" && (value.dispatchAttempts !== 1 || receipt !== null))
+    || (value.status === "uncertain" && (value.dispatchAttempts !== 1 || receipt !== null))
+    || (value.status === "accepted" && (value.dispatchAttempts !== 1 || receipt === null))) {
+    throw new TypeError("Continuation status does not match its effect receipt.");
+  }
+  return value as unknown as ProtectedContinuation;
 }
 
 function parseLedger(value: JsonValue | null, workspaceId: string, projectId: string, workstreamId: string): Ledger {
@@ -225,6 +279,146 @@ async function saveEntry(state: StateClient, key: SpsStateKey, raw: JsonValue | 
   if (encoder.encode(envelope).byteLength > MAX_CAS_REQUEST_BYTES) throw new RangeError("Manager dispatch ledger CAS exceeds the bounded Host request size.");
   const swapped = await state.compareAndSet!(key, expected, next as unknown as JsonValue);
   return { swapped: swapped.swapped, next };
+}
+
+export function protectedContinuationRequestId(input: Readonly<{ workspaceId: string; projectId: string; workstreamId: string;
+  verifiedEventId: string; terminalEventId: string; protectedRunId: string; receiptDigest: string; subjectKeySha256: string; phase: ProtectedContinuation["phase"] }>) {
+  return `builder-ws-continuation-v1:${digest(JSON.stringify([input.workspaceId, input.projectId, input.workstreamId,
+    input.verifiedEventId, input.terminalEventId, input.protectedRunId, input.receiptDigest, input.subjectKeySha256, input.phase]))}`;
+}
+
+type ContinuationScope = Readonly<{ workspaceId: string; projectId: string; workstreamId: string; verifiedEventId: string }>;
+type ContinuationIdentity = Readonly<{ terminalEventId: string; protectedRunId: string; receiptDigest: string;
+  subjectKeySha256: string; phase: ProtectedContinuation["phase"] }>;
+type ContinuationState = StateClient & Readonly<{
+  guardedCompareAndSetWithJobWakeV1?: (key: SpsStateKey & { scopeKind: "company"; scopeId: string;
+    guards: readonly { stateKey: string; namespace?: string; expectedValue: JsonValue }[] },
+    expected: { exists: false } | { exists: true; value: JsonValue }, value: JsonValue,
+    wake: Readonly<{ name: string; eventId: string; jobKey: string; payload: JsonValue }>) => Promise<{ status: "committed" | "conflict" | "unsupported"; reason?: string }>;
+}>;
+
+function continuationKey(value: ContinuationIdentity) {
+  return `${value.terminalEventId}\0${value.protectedRunId}\0${value.receiptDigest}`;
+}
+
+function validContinuationIdentity(value: ContinuationIdentity) {
+  return typeof value.terminalEventId === "string" && EVENT_ID.test(value.terminalEventId)
+    && typeof value.protectedRunId === "string" && ID.test(value.protectedRunId)
+    && HASH.test(value.receiptDigest) && HASH.test(value.subjectKeySha256)
+    && ["ci", "e2e", "regression"].includes(value.phase);
+}
+
+async function loadContinuationLedger(scope: ContinuationScope, state: StateClient) {
+  const key = keyFor(scope.workspaceId, scope.projectId, scope.workstreamId);
+  const raw = await state.get(key);
+  return { key, raw, ledger: parseLedger(raw, scope.workspaceId, scope.projectId, scope.workstreamId) };
+}
+
+export async function readVerifiedWorkstreamReservation(scope: ContinuationScope, state: StateClient) {
+  const loaded = await loadContinuationLedger(scope, state);
+  const event = loaded.ledger.events.find(item => item.eventId === scope.verifiedEventId);
+  return event ? Object.freeze({ ...event }) : null;
+}
+
+/** Append one immutable receipt/event identity to the existing verified-event row. */
+export async function reserveProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity, state: StateClient) {
+  if (![scope.workspaceId, scope.workstreamId, scope.verifiedEventId].every(value => typeof value === "string" && ID.test(value))
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(scope.projectId) || !validContinuationIdentity(identity)) {
+    throw new TypeError("Invalid protected continuation identity.");
+  }
+  if (typeof state.compareAndSet !== "function") return { status: "unknown" as const, reason: "host-cas-unavailable" };
+  let loaded: Awaited<ReturnType<typeof loadContinuationLedger>>;
+  try { loaded = await loadContinuationLedger(scope, state); }
+  catch { return { status: "unknown" as const, reason: "manager-dispatch-ledger-read-failed" };
+  }
+  const event = loaded.ledger.events.find(item => item.eventId === scope.verifiedEventId);
+  if (!event || event.status !== "accepted" || !event.receipt || !event.requestId) {
+    return { status: "unknown" as const, reason: "verified-event-manager-request-not-accepted" };
+  }
+  const prior = event.continuations?.find(item => continuationKey(item) === continuationKey(identity));
+  if (prior) return { status: "existing" as const, continuation: prior };
+  if ((event.continuations?.length ?? 0) >= MAX_CONTINUATIONS) return { status: "unknown" as const, reason: "manager-continuation-history-capacity" };
+  const requestId = protectedContinuationRequestId({ ...scope, ...identity });
+  const continuation: ProtectedContinuation = Object.freeze({ ...identity, requestId, status: "waiting", dispatchAttempts: 0,
+    recoveryWakeCount: 0, receipt: null });
+  let saved: Awaited<ReturnType<typeof saveEntry>>;
+  try { saved = await saveEntry(state, loaded.key, loaded.raw, loaded.ledger, { ...event,
+    continuations: [...(event.continuations ?? []), continuation] }); }
+  catch { return { status: "unknown" as const, reason: "manager-continuation-reservation-uncertain" };
+  }
+  return saved.swapped ? { status: "reserved" as const, continuation }
+    : { status: "conflict" as const, reason: "manager-continuation-reservation-conflict" };
+}
+
+/** Queue at most one durable recheck while the exact earlier Manager run is active. */
+export async function queueProtectedContinuationRecheck(scope: ContinuationScope, identity: ContinuationIdentity,
+  managerBindingKey: SpsStateKey, managerBinding: JsonValue, wake: Readonly<{ name: string; eventId: string; jobKey: string; payload: JsonValue }>,
+  state: ContinuationState) {
+  if (typeof state.guardedCompareAndSetWithJobWakeV1 !== "function") return { status: "unsupported" as const,
+    reason: "atomic-manager-continuation-wake-unavailable" };
+  let loaded: Awaited<ReturnType<typeof loadContinuationLedger>>;
+  try { loaded = await loadContinuationLedger(scope, state); }
+  catch { return { status: "unknown" as const, reason: "manager-dispatch-ledger-read-failed" };
+  }
+  const event = loaded.ledger.events.find(item => item.eventId === scope.verifiedEventId);
+  const prior = event?.continuations?.find(item => continuationKey(item) === continuationKey(identity));
+  if (!event || event.status !== "accepted" || !event.receipt || !prior) return { status: "unknown" as const,
+    reason: "manager-continuation-reservation-unavailable" };
+  if (prior.recoveryWakeCount === 1) return { status: "existing" as const, continuation: prior };
+  const continuation: ProtectedContinuation = Object.freeze({ ...prior, recoveryWakeCount: 1 });
+  const entry: Reservation = { ...event, continuations: event.continuations!.map(item => continuationKey(item) === continuationKey(identity) ? continuation : item) };
+  const next: Ledger = { ...loaded.ledger, revision: loaded.ledger.revision + 1,
+    events: loaded.ledger.events.map(item => item.eventId === event.eventId ? entry : item) };
+  const expected = loaded.raw === null ? { exists: false as const } : { exists: true as const, value: loaded.raw };
+  const key = { ...loaded.key, scopeKind: "company" as const, scopeId: scope.workspaceId,
+    guards: [{ stateKey: managerBindingKey.stateKey, ...(managerBindingKey.namespace ? { namespace: managerBindingKey.namespace } : {}),
+      expectedValue: managerBinding }] };
+  if (encoder.encode(JSON.stringify({ key, expected, value: next, wake })).byteLength > MAX_CAS_REQUEST_BYTES) {
+    return { status: "unsupported" as const, reason: "manager-continuation-wake-request-over-bound" };
+  }
+  try {
+    const result = await state.guardedCompareAndSetWithJobWakeV1(key, expected, next as unknown as JsonValue, wake);
+    return result.status === "committed" ? { status: "queued" as const, continuation }
+      : result.status === "conflict" ? { status: "conflict" as const, reason: "manager-continuation-wake-conflict" }
+        : { status: "unsupported" as const, reason: result.reason ?? "atomic-manager-continuation-wake-unavailable" };
+  } catch { return { status: "unknown" as const, reason: "manager-continuation-wake-outcome-unknown" };
+  }
+}
+
+export async function startProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity, state: StateClient) {
+  return updateProtectedContinuation(scope, identity, state, prior => prior.status === "waiting"
+    ? Object.freeze({ ...prior, status: "pending", dispatchAttempts: 1 }) : prior);
+}
+
+export async function finishProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity,
+  result: Readonly<{ status: "accepted"; receiptId: string; runId: string } | { status: "uncertain" }>, state: StateClient) {
+  return updateProtectedContinuation(scope, identity, state, prior => {
+    if (result.status === "uncertain") return prior.status === "pending" ? Object.freeze({ ...prior, status: "uncertain" }) : prior;
+    if (prior.status === "accepted") return prior.receipt?.receiptId === result.receiptId && prior.receipt.runId === result.runId
+      ? prior : prior;
+    if (prior.status !== "pending" && prior.status !== "uncertain") return prior;
+    return Object.freeze({ ...prior, status: "accepted", dispatchAttempts: 1, receipt: { receiptId: result.receiptId, runId: result.runId } });
+  });
+}
+
+async function updateProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity, state: StateClient,
+  update: (prior: ProtectedContinuation) => ProtectedContinuation) {
+  let loaded: Awaited<ReturnType<typeof loadContinuationLedger>>;
+  try { loaded = await loadContinuationLedger(scope, state); }
+  catch { return { status: "unknown" as const, reason: "manager-dispatch-ledger-read-failed" };
+  }
+  const event = loaded.ledger.events.find(item => item.eventId === scope.verifiedEventId);
+  const prior = event?.continuations?.find(item => continuationKey(item) === continuationKey(identity));
+  if (!event || event.status !== "accepted" || !prior) return { status: "unknown" as const, reason: "manager-continuation-reservation-unavailable" };
+  const nextContinuation = update(prior);
+  if (JSON.stringify(nextContinuation) === JSON.stringify(prior)) return { status: "existing" as const, continuation: prior };
+  const entry: Reservation = { ...event, continuations: event.continuations!.map(item => continuationKey(item) === continuationKey(identity) ? nextContinuation : item) };
+  let saved: Awaited<ReturnType<typeof saveEntry>>;
+  try { saved = await saveEntry(state, loaded.key, loaded.raw, loaded.ledger, entry); }
+  catch { return { status: "unknown" as const, reason: "manager-continuation-update-uncertain" };
+  }
+  return saved.swapped ? { status: "updated" as const, continuation: nextContinuation }
+    : { status: "conflict" as const, reason: "manager-continuation-update-conflict" };
 }
 
 function dispatchRequest(input: { workspaceId: string; projectId: string; workstreamId: string; eventId: string },

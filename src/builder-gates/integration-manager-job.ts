@@ -5,8 +5,11 @@ import { integrationManagerSessionStateKey, integrationManagerSessionTaskKey, in
 import { parseLeadAgentBinding } from "../domain/lead-agent.ts";
 import { parseLeadSessions } from "../domain/lead-sessions.ts";
 import { readProjectCtos } from "../project-cto-tools.ts";
-import { WORKSTREAM_VERIFIED_JOB, createWorkstreamVerificationPublication } from "./workstream-verification-publication.ts";
-import { consumeVerifiedWorkstream, type ManagerDispatchRequest, type VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
+import { exactToolRecord } from "../lead-tool-authority.ts";
+import { WORKSTREAM_VERIFIED_EVENT, WORKSTREAM_VERIFIED_JOB, createWorkstreamVerificationPublication } from "./workstream-verification-publication.ts";
+import { consumeVerifiedWorkstream, queueProtectedContinuationRecheck,
+  readVerifiedWorkstreamReservation, reserveProtectedContinuation, startProtectedContinuation, finishProtectedContinuation,
+  type ManagerDispatchRequest, type ProtectedContinuation, type VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
 import { readWorkstreams } from "../workstream-tools.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
 import type { IntegrationPlan } from "./integration-plan.ts";
@@ -15,12 +18,24 @@ import { INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY } from "../session-executi
 export const INTEGRATION_MANAGER_VERIFIED_READ_TOOL = "builder.read-verified-workstream";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 const ID = /^[^\u0000-\u001f\u007f]{1,160}$/u;
+const EVENT_ID = /^[^\u0000-\u001f\u007f]{1,512}$/u;
 const MANAGER_REQUEST_NAMESPACE = Buffer.from("5b6e9b0e5a2d4f0184a7d32c40c4a91f", "hex");
 const MAX_WORKSTREAMS = 128;
+const MAX_TERMINAL_ATTEMPT_LOOKUPS = 512;
 const MAX_MANAGER_TOOL_RESPONSE_BYTES = 40 * 1024;
 const MANAGER_EXECUTION_TOOLS = INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames;
 const REQUEST_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+const BUILDER_PLUGIN_ID = "com.sonparkserver.my-plugin-builder";
+const PROTECTED_TERMINAL_EVENT = "sps.protected-test.terminal";
+const PROTECTED_RECHECK_EVENT = "sps.protected-test.continuation-recheck";
+const MANAGER_TERMINAL_JOB = "agent-session-terminal";
+const MANAGER_TERMINAL_EVENT = "agent.session.run.terminal";
 type Host = SpsPlatformInvocationContext & {
+  protectedTests?: { getRunV1?: (workspaceId: string, runId: string, subjectKeySha256: string) => Promise<unknown> };
+  localFolders?: {
+    matchWorkspaceSourceV1?: (folderKey: string, sourceId: string) => Promise<unknown>;
+    readWorkspaceSourceGitTipV1?: (sourceId: string, folderKey: string, branch: string) => Promise<unknown>;
+  };
   agents: SpsPlatformInvocationContext["agents"] & {
     owned?: { get(input: { companyId: string; pluginAgentKey: string }): Promise<unknown> };
     sessions: SpsPlatformInvocationContext["agents"]["sessions"] & {
@@ -33,7 +48,7 @@ type Host = SpsPlatformInvocationContext & {
     };
   };
 };
-type Job = Readonly<{ jobKey: string; runId: string; trigger: string; eventId?: string; companyId?: string }>;
+type Job = Readonly<{ jobKey: string; runId: string; trigger: string; eventId?: string; companyId?: string; event?: unknown }>;
 type ManagerAuthority = Readonly<{ agentId: string; sessionId: string; taskKey: string }>;
 export type VerifiedEventLookup =
   | Readonly<{ status: "current"; workstreamId: string; snapshot: VerifiedWorkstreamSnapshot }>
@@ -159,6 +174,384 @@ export function managerRequestUuidForLedgerKey(value: string) {
 function exactObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+}
+
+type ProtectedTerminalPayload = Readonly<{ schemaVersion: 1; kind: "protected-node-test-v1"; companyId: string;
+  pluginId: string; pluginKey: string; runId: string; status: "succeeded" | "failed" | "cancelled";
+  receiptDigest: string; subjectKeySha256: string; sourceEventId?: string }>;
+function parseProtectedTerminalPayload(value: unknown, recheck: boolean): ProtectedTerminalPayload | null {
+  if (!exactObject(value)) return null;
+  const expected = ["schemaVersion", "kind", "companyId", "pluginId", "pluginKey", "runId", "status", "receiptDigest", "subjectKeySha256",
+    ...(recheck ? ["sourceEventId"] : [])];
+  if (Reflect.ownKeys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))
+    || value.schemaVersion !== 1 || value.kind !== "protected-node-test-v1" || value.companyId === undefined
+    || typeof value.companyId !== "string" || !UUID.test(value.companyId) || value.pluginId !== BUILDER_PLUGIN_ID
+    || value.pluginKey !== BUILDER_PLUGIN_ID || typeof value.runId !== "string" || !UUID.test(value.runId)
+    || !["succeeded", "failed", "cancelled"].includes(value.status as string)
+    || typeof value.receiptDigest !== "string" || !/^[a-f0-9]{64}$/u.test(value.receiptDigest)
+    || typeof value.subjectKeySha256 !== "string" || !/^[a-f0-9]{64}$/u.test(value.subjectKeySha256)
+    || recheck && (typeof value.sourceEventId !== "string" || !EVENT_ID.test(value.sourceEventId))) return null;
+  return value as unknown as ProtectedTerminalPayload;
+}
+
+type ProtectedTerminalCandidate = Readonly<{ scope: { workspaceId: string; projectId: string; workstreamId: string; verifiedEventId: string };
+  snapshot: VerifiedWorkstreamSnapshot; taskId: string; phase: "ci" | "e2e" | "regression";
+  reference: NonNullable<NonNullable<import("./integration-progress.ts").IntegrationAttempt["validationRuns"]>["ci"]>;
+  attempt: import("./integration-progress.ts").IntegrationAttempt; plan: CurrentIntegrationPlan }>;
+
+async function findProtectedTerminalCandidate(workspaceId: string, payload: ProtectedTerminalPayload, platform: Host) {
+  const board = await readWorkstreams(workspaceId, workspaceId, platform);
+  if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) return { status: "unknown" as const, reason: "protected-terminal-workstream-board-unavailable-or-over-bound" };
+  const publication = createWorkstreamVerificationPublication(revisionState(platform));
+  const progress = await import("./integration-progress.ts");
+  const candidates: ProtectedTerminalCandidate[] = [];
+  let attemptLookups = 0;
+  for (const workstream of board.revision.workstreams) {
+    const latest = await publication.readLatestCurrent({ workspaceId, projectId: workspaceId, workstreamId: workstream.spec.id });
+    if (latest.status === "unknown" && latest.reason !== "verified-head-unavailable") return { status: "unknown" as const,
+      reason: "protected-terminal-current-verification-read-unavailable" };
+    if (latest.status !== "current") continue;
+    const taskPins = latest.snapshot.sourcePins.filter(pin => pin.sourceId.startsWith("builder-v1:task-packet:"));
+    for (const pin of taskPins) {
+      if (++attemptLookups > MAX_TERMINAL_ATTEMPT_LOOKUPS) return { status: "unknown" as const,
+        reason: "protected-terminal-attempt-scan-over-bound" };
+      const taskId = pin.sourceId.slice("builder-v1:task-packet:".length);
+      const attempt = await progress.createIntegrationAttemptStore({ workspaceId, workstreamId: workstream.spec.id,
+        eventId: latest.snapshot.eventId, taskId }, platform.state as typeof platform.state & RevisionState).current();
+      if (!attempt || attempt.revision.stage !== "git-observed" || attempt.revision.planRevisionId === "") continue;
+      for (const phase of ["ci", "e2e", "regression"] as const) {
+        const reference = attempt.revision.validationRuns?.[phase];
+        if (!reference || reference.runId !== payload.runId || reference.subjectKeySha256 !== payload.subjectKeySha256) continue;
+        candidates.push({ scope: { workspaceId, projectId: workspaceId, workstreamId: workstream.spec.id,
+          verifiedEventId: latest.snapshot.eventId }, snapshot: latest.snapshot, taskId, phase, reference,
+          attempt: attempt.revision, plan: null as never });
+      }
+    }
+  }
+  if (candidates.length !== 1) return { status: candidates.length ? "conflict" as const : "stale" as const,
+    reason: candidates.length ? "protected-terminal-run-matches-multiple-current-workstream-references"
+      : "protected-terminal-run-is-not-referenced-by-current-verified-workstream" };
+  let candidate = candidates[0]!;
+  const readiness = await readIntegrationReadiness(workspaceId, candidate.scope.workstreamId, platform);
+  if (readiness.status !== "ready") return { status: readiness.status === "waiting-dependencies" ? "waiting-dependencies" as const : "unknown" as const,
+    reason: readiness.reason };
+  const selected = readiness.plan.revision.validationPlans?.[candidate.phase];
+  const git = candidate.attempt.git;
+  const observedCommit = git?.status === "unchanged" ? git.headSha
+    : git?.status === "integrated" || git?.status === "replayed" ? git.commitSha : null;
+  const observedTree = git?.status === "integrated" || git?.status === "replayed" ? git.treeSha : candidate.reference.treeSha;
+  if (!selected || candidate.attempt.planRevisionId !== readiness.plan.revision.revisionId
+    || candidate.attempt.effect.sourceId !== readiness.plan.revision.sourceId
+    || candidate.attempt.effect.folderKey !== readiness.plan.revision.folderKey
+    || candidate.attempt.effect.branch !== readiness.plan.revision.candidateBranch
+    || candidate.reference.approvalTemplateId !== selected.approvalTemplateId
+    || candidate.reference.planSha256 !== selected.planSha256
+    || candidate.reference.commitSha !== observedCommit || candidate.reference.treeSha !== observedTree) {
+    return { status: "stale" as const, reason: "protected-terminal-plan-or-candidate-pins-changed" };
+  }
+  candidate = { ...candidate, plan: readiness.plan };
+  return { status: "current" as const, candidate };
+}
+
+async function validateProtectedTerminalReceipt(candidate: ProtectedTerminalCandidate, payload: ProtectedTerminalPayload, platform: Host) {
+  const api = platform.protectedTests;
+  if (typeof api?.getRunV1 !== "function") return { status: "unsupported" as const, reason: "protected-run-reader-unavailable" };
+  const folders = platform.localFolders;
+  if (typeof folders?.matchWorkspaceSourceV1 !== "function" || typeof folders.readWorkspaceSourceGitTipV1 !== "function") {
+    return { status: "unsupported" as const, reason: "current-source-root-or-tip-reader-unavailable" };
+  }
+  const source = candidate.attempt.effect.sourceId, folder = candidate.attempt.effect.folderKey, branch = candidate.attempt.effect.branch;
+  const checkSource = async () => {
+    const root = await folders.matchWorkspaceSourceV1!(folder, source);
+    const tip = await folders.readWorkspaceSourceGitTipV1!(source, folder, branch);
+    return exactObject(root) && Reflect.ownKeys(root).length === 3 && root.folderKey === folder && root.workspaceSourceId === source && root.match === "same_root"
+      && exactObject(tip) && tip.status === "current" && tip.sourceId === source && tip.folderKey === folder && tip.branch === branch
+      && tip.commitSha === candidate.reference.commitSha && tip.treeSha === candidate.reference.treeSha;
+  };
+  try {
+    if (!await checkSource()) return { status: "stale" as const, reason: "protected-terminal-source-root-or-branch-tip-changed" };
+    const { parseProtectedRun } = await import("../task-protected-qa.ts");
+    const { assertProtectedOutputMetadata, PROTECTED_OUTPUT_RECEIPT_FIELDS } = await import("../protected-test-output-metadata.ts");
+    const run = parseProtectedRun(await api.getRunV1(candidate.scope.workspaceId, payload.runId, payload.subjectKeySha256));
+    if (run.id !== candidate.reference.runId || run.pins.subjectKeySha256 !== payload.subjectKeySha256
+      || run.pins.approvalId !== candidate.reference.approvalId || run.pins.sourceId !== candidate.attempt.effect.sourceId
+      || run.pins.planSha256 !== candidate.reference.planSha256 || run.pins.commitSha !== candidate.reference.commitSha
+      || run.pins.treeSha !== candidate.reference.treeSha || run.status !== payload.status || run.termination !== "confirmed"
+      || !exactObject(run.receipt)) return { status: "unknown" as const, reason: "protected-terminal-core-run-pins-or-termination-invalid" };
+    const required = ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes", "processExitCode", "timedOut",
+      "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount", "childTerminationConfirmed", "jobEmpty",
+      "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"];
+    const receiptKeys = Reflect.ownKeys(run.receipt);
+    if (required.some(key => !Object.hasOwn(run.receipt!, key))
+      || receiptKeys.some(key => typeof key !== "string" || !required.includes(key) && !(PROTECTED_OUTPUT_RECEIPT_FIELDS as readonly string[]).includes(key))) {
+      return { status: "unknown" as const, reason: "protected-terminal-core-receipt-malformed" };
+    }
+    assertProtectedOutputMetadata(run.receipt);
+    if (run.receipt.digest !== payload.receiptDigest || typeof run.receipt.digest !== "string"
+      || !/^[a-f0-9]{64}$/u.test(run.receipt.digest) || run.receipt.appContainerVerified !== true
+      || run.receipt.capabilitiesCount !== 0 || run.receipt.childTerminationConfirmed !== true || run.receipt.jobEmpty !== true
+      || run.receipt.profileCleanupSucceeded !== true || run.receipt.sandboxCleanupSucceeded !== true
+      || run.receipt.fixtureMustBeRetained !== false
+      || run.status === "succeeded" && (run.receipt.status !== "completed" || run.receipt.processExitCode !== 0
+        || run.receipt.timedOut !== false || run.receipt.cancelled !== false || run.receipt.outputLimit !== false)) {
+      return { status: "unknown" as const, reason: "protected-terminal-core-receipt-invariants-invalid" };
+    }
+    const latestEvent = await createWorkstreamVerificationPublication(revisionState(platform)).readCurrent({
+      workspaceId: candidate.scope.workspaceId, projectId: candidate.scope.projectId,
+      workstreamId: candidate.scope.workstreamId, eventId: candidate.scope.verifiedEventId });
+    const latestPlan = await readIntegrationReadiness(candidate.scope.workspaceId, candidate.scope.workstreamId, platform);
+    if (latestEvent.status !== "current" || sha256Json(latestEvent.snapshot) !== sha256Json(candidate.snapshot)
+      || latestPlan.status !== "ready" || sha256Json(latestPlan.plan) !== sha256Json(candidate.plan)
+      || !await checkSource()) return { status: "stale" as const, reason: "protected-terminal-evidence-changed-during-receipt-read" };
+  return { status: "current" as const, run: { id: run.id, status: run.status, termination: run.termination,
+      pins: run.pins, receipt: { digest: run.receipt.digest, status: run.receipt.status,
+        processExitCode: run.receipt.processExitCode, timedOut: run.receipt.timedOut, cancelled: run.receipt.cancelled,
+        outputLimit: run.receipt.outputLimit } } };
+  } catch { return { status: "unknown" as const, reason: "protected-terminal-core-receipt-read-failed" };
+  }
+}
+
+async function managerRequestRun(workspaceId: string, authority: ManagerAuthority, ledgerRequestId: string,
+  expectedRunId: string | undefined, platform: Host) {
+  const requestUuid = managerRequestUuidForLedgerKey(ledgerRequestId);
+  try {
+    const request = await platform.agents.sessions.getRequest(authority.sessionId, workspaceId, requestUuid);
+    if (!exactObject(request) || request.requestId !== requestUuid || request.state !== "submitted"
+      || typeof request.runId !== "string" || !REQUEST_ID.test(request.runId)
+      || expectedRunId !== undefined && request.runId !== expectedRunId) return { status: "unknown" as const,
+      reason: "manager-core-request-receipt-unavailable-or-mismatched" };
+    const run = await platform.agents.sessions.getRun(authority.sessionId, workspaceId, request.runId);
+    if (!safeRunReceipt(run, request.runId)) return { status: "unknown" as const, reason: "manager-core-run-receipt-invalid" };
+    return { status: "current" as const, requestUuid, runId: request.runId,
+      active: ["queued", "running", "cancelling"].includes(String(run.status)) || run.cancellationRequested !== false || run.termination === "pending" };
+  } catch { return { status: "unknown" as const, reason: "manager-core-request-or-run-read-failed" };
+  }
+}
+
+function continuationScope(candidate: ProtectedTerminalCandidate) {
+  return { workspaceId: candidate.scope.workspaceId, projectId: candidate.scope.projectId,
+    workstreamId: candidate.scope.workstreamId, verifiedEventId: candidate.scope.verifiedEventId };
+}
+
+async function reconcileContinuation(scope: ReturnType<typeof continuationScope>, continuation: ProtectedContinuation,
+  authority: ManagerAuthority, platform: Host) {
+  const observed = await managerRequestRun(scope.workspaceId, authority, continuation.requestId,
+    continuation.receipt?.runId, platform);
+  if (observed.status !== "current") {
+    if (continuation.status === "pending") await finishProtectedContinuation(scope, continuation, { status: "uncertain" }, platform.state);
+    return { status: "uncertain" as const, reason: observed.reason };
+  }
+  if (continuation.status !== "accepted") {
+    const saved = await finishProtectedContinuation(scope, continuation, { status: "accepted", receiptId: observed.requestUuid,
+      runId: observed.runId }, platform.state);
+    if (saved.status === "conflict" || saved.status === "unknown") return { status: "uncertain" as const, reason: saved.reason };
+  }
+  return { status: "accepted" as const, runId: observed.runId, active: observed.active };
+}
+
+function continuationPrompt(input: Readonly<{ candidate: ProtectedTerminalCandidate; terminalEventId: string;
+  payload: ProtectedTerminalPayload; coreRun: unknown; originalRequestId: string; originalRunId: string; requestId: string }>) {
+  const body = { schemaVersion: 1, type: "builder.protected-validation-terminal-continuation", requestId: input.requestId,
+    originalRequestId: input.originalRequestId, originalRunId: input.originalRunId, workstreamId: input.candidate.scope.workstreamId,
+    verifiedEventId: input.candidate.scope.verifiedEventId, taskId: input.candidate.taskId, phase: input.candidate.phase,
+    terminalEventId: input.terminalEventId, protectedRun: input.coreRun };
+  return `Continue the same current Integration Manager work only for this exact protected validation receipt.\n${JSON.stringify(body)}\n`
+    + "Re-read builder.read-verified-workstream and builder.read-integration-progress before any action. "
+    + "Treat the protected run as technical evidence only, never as QA PASS or final approval. Continue using the existing approved plan and current verified Task pins. "
+    + "If source, plan, dependencies, or receipt are stale, stop and preserve prior history. Do not create another Agent or duplicate protected run.";
+}
+
+async function consumeProtectedTerminalJob(job: Job, platform: Host, payload: ProtectedTerminalPayload, terminalEventId: string) {
+  const located = await findProtectedTerminalCandidate(job.companyId!, payload, platform);
+  if (located.status !== "current") return { status: located.status, eventId: terminalEventId, reason: located.reason };
+  const candidate = located.candidate;
+  const validated = await validateProtectedTerminalReceipt(candidate, payload, platform);
+  if (validated.status !== "current") return { status: validated.status, eventId: terminalEventId, reason: validated.reason };
+  const scope = continuationScope(candidate);
+  const identity = { terminalEventId, protectedRunId: payload.runId, receiptDigest: payload.receiptDigest,
+    subjectKeySha256: payload.subjectKeySha256, phase: candidate.phase } as const;
+  const reservation = await reserveProtectedContinuation(scope, identity, platform.state);
+  if (reservation.status === "unknown" || reservation.status === "conflict") return { status: reservation.status, eventId: terminalEventId, reason: reservation.reason };
+  let continuation = reservation.continuation;
+  const authority = await resolveCurrentIntegrationManagerAuthority(job.companyId!, platform);
+  const original = await readVerifiedWorkstreamReservation(scope, platform.state);
+  if (!original || original.status !== "accepted" || !original.receipt || !original.requestId) {
+    return { status: "unknown" as const, eventId: terminalEventId, reason: "original-manager-request-receipt-unavailable" };
+  }
+  if (continuation.status !== "waiting") {
+    const reconciled = await reconcileContinuation(scope, continuation, authority, platform);
+    if (reconciled.status !== "accepted") return { status: "unknown" as const, eventId: terminalEventId, reason: reconciled.reason };
+    return { status: "accepted" as const, eventId: terminalEventId, requestId: continuation.requestId,
+      receipt: { receiptId: managerRequestUuidForLedgerKey(continuation.requestId), runId: reconciled.runId },
+      reason: "continuation-core-request-receipt-confirmed-not-completion" };
+  }
+  const originalRun = await managerRequestRun(job.companyId!, authority, original.requestId, original.receipt.runId, platform);
+  if (originalRun.status !== "current") return { status: "unknown" as const, eventId: terminalEventId, reason: originalRun.reason };
+  let activeManagerRun = originalRun.active;
+  for (const prior of original.continuations ?? []) {
+    if (prior.terminalEventId === identity.terminalEventId && prior.protectedRunId === identity.protectedRunId
+      && prior.receiptDigest === identity.receiptDigest) continue;
+    if (prior.status === "waiting") continue;
+    const observed = await reconcileContinuation(scope, prior, authority, platform);
+    if (observed.status !== "accepted") return { status: "unknown" as const, eventId: terminalEventId, reason: observed.reason };
+    if (observed.active) activeManagerRun = true;
+  }
+  if (activeManagerRun) {
+    if (continuation.recoveryWakeCount === 0) {
+      const managerBinding = await platform.state.get(integrationManagerStateKey(job.companyId!));
+      if (managerBinding === null) return { status: "unknown" as const, eventId: terminalEventId,
+        reason: "manager-selection-binding-unavailable-for-recheck" };
+      const wakeId = `builder-protected-recheck-v1:${sha256Json([terminalEventId, payload.runId, payload.receiptDigest])}`;
+      const wake = { name: PROTECTED_RECHECK_EVENT, eventId: wakeId, jobKey: WORKSTREAM_VERIFIED_JOB,
+        payload: { ...payload, sourceEventId: terminalEventId } as unknown as JsonValue };
+      const queued = await queueProtectedContinuationRecheck(scope, identity, integrationManagerStateKey(job.companyId!),
+        managerBinding, wake, platform.state as typeof platform.state & RevisionState);
+      if (queued.status === "queued") continuation = queued.continuation;
+      else if (queued.status === "conflict" || queued.status === "unknown") return { status: queued.status, eventId: terminalEventId, reason: queued.reason };
+    }
+    return { status: "waiting" as const, eventId: terminalEventId,
+      reason: continuation.recoveryWakeCount === 1 ? "manager-active-bounded-recheck-queued-or-exhausted"
+        : "manager-active-no-bounded-recheck-support", recoveryWakeCount: continuation.recoveryWakeCount };
+  }
+
+  const freshCandidate = await findProtectedTerminalCandidate(job.companyId!, payload, platform);
+  if (freshCandidate.status !== "current" || freshCandidate.candidate.scope.verifiedEventId !== candidate.scope.verifiedEventId
+    || freshCandidate.candidate.plan.revision.revisionId !== candidate.plan.revision.revisionId) {
+    return { status: "stale" as const, eventId: terminalEventId, reason: "protected-terminal-target-changed-before-manager-continuation" };
+  }
+  const freshRun = await validateProtectedTerminalReceipt(freshCandidate.candidate, payload, platform);
+  if (freshRun.status !== "current" || sha256Json(freshRun.run) !== sha256Json(validated.run)) {
+    return { status: "stale" as const, eventId: terminalEventId, reason: "protected-terminal-receipt-changed-before-manager-continuation" };
+  }
+  const currentAuthority = await resolveCurrentIntegrationManagerAuthority(job.companyId!, platform);
+  if (currentAuthority.agentId !== authority.agentId || currentAuthority.sessionId !== authority.sessionId
+    || currentAuthority.taskKey !== authority.taskKey) return { status: "stale" as const, eventId: terminalEventId,
+      reason: "manager-authority-changed-before-continuation" };
+  const policy = (await import("../session-execution-policy.ts")).INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY;
+  if (!policy || policy.mode !== "plugin-tools-only-v1"
+    || JSON.stringify([...policy.toolNames].sort()) !== JSON.stringify(MANAGER_EXECUTION_TOOLS)) {
+    return { status: "unsupported" as const, eventId: terminalEventId, reason: "manager-restricted-tool-policy-unavailable-or-mismatched" };
+  }
+  const started = await startProtectedContinuation(scope, identity, platform.state);
+  if (started.status !== "updated") return { status: started.status, eventId: terminalEventId,
+    reason: started.reason ?? "continuation-reservation-not-startable" };
+  const coreRequestId = managerRequestUuidForLedgerKey(started.continuation.requestId);
+  try {
+    const sent = await platform.agents.sessions.sendMessage(authority.sessionId, job.companyId!, { requestId: coreRequestId,
+      prompt: continuationPrompt({ candidate, terminalEventId, payload, coreRun: validated.run, originalRequestId: original.requestId,
+        originalRunId: original.receipt.runId, requestId: started.continuation.requestId }),
+      reason: "builder-protected-validation-terminal-continuation", executionPolicy: policy });
+    if (!sent || !REQUEST_ID.test(sent.runId)) return { status: "unknown" as const, eventId: terminalEventId,
+      reason: "manager-continuation-send-receipt-invalid" };
+  } catch { /* Reconcile the deterministic Core request; never issue a replacement ID. */ }
+  const sentReceipt = await managerRequestRun(job.companyId!, authority, started.continuation.requestId, undefined, platform);
+  if (sentReceipt.status !== "current") {
+    await finishProtectedContinuation(scope, identity, { status: "uncertain" }, platform.state);
+    return { status: "unknown" as const, eventId: terminalEventId, requestId: started.continuation.requestId,
+      reason: "manager-continuation-request-outcome-uncertain-no-retry" };
+  }
+  const saved = await finishProtectedContinuation(scope, identity, { status: "accepted", receiptId: sentReceipt.requestUuid,
+    runId: sentReceipt.runId }, platform.state);
+  if (saved.status === "conflict" || saved.status === "unknown") return { status: "unknown" as const, eventId: terminalEventId,
+    requestId: started.continuation.requestId, reason: saved.reason };
+  return { status: "accepted" as const, eventId: terminalEventId, requestId: started.continuation.requestId,
+    receipt: { receiptId: sentReceipt.requestUuid, runId: sentReceipt.runId },
+    reason: "continuation-core-request-receipt-confirmed-not-completion" };
+}
+
+/** Consumer for Core's durable successful Manager-session terminal notification. */
+export async function consumeManagerSessionTerminalJob(job: Job, platformInput: SpsPlatformInvocationContext) {
+  const platform = platformInput as Host;
+  if (job.jobKey !== MANAGER_TERMINAL_JOB || job.trigger !== "event" || !job.eventId || !EVENT_ID.test(job.eventId)
+    || !job.companyId || !UUID.test(job.companyId) || !job.runId || !UUID.test(job.runId)) {
+    return { status: "unsupported" as const, reason: "manager-terminal-event-context-incomplete-or-unsupported" };
+  }
+  if (!exactObject(job.event) || Reflect.ownKeys(job.event).length !== 2 || typeof job.event.eventType !== "string") {
+    return { status: "unknown" as const, eventId: job.eventId, reason: "sanitized-job-event-context-malformed" };
+  }
+  if (job.event.eventType !== MANAGER_TERMINAL_EVENT) return { status: "ignored" as const, eventId: job.eventId,
+    reason: "unrelated-workspace-event" };
+  let payload: Record<string, unknown>;
+  try { payload = exactToolRecord(job.event.payload, ["schemaVersion", "runId", "sessionId", "requestId", "status", "resultSha256", "finishedAt"]); }
+  catch { return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-event-payload-invalid" };
+  }
+  if (payload.schemaVersion !== 1 || typeof payload.runId !== "string" || !UUID.test(payload.runId)
+    || typeof payload.sessionId !== "string" || !UUID.test(payload.sessionId)
+    || typeof payload.requestId !== "string" || !REQUEST_ID.test(payload.requestId) || payload.status !== "succeeded"
+    || typeof payload.resultSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(payload.resultSha256)
+    || typeof payload.finishedAt !== "string" || !Number.isFinite(Date.parse(payload.finishedAt))) {
+    return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-event-payload-invalid" };
+  }
+  let authority: ManagerAuthority;
+  try { authority = await resolveCurrentIntegrationManagerAuthority(job.companyId, platform); }
+  catch { return { status: "unknown" as const, eventId: job.eventId, reason: "current-manager-authority-unavailable" };
+  }
+  if (authority.sessionId !== payload.sessionId) return { status: "ignored" as const, eventId: job.eventId,
+    reason: "terminal-event-is-not-from-current-manager-session" };
+  const sessionRequest = await platform.agents.sessions.getRequest(authority.sessionId, job.companyId, payload.requestId);
+  if (!exactObject(sessionRequest) || sessionRequest.requestId !== payload.requestId || sessionRequest.state !== "submitted"
+    || sessionRequest.runId !== payload.runId) return { status: "ignored" as const, eventId: job.eventId,
+    reason: "terminal-event-does-not-match-current-manager-request-receipt" };
+  const sessionRun = await platform.agents.sessions.getRun(authority.sessionId, job.companyId, payload.runId);
+  if (!safeRunReceipt(sessionRun, payload.runId) || sessionRun.status !== "succeeded"
+    || sessionRun.cancellationRequested !== false) {
+    return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-core-run-not-authoritatively-succeeded" };
+  }
+  const board = await readWorkstreams(job.companyId, job.companyId, platform);
+  if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) return { status: "unknown" as const,
+    eventId: job.eventId, reason: "manager-terminal-workstream-board-unavailable-or-over-bound" };
+  const outcomes: Array<Readonly<{ eventId: string; status: string; reason: string }>> = [];
+  let continuationScans = 0;
+  for (const workstream of board.revision.workstreams) {
+    const latest = await createWorkstreamVerificationPublication(revisionState(platform)).readLatestCurrent({
+      workspaceId: job.companyId, projectId: job.companyId, workstreamId: workstream.spec.id });
+    if (latest.status === "unknown" && latest.reason !== "verified-head-unavailable") return { status: "unknown" as const,
+      eventId: job.eventId, reason: "manager-terminal-current-workstream-read-unavailable" };
+    if (latest.status !== "current") continue;
+    const reservation = await readVerifiedWorkstreamReservation({ workspaceId: job.companyId, projectId: job.companyId,
+      workstreamId: workstream.spec.id, verifiedEventId: latest.snapshot.eventId }, platform.state);
+    if (!reservation || reservation.status !== "accepted" || !reservation.requestId || !reservation.receipt) continue;
+    for (const continuation of reservation.continuations ?? []) {
+      if (++continuationScans > MAX_TERMINAL_ATTEMPT_LOOKUPS) return { status: "unknown" as const,
+        eventId: job.eventId, reason: "manager-terminal-continuation-scan-over-bound" };
+      const continuationMatches = managerRequestUuidForLedgerKey(continuation.requestId) === payload.requestId
+        && (continuation.receipt === null || continuation.receipt.runId === payload.runId);
+      if (!continuationMatches && continuation.status !== "waiting") continue;
+      const protectedApi = platform.protectedTests;
+      if (typeof protectedApi?.getRunV1 !== "function") return { status: "unsupported" as const, eventId: job.eventId,
+        reason: "protected-run-reader-unavailable" };
+      const runValue = await protectedApi.getRunV1(job.companyId, continuation.protectedRunId, continuation.subjectKeySha256);
+      const { parseProtectedRun } = await import("../task-protected-qa.ts");
+      let protectedRun: ReturnType<typeof parseProtectedRun>;
+      try { protectedRun = parseProtectedRun(runValue); }
+      catch { return { status: "unknown" as const, eventId: job.eventId, reason: "referenced-protected-run-receipt-invalid" };
+      }
+      if (protectedRun.status !== "succeeded" && protectedRun.status !== "failed" && protectedRun.status !== "cancelled"
+        || protectedRun.termination !== "confirmed"
+        || !exactObject(protectedRun.receipt) || typeof protectedRun.receipt.digest !== "string"
+        || protectedRun.receipt.digest !== continuation.receiptDigest) continue;
+      const protectedStatus = protectedRun.status as ProtectedTerminalPayload["status"];
+      const terminalPayload: ProtectedTerminalPayload = { schemaVersion: 1, kind: "protected-node-test-v1",
+        companyId: job.companyId, pluginId: BUILDER_PLUGIN_ID, pluginKey: BUILDER_PLUGIN_ID,
+        runId: continuation.protectedRunId, status: protectedStatus, receiptDigest: continuation.receiptDigest,
+        subjectKeySha256: continuation.subjectKeySha256 };
+      const result = await consumeProtectedTerminalJob({ ...job, jobKey: WORKSTREAM_VERIFIED_JOB,
+        eventId: continuation.terminalEventId, event: { eventType: PROTECTED_TERMINAL_EVENT, payload: terminalPayload } },
+      platform, terminalPayload, continuation.terminalEventId);
+      outcomes.push({ eventId: continuation.terminalEventId, status: result.status, reason: result.reason });
+    }
+  }
+  if (!outcomes.length) return { status: "ignored" as const, eventId: job.eventId,
+    reason: "manager-terminal-run-has-no-current-protected-continuation" };
+  const unresolved = outcomes.find(item => !["accepted", "stale", "waiting"].includes(item.status));
+  if (unresolved) return { status: "unknown" as const, eventId: job.eventId,
+    reason: "manager-terminal-continuation-not-confirmed", continuations: outcomes };
+  if (outcomes.some(item => item.status === "waiting")) return { status: "waiting" as const, eventId: job.eventId,
+    reason: "manager-terminal-continuation-still-waiting", continuations: outcomes };
+  if (outcomes.every(item => item.status === "stale")) return { status: "stale" as const, eventId: job.eventId,
+    reason: "manager-terminal-target-no-longer-current", continuations: outcomes };
+  return { status: "accepted" as const, eventId: job.eventId, reason: "manager-terminal-notification-consumed",
+    continuations: outcomes };
 }
 
 export async function resolveCurrentIntegrationManagerAuthority(workspaceId: string,
@@ -301,10 +694,36 @@ async function consumeCurrentEvent(workspaceId: string, located: CurrentEvent, p
 export async function consumeVerifiedWorkstreamJob(job: Job, platformInput: SpsPlatformInvocationContext) {
   const platform = platformInput as Host;
   if (job.jobKey !== WORKSTREAM_VERIFIED_JOB || job.trigger !== "event" || !job.eventId
-    || !ID.test(job.eventId) || !job.companyId || !UUID.test(job.companyId) || !job.runId || !ID.test(job.runId)) {
+    || !job.companyId || !UUID.test(job.companyId) || !job.runId || !UUID.test(job.runId)) {
     return { status: "unknown" as const, reason: "event-job-context-incomplete-or-unsupported" };
   }
+  if (job.event !== undefined) {
+    if (!exactObject(job.event) || Reflect.ownKeys(job.event).length !== 2 || typeof job.event.eventType !== "string") {
+      return { status: "unknown" as const, eventId: job.eventId, reason: "sanitized-job-event-context-malformed" };
+    }
+    if (job.event.eventType === PROTECTED_TERMINAL_EVENT || job.event.eventType === PROTECTED_RECHECK_EVENT) {
+      const recheck = job.event.eventType === PROTECTED_RECHECK_EVENT;
+      const payload = parseProtectedTerminalPayload(job.event.payload, recheck);
+      if (!EVENT_ID.test(job.eventId) || !payload || payload.companyId !== job.companyId) {
+        return { status: "unknown" as const, eventId: job.eventId, reason: "protected-terminal-event-payload-invalid" };
+      }
+      if (recheck && job.eventId !== `builder-protected-recheck-v1:${sha256Json([payload.sourceEventId, payload.runId, payload.receiptDigest])}`) {
+        return { status: "unknown" as const, eventId: job.eventId, reason: "protected-terminal-recheck-identity-mismatch" };
+      }
+      const terminalEventId = recheck ? payload.sourceEventId! : job.eventId;
+      return consumeProtectedTerminalJob(job, platform, payload, terminalEventId);
+    }
+    if (job.event.eventType !== WORKSTREAM_VERIFIED_EVENT) {
+      return { status: "ignored" as const, eventId: job.eventId, reason: "unrelated-workspace-event" };
+    }
+  } else if (job.eventId.length > 160) {
+    return { status: "unsupported" as const, eventId: job.eventId, reason: "protected-terminal-event-context-unavailable-on-legacy-sdk" };
+  }
+  if (!ID.test(job.eventId)) return { status: "unknown" as const, eventId: job.eventId, reason: "verified-event-id-invalid" };
   const located = await findCurrentEvent(job.companyId, job.eventId, platform);
+  if (located.status === "unknown" && located.reason === "verified-event-not-found-in-current-workstream-board") {
+    return { status: "ignored" as const, eventId: job.eventId, reason: "unrelated-or-no-longer-indexed-event" };
+  }
   if (located.status !== "current") return located;
   const main = await consumeCurrentEvent(job.companyId, located, platform);
   if (main.status === "stale" || main.status === "unknown" || main.status === "unsupported" || main.status === "conflict") return main;
@@ -353,21 +772,32 @@ export function createVerifiedWorkstreamManagerReadHandler(
   if (runContext.agentId !== authority.agentId || runContext.sessionId !== authority.sessionId) throw new Error("Only the current Manager session may read verified Workstream evidence.");
   const current = await readCurrent(workspaceId, params.eventId, platform);
   if (current.status !== "current" || current.workstreamId !== params.workstreamId) throw new Error("This verified Workstream event is not current.");
-  const ledgerKey = { scopeKind: "company" as const, scopeId: workspaceId, namespace: "sonpark.my-builder" as const,
-    stateKey: `verified-consumption.v1.${createHash("sha256").update(`${workspaceId}\0${current.workstreamId}`, "utf8").digest("hex")}` };
-  const ledger = await platform.state.get(ledgerKey);
-  if (!exactObject(ledger) || ledger.schemaVersion !== 2 || !Array.isArray(ledger.events)) throw new Error("Manager dispatch ledger is unavailable.");
-  const row = ledger.events.find(event => exactObject(event) && event.eventId === params.eventId);
-  if (!exactObject(row) || !["pending", "accepted"].includes(String(row.status)) || typeof row.requestId !== "string"
+  const row = await readVerifiedWorkstreamReservation({ workspaceId, projectId: workspaceId,
+    workstreamId: current.workstreamId, verifiedEventId: params.eventId }, platform.state);
+  if (!row || !["pending", "accepted"].includes(String(row.status)) || typeof row.requestId !== "string"
     || !/^builder-ws-dispatch-v1:[a-f0-9]{64}$/u.test(row.requestId)) {
     throw new Error("This verification event has no current effect-bound Manager request.");
   }
-  const requestId = managerRequestUuidForLedgerKey(row.requestId);
-  if (row.status === "accepted") {
-    if (!exactObject(row.receipt) || row.receipt.receiptId !== requestId || row.receipt.runId !== runContext.runId) {
-      throw new Error("Accepted ledger receipt does not match this exact Manager run.");
-    }
-  } else if (row.receipt !== null) throw new Error("Pending Manager reservation has an unexpected receipt.");
+  let ledgerRequestId: string | null = null, storedReceipt: unknown = null;
+  const initialUuid = managerRequestUuidForLedgerKey(row.requestId);
+  if (row.status === "pending") {
+    ledgerRequestId = row.requestId;
+  } else if (row.status === "accepted" && row.receipt?.receiptId === initialUuid && row.receipt.runId === runContext.runId) {
+    ledgerRequestId = row.requestId; storedReceipt = row.receipt;
+  } else {
+    const continuation = row.continuations?.find(item => {
+      if (!(["pending", "accepted"].includes(item.status))) return false;
+      const coreRequest = managerRequestUuidForLedgerKey(item.requestId);
+      return item.status === "pending" && item.receipt === null
+        || item.status === "accepted" && item.receipt?.runId === runContext.runId && item.receipt?.receiptId === coreRequest;
+    });
+    if (continuation) { ledgerRequestId = continuation.requestId; storedReceipt = continuation.receipt; }
+  }
+  if (!ledgerRequestId) throw new Error("Manager run is not authorized by an exact Core request receipt or accepted ledger receipt.");
+  const requestId = managerRequestUuidForLedgerKey(ledgerRequestId);
+  if (storedReceipt !== null && (!exactObject(storedReceipt) || storedReceipt.receiptId !== requestId || storedReceipt.runId !== runContext.runId)) {
+    throw new Error("Accepted ledger receipt does not match this exact Manager run.");
+  }
   const requestReceipt = await platform.agents.sessions.getRequest(authority.sessionId, workspaceId, requestId);
   if (!exactObject(requestReceipt) || requestReceipt.requestId !== requestId || requestReceipt.state !== "submitted"
     || requestReceipt.runId !== runContext.runId) throw new Error("Manager tool run does not match the exact Core request receipt.");
