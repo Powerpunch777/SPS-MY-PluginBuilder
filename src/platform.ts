@@ -831,9 +831,9 @@ async function firstDesignReviewView(companyId: string, platform: SpsPlatformInv
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
     capabilities: ["plugin.state.read", "plugin.state.write", "events.emit", "jobs.schedule", "agent.tools.register", "agents.read", "agent.sessions.create",
-      "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES,
+      "agent.sessions.send", "agent.sessions.read", "agent.sessions.list", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES,
       ...taskFolderCapabilities as (typeof SPS_PLATFORM_CAPABILITIES)[number][],
-      ...["sps.runs.dispatch", "sps.executions.read"].filter(capability => (SPS_PLATFORM_CAPABILITIES as readonly string[]).includes(capability)) as (typeof SPS_PLATFORM_CAPABILITIES)[number][]],
+      ...["sps.runs.dispatch", "sps.executions.read", "sps.artifacts.read"].filter(capability => (SPS_PLATFORM_CAPABILITIES as readonly string[]).includes(capability)) as (typeof SPS_PLATFORM_CAPABILITIES)[number][]],
     jobs: [{ jobKey: WORKSTREAM_VERIFIED_JOB, handler: async (job, platform) => {
       const result = await consumeVerifiedWorkstreamJob(job, platform);
       // A persisted pending reservation is not successful Git/CI execution.

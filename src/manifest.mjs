@@ -29,7 +29,7 @@ const surface = defineSpsUiContributions({
 });
 const taskFolderCapabilities = ["sps.workspaceSources.read", "local.folders", "sps.workspaceSources.gitWrite"]
   .filter(capability => SPS_PLATFORM_CAPABILITIES.includes(capability));
-const taskProtectedQaCapabilities = ["sps.runs.dispatch", "sps.executions.read"].filter(capability => SPS_PLATFORM_CAPABILITIES.includes(capability));
+const taskProtectedQaCapabilities = ["sps.runs.dispatch", "sps.executions.read", "sps.artifacts.read"].filter(capability => SPS_PLATFORM_CAPABILITIES.includes(capability));
 
 export default defineSpsPluginManifest({
   id: "com.sonparkserver.my-plugin-builder",
@@ -42,7 +42,7 @@ export default defineSpsPluginManifest({
   minimumHostVersion: "0.4.137",
   ...surface,
   capabilities: [...surface.capabilities, "ui.workspaceShell.provide", "plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
-    "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES, ...taskFolderCapabilities,
+    "agent.sessions.send", "agent.sessions.read", "agent.sessions.list", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES, ...taskFolderCapabilities,
     ...taskProtectedQaCapabilities, "events.emit", "jobs.schedule"],
   jobs: [{ jobKey: "builder.integrate-verified-workstream", displayName: "Integrate a verified Workstream", scope: "workspace",
     description: "Event-driven consumption of current guarded Workstream verification. No periodic schedule or AI wake is implied." }],

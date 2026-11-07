@@ -69,6 +69,10 @@ test("the action requires authenticated user context and uses Host scope rather 
   })));
 });
 
+test("the actual platform declares session listing used by Manager admission", () => {
+  assert.ok(createBuilderPlatform().capabilities.includes("agent.sessions.list"));
+});
+
 test("encoded input and aggregate initial-state limits preserve the last readable record", async () => {
   const { platform, rows, writes } = fakePlatform();
   for (const text of ["x".repeat(48 * 1024), "한".repeat(17 * 1024), "\n".repeat(25 * 1024)]) {
