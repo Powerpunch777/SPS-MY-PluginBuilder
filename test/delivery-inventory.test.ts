@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { readDeliveryInventory } from "../src/delivery-evidence/delivery-inventory.ts";
-import { W, ctx, now } from "./fixtures/cto-platform.ts";
+import { A, S, W, ctx, mapKey, now } from "./fixtures/cto-platform.ts";
 import { progressTool, validationFixture, validationTool } from "./fixtures/integration-manager-platform.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import { createFinalPacketStore } from "../src/delivery-evidence/final-packet.ts";
@@ -161,9 +161,9 @@ test("uncertain packet write reconciles the same immutable receipt instead of pu
   const platform = f.f.platform, state = platform.state as RevisionState;
   const docs = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides }, ctx(), platform);
   assert.equal(docs.status, "published");
-  const guarded = state.guardedCompareAndSet!;
-  state.guardedCompareAndSet = async (target, expected, value) => {
-    const result = await guarded(target, expected, value);
+  const guarded = state.guardedCompareAndSetWithJobWakeV1!;
+  state.guardedCompareAndSetWithJobWakeV1 = async (target, expected, value, wake) => {
+    const result = await guarded(target, expected, value, wake);
     if (target.stateKey.startsWith("final-delivery-head") && result.status === "committed") throw new Error("Lost packet receipt");
     return result;
   };
@@ -172,4 +172,60 @@ test("uncertain packet write reconciles the same immutable receipt instead of pu
   const recovered = (await packetTool().handler(params, f.managerContext, platform) as any).data;
   assert.equal(recovered.status, "existing");
   assert.equal(recovered.sequence, 1);
+});
+
+test("registered atomic packet event dispatches the current Main exactly once and ignores a stale candidate", async () => {
+  const { f } = await setup(), platform = f.f.platform;
+  const docs = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides }, ctx(), platform);
+  assert.equal(docs.status, "published");
+  const state = platform.state as RevisionState, original = state.guardedCompareAndSetWithJobWakeV1!, wakes: any[] = [];
+  state.guardedCompareAndSetWithJobWakeV1 = async (target, expected, value, wake) => {
+    const result = await original(target, expected, value, wake);
+    if (result.status === "committed") wakes.push(wake);
+    return result;
+  };
+  const params = { workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null };
+  const packet = (await packetTool().handler(params, f.managerContext, platform) as any).data;
+  assert.equal(packet.status, "published");
+  await packetTool().handler(params, f.managerContext, platform);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].eventId, packet.eventId);
+  assert.equal(wakes[0].jobKey, "builder.review-integration-packet");
+  const sessions = platform.agents.sessions as any, priorGet = sessions.getRequest, priorRun = sessions.getRun;
+  const receipts = new Map<string, any>();
+  let mainSends = 0;
+  platform.state.set = async (key, value) => { f.f.values.set(mapKey(key), structuredClone(value)); };
+  Object.assign(platform.agents, { async list() { return [{ id: A, companyId: W, name: "Lead", status: "idle" }]; } });
+  sessions.getRequest = async (sessionId: string, companyId: string, requestId: string) => sessionId === S
+    ? receipts.get(requestId) ?? null : priorGet(sessionId, companyId, requestId);
+  sessions.getRun = async (sessionId: string, companyId: string, runId: string) => sessionId === S
+    ? { runId, status: "running", cancellationRequested: false, termination: "not_applicable", error: null, errorCode: null,
+      output: { state: "not_ready", text: null } } : priorRun(sessionId, companyId, runId);
+  sessions.sendMessage = async (sessionId: string, companyId: string, input: any) => {
+    assert.equal(sessionId, S); assert.equal(companyId, W);
+    assert.match(input.prompt, /not a user instruction/u);
+    assert.ok(input.executionPolicy.toolNames.includes("builder.read-final-review"));
+    mainSends++;
+    const runId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    receipts.set(input.requestId, { requestId: input.requestId, state: "submitted", runId });
+    return { runId };
+  };
+  const handler = createBuilderPlatform().jobs!.find(job => job.jobKey === wakes[0].jobKey)!.handler;
+  const job = { jobKey: wakes[0].jobKey, eventId: packet.eventId, companyId: W, trigger: "event",
+    runId: "ffffffff-ffff-4fff-8fff-ffffffffffff" } as any;
+  await handler(job, platform);
+  await handler(job, platform);
+  assert.equal(mainSends, 1);
+  f.moveCandidate();
+  await handler(job, platform);
+  assert.equal(mainSends, 1);
+});
+
+test("Host without atomic packet plus wake support cannot create a silent handoff", async () => {
+  const { f } = await setup();
+  delete (f.f.platform.state as RevisionState).guardedCompareAndSetWithJobWakeV1;
+  const result = await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null },
+    f.managerContext, f.f.platform) as any;
+  assert.equal(result.data.status, "unsupported");
+  assert.equal(await createFinalPacketStore(W, W, f.f.platform.state).headRevisionId(), null);
 });

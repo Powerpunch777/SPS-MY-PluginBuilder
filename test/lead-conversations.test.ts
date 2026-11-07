@@ -5,6 +5,8 @@ import { createLeadConversationStore, parseLeadConversationPage } from "../src/l
 import { createBuilderPlatform } from "../src/platform.ts";
 import type { BuilderLeadSessions } from "../src/domain/model.ts";
 import { LEAD_SESSION_EXECUTION_POLICY, policyForLeadChannel } from "../src/session-execution-policy.ts";
+import { readLeadUserSource } from "../src/lead-conversations.ts";
+import { dispatchIntegrationPacketToMain, integrationPacketMainRequestId } from "../src/delivery-evidence/integration-packet-dispatch.ts";
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
@@ -88,6 +90,30 @@ test("keyed request inspection distinguishes a saved turn from Core acceptance w
   assert.equal((await f.store.inspectRequest("main", uuid(601))).coreReceiptRunId, uuid(1601));
   assert.equal(f.sends.length, 1);
   assert.equal((await f.store.inspectRequest("main", uuid(601))).turn?.state, "uncertain");
+});
+
+test("Manager packet notification reuses Main's exact receipt and never becomes user evidence", async () => {
+  const f = fixture(), requestId = integrationPacketMainRequestId(A, 1, "packet-event-1");
+  f.lose();
+  const first = await dispatchIntegrationPacketToMain(f.store, requestId, "packet-v1");
+  assert.equal(first.status, "accepted");
+  const replay = await dispatchIntegrationPacketToMain(f.store, requestId, "packet-v1");
+  assert.deepEqual(replay, first);
+  assert.equal(f.sends.length, 1);
+  assert.equal((await f.store.page("main")).turns[0]?.inputKind, "integration-packet-request");
+  await assert.rejects(readLeadUserSource(requestId, sessions(), f.platform), /system request/u);
+  const other = integrationPacketMainRequestId(A, 2, "packet-event-1");
+  assert.notEqual(other, requestId);
+  await assert.rejects(dispatchIntegrationPacketToMain(f.store, other, "packet-v1"), /unavailable/u);
+  assert.equal(f.sends.length, 1, "an existing live Main turn is not overlapped");
+});
+
+test("an uncertain packet notification is reconciled, never automatically resent", async () => {
+  const f = fixture(), requestId = integrationPacketMainRequestId(A, 1, "packet-event-2");
+  f.rejectAdmission();
+  assert.equal((await dispatchIntegrationPacketToMain(f.store, requestId, "packet-v2")).status, "unconfirmed");
+  assert.equal((await dispatchIntegrationPacketToMain(f.store, requestId, "packet-v2")).status, "unconfirmed");
+  assert.equal(f.sends.length, 1);
 });
 
 test("persists exact Core failure diagnostics without resending or treating them as the user's source", async () => {

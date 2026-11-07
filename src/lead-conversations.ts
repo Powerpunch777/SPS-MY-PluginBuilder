@@ -14,7 +14,7 @@ export type LeadTurn = Scope & {
   cancellationRequested: boolean; termination: "not_applicable" | "pending" | "confirmed";
   questionContext?: QuestionContext;
   executionPolicy?: SessionExecutionPolicy;
-  inputKind?: "user" | "analysis-request" | "ui-approval-request";
+  inputKind?: "user" | "analysis-request" | "ui-approval-request" | "integration-packet-request";
   failure?: Readonly<{ code: string | null; message: string | null }>;
 };
 type Head = Scope & { schemaVersion: 1; totalTurns: number; lastRequestId: string | null; activeRequestId: string | null };
@@ -92,7 +92,7 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
       message: item.message === null ? null : text(item.message, 2048) });
   }
   if (questionContext && scope.channel !== "decisions") throw error();
-  if (Object.hasOwn(row, "inputKind") && !["user", "analysis-request", "ui-approval-request"].includes(row.inputKind as string)) throw error();
+  if (Object.hasOwn(row, "inputKind") && !["user", "analysis-request", "ui-approval-request", "integration-packet-request"].includes(row.inputKind as string)) throw error();
   if (row.inputKind !== undefined && row.inputKind !== "user" && (scope.channel !== "main" || questionContext)) throw error();
   const requestId = id(row.requestId), previousRequestId = nullableId(row.previousRequestId), runId = nullableId(row.runId);
   if (requestId === previousRequestId || !Number.isSafeInteger(row.sequence) || (row.sequence as number) < 0
@@ -324,9 +324,9 @@ export function createLeadConversationStore(platform: SpsPlatformInvocationConte
       return { refreshed: true };
     },
     async send(channel: LeadChannel, requestId: string, value: string, questionValue?: QuestionContext,
-      inputKind: "user" | "analysis-request" | "ui-approval-request" = "user") {
+      inputKind: "user" | "analysis-request" | "ui-approval-request" | "integration-packet-request" = "user") {
       const scope = scopeFor(sessions, channel);
-      if (!["user", "analysis-request", "ui-approval-request"].includes(inputKind) || inputKind !== "user" && channel !== "main") throw error();
+      if (!["user", "analysis-request", "ui-approval-request", "integration-packet-request"].includes(inputKind) || inputKind !== "user" && channel !== "main") throw error();
       if (channel === "cto-inbox" || channel === "integration-review") {
         throw new Error("This Lead context is internal and cannot be started by a user chat message.");
       }

@@ -46,7 +46,9 @@ export default defineSpsPluginManifest({
     "agent.sessions.send", "agent.sessions.read", "agent.sessions.list", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES, ...taskFolderCapabilities,
     ...taskProtectedQaCapabilities, "events.emit", "jobs.schedule"],
   jobs: [{ jobKey: "builder.integrate-verified-workstream", displayName: "Integrate a verified Workstream", scope: "workspace",
-    description: "Event-driven consumption of current guarded Workstream verification. No periodic schedule or AI wake is implied." }],
+    description: "Event-driven consumption of current guarded Workstream verification. No periodic schedule or AI wake is implied." },
+  { jobKey: "builder.review-integration-packet", displayName: "Review an exact integration packet", scope: "workspace",
+    description: "A persisted Manager packet requests the current Main's G7 review once through the existing keyed conversation." }],
   entrypoints: { ...surface.entrypoints, worker: "./dist/worker.js", workspaceWorker: "./dist/worker.js" },
   companyActivation: { defaultEnabled: false },
   ...(taskFolderCapabilities.includes("local.folders") ? { localFolders: [{

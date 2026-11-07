@@ -74,6 +74,8 @@ import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_T
 import { createFinalPacketStore } from "./delivery-evidence/final-packet.ts";
 import { readFinalReview } from "./delivery-evidence/final-review.ts";
 import { publishIntegrationPacket, readCurrentIntegrationPacket } from "./delivery-evidence/integration-packet.ts";
+import { INTEGRATION_PACKET_MAIN_JOB } from "./delivery-evidence/integration-packet-evidence.ts";
+import { dispatchIntegrationPacketToMain, integrationPacketMainRequestId } from "./delivery-evidence/integration-packet-dispatch.ts";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
 import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
@@ -817,6 +819,23 @@ async function finalReviewView(companyId: string, platform: SpsPlatformInvocatio
   return view;
 }
 
+async function notifyIntegrationPacket(job: { companyId?: string; eventId?: string; trigger: string }, platform: SpsPlatformInvocationContext) {
+  if (job.trigger !== "event" || !job.companyId || !job.eventId) throw new Error("Main packet notification requires a Workspace event.");
+  const companyId = job.companyId, eventId = job.eventId;
+  return withConversation(companyId, platform, async store => {
+    const packet = await readCurrentIntegrationPacket(companyId, platform);
+    if (packet.status === "stale" || packet.status === "available" && packet.eventId !== eventId) return { status: "stale" as const };
+    if (packet.status !== "available") throw new Error("The persisted Main packet event is unavailable; do not consume it.");
+    const binding = await readLeadAgentBinding(companyId, platform);
+    const requestId = integrationPacketMainRequestId(companyId, binding.revision, eventId);
+    await assertLeadSelection(companyId, binding, platform);
+    const current = await readCurrentIntegrationPacket(companyId, platform);
+    if (current.status === "stale" || current.status === "available" && current.eventId !== eventId) return { status: "stale" as const };
+    if (current.status !== "available") throw new Error("Current packet authority is unconfirmed; preserve the job.");
+    return dispatchIntegrationPacketToMain(store, requestId, current.packetRevisionId);
+  });
+}
+
 async function firstDesignReviewView(companyId: string, platform: SpsPlatformInvocationContext) {
   const bundle = await readFirstDesignReviewBundle(companyId, companyId, platform.state);
   if (!bundle) return { status: "empty" as const };
@@ -848,6 +867,9 @@ export function createBuilderPlatform() {
       // Surface the missing producer to Core's bounded job-error handling.
       if ("waitingDependencies" in result && result.waitingDependencies === true || result.status === "stale") return;
       if (result.status !== "accepted") throw new Error(`Workstream integration not admitted: ${result.reason}`);
+    } }, { jobKey: INTEGRATION_PACKET_MAIN_JOB, handler: async (job, platform) => {
+      const result = await notifyIntegrationPacket(job, platform);
+      if (result.status !== "accepted" && result.status !== "stale") throw new Error("Main packet notification admission is unconfirmed; preserve its request.");
     } }],
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },

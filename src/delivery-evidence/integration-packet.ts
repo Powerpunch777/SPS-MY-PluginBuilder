@@ -15,7 +15,7 @@ export async function publishIntegrationPacket(params: unknown, runContext: unkn
   const state = platform.state as RevisionState;
   const event = { workstreamId: row.workstreamId, eventId: row.eventId };
   await readVerifiedWorkstreamForManager(event, runContext, platform);
-  if (typeof state.guardedCompareAndSet !== "function") return { status: "unsupported", reason: "integration-packet-guarded-publication-unavailable" };
+  if (typeof state.guardedCompareAndSetWithJobWakeV1 !== "function") return { status: "unsupported", reason: "integration-packet-atomic-main-wake-unavailable" };
   const captured = new Map<string, RevisionPublicationGuard>();
   const tracked = { ...platform, state: { ...platform.state, async get(key: SpsStateKey) {
     if (key.scopeKind !== "company" || key.scopeId !== workspaceId) throw new Error("Packet evidence escaped its Workspace.");
@@ -56,12 +56,13 @@ export async function publishIntegrationPacket(params: unknown, runContext: unkn
 export async function readCurrentIntegrationPacket(workspaceId: string, platform: SpsPlatformInvocationContext) {
   const store = createFinalPacketStore(workspaceId, workspaceId, platform.state);
   const entry = await store.currentManagerPacket();
-  if (!entry?.revision.managerPacket) return { status: "pending", reason: "manager-packet-not-published" };
+  if (!entry?.revision.managerPacket) return { status: "pending" as const, reason: "manager-packet-not-published" };
   const current = await collectIntegrationPacketEvidence(workspaceId, platform);
   const latest = await store.currentManagerPacket();
   const reference = { eventId: entry.revision.eventId, packetRevisionId: entry.revision.requestId, sequence: entry.sequence };
   if (latest?.revision.eventId !== entry.revision.eventId || current.status !== "collected"
-    || current.sha256 !== entry.revision.managerPacket.sha256) return { status: "stale", ...reference,
+    || current.sha256 !== entry.revision.managerPacket.sha256) return { status: current.status === "unknown" || current.status === "unsupported"
+      ? "unknown" as const : "stale" as const, ...reference,
     reason: current.status === "collected" ? "manager-packet-evidence-changed" : current.reason };
-  return { status: "available", ...reference, packet: entry.revision.managerPacket, approvalEligibility: "not-established" };
+  return { status: "available" as const, ...reference, packet: entry.revision.managerPacket, approvalEligibility: "not-established" as const };
 }

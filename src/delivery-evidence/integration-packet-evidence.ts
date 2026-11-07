@@ -5,6 +5,8 @@ import { integrationCandidateEvidenceDigest, readIntegrationCandidate } from "./
 import { readDeliveryInventory } from "./delivery-inventory.ts";
 
 export const integrationPacketDigest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+export const INTEGRATION_PACKET_MAIN_JOB = "builder.review-integration-packet";
+export const INTEGRATION_PACKET_EVENT = "builder.integration.packet-published";
 
 /** This is the Manager-to-Main evidence, not a user approval candidate.
  * Source and document observations have to refer to the same immutable candidate. */

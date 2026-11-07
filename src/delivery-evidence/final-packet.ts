@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SpsActionContext, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
-import { integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
+import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB, integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const ID = /^[^\u0000-\u001f\u007f]{1,200}$/u;
@@ -300,7 +300,9 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
         kind: "manager-packet", requestId, managerPacket: { evidence: input.evidence, sha256: input.sha256, ...input.author },
         attestation: null, request: null, decision: null });
       if (Buffer.byteLength(json(revision), "utf8") > 128 * 1024) return { status: "unsupported" as const, reason: "integration-packet-record-bound" };
-      const result = await journal.publishGuarded({ expectedBaseRevisionId: expected, revision }, input.guards);
+      const result = await journal.publishGuardedWithJobWakeV1({ expectedBaseRevisionId: expected, revision }, input.guards,
+        { name: INTEGRATION_PACKET_EVENT, eventId, jobKey: INTEGRATION_PACKET_MAIN_JOB,
+          payload: { workspaceId, projectId, packetRevisionId: requestId, packetSha256: input.sha256 } });
       return result.status === "published" ? { status: "published" as const, eventId, packetRevisionId: requestId, sequence: result.sequence } : result;
     },
     async reviewEvidence() {
