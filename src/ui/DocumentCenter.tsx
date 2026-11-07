@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { selectProjectDocuments, parseDocumentCenterQuery, type DocumentCenterQuery } from "../domain/document-center.ts";
 import { exportDocumentMarkdown, safeDocumentMarkdownFilename } from "../domain/document-markdown-export.ts";
+import { resolveDocumentReference } from "../domain/document-reference-navigation.ts";
 import type { BuilderDocument, DocumentCategory, DocumentFreshnessStatus, DocumentSourceKind } from "../domain/model.ts";
 
 export type DocumentCenterProps = Readonly<{
@@ -43,6 +44,9 @@ const STYLE = `
 .sps-dc-body{max-height:48vh;min-height:100px;overflow:auto;border:1px solid var(--dc-border);border-radius:5px;background:#181818;padding:10px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
 .sps-dc-empty,.sps-dc-unavailable{border:1px solid var(--dc-border);border-radius:5px;background:#242424;padding:12px;color:var(--dc-muted)}
 .sps-dc-empty code,.sps-dc-meta dd{overflow-wrap:anywhere}
+.sps-dc-reference{display:grid;width:100%;min-width:0;gap:3px;border:1px solid var(--dc-border);border-radius:5px;background:#242424;padding:8px;color:var(--dc-text);text-align:left;overflow-wrap:anywhere;cursor:pointer}
+.sps-dc-reference:hover{background:#303030}
+.sps-dc-reference small,.sps-dc-reference-status{color:var(--dc-muted);font-size:10px;overflow-wrap:anywhere}
 .sps-dc-alert{border-color:#805858;color:#efbcbc}
 @container sps-doc-center (max-width:900px){.sps-dc-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.sps-dc-search{grid-column:1/-1}.sps-dc-layout{grid-template-columns:minmax(0,1fr)}}
 @container sps-doc-center (max-width:520px){.sps-dc-controls{grid-template-columns:minmax(0,1fr)}.sps-dc-search{grid-column:auto}.sps-dc-sort{align-items:stretch}.sps-dc-layout{gap:8px}.sps-dc-list,.sps-dc-detail{padding:8px}.sps-dc-items{max-height:38vh}}
@@ -65,6 +69,11 @@ const FRESHNESS_LABELS: Record<DocumentFreshnessStatus, string> = {
 };
 
 function initialQuery(): DocumentCenterQuery { return parseDocumentCenterQuery(); }
+function referenceStatus(status: "unlinked" | "ambiguous" | "unknown") {
+  return status === "ambiguous" ? "여러 문서와 일치하여 연결하지 않았습니다."
+    : status === "unknown" ? "참조를 안전하게 확인할 수 없습니다."
+      : "현재 snapshot에서 일치하는 다른 문서가 없습니다.";
+}
 
 export function DocumentCenter({ documents, loading = false, error = null }: DocumentCenterProps) {
   const [query, setQuery] = useState<DocumentCenterQuery>(initialQuery);
@@ -197,11 +206,27 @@ export function DocumentCenter({ documents, loading = false, error = null }: Doc
                 : <p className="sps-dc-empty" role="status">저장된 본문이 비어 있습니다.</p>}
             <section aria-label="문서 출처 고정"><h4>출처 Revision · SHA-256</h4>
               {selected.sourcePins?.length ? <ul className="sps-dc-items">{selected.sourcePins.map((pin, index) => <li key={`${pin.sourceId}:${pin.revisionId}:${index}`} className="sps-dc-empty">
-                {pin.sourceId} · {pin.revisionId}<br /><code>{pin.sha256}</code>
+                {(() => {
+                  const reference = { kind: "source-pin" as const, sourceId: pin.sourceId, revisionId: pin.revisionId, sha256: pin.sha256 };
+                  const resolved = resolveDocumentReference(documents, selected.id, reference);
+                  return resolved.status === "linked" ? <button className="sps-dc-reference" type="button"
+                    aria-label={`참조 문서 열기: ${resolved.targetTitle}`} title="현재 snapshot의 참조 문서 열기"
+                    onClick={() => setSelectedId(resolved.targetId)}>
+                    <span>{pin.sourceId} · {pin.revisionId}</span><code>{pin.sha256}</code><small>{resolved.targetTitle} 열기</small>
+                  </button> : <><span>{pin.sourceId} · {pin.revisionId}<br /><code>{pin.sha256}</code></span>
+                    <small className="sps-dc-reference-status">{referenceStatus(resolved.status)}</small></>;
+                })()}
               </li>)}</ul> : <p className="sps-dc-empty">고정된 출처가 없습니다.</p>}
             </section>
             <section aria-label="관련 식별자"><h4>관련 ID</h4>
-              {selected.relatedIds?.length ? <ul className="sps-dc-items">{selected.relatedIds.map(id => <li key={id} className="sps-dc-empty">{id}</li>)}</ul>
+              {selected.relatedIds?.length ? <ul className="sps-dc-items">{selected.relatedIds.map((id, index) => {
+                const resolved = resolveDocumentReference(documents, selected.id, { kind: "document-id", documentId: id });
+                return <li key={`${id}:${index}`} className="sps-dc-empty">{resolved.status === "linked"
+                  ? <button className="sps-dc-reference" type="button" aria-label={`관련 문서 열기: ${resolved.targetTitle}`}
+                    title="현재 snapshot의 관련 문서 열기" onClick={() => setSelectedId(resolved.targetId)}>
+                    <span>{id}</span><small>{resolved.targetTitle} 열기</small>
+                  </button> : <><span>{id}</span><br /><small className="sps-dc-reference-status">{referenceStatus(resolved.status)}</small></>}
+              </li>; })}</ul>
                 : <p className="sps-dc-empty">관련 ID가 기록되어 있지 않습니다.</p>}
             </section>
           </> : <p className="sps-dc-empty" role="status">표시할 문서가 없습니다.</p>}
