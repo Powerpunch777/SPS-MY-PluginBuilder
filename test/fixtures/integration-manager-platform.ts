@@ -8,7 +8,7 @@ import { consumeVerifiedWorkstreamJob } from "../../src/builder-gates/integratio
 import { WORKSTREAM_VERIFIED_JOB } from "../../src/builder-gates/workstream-verification-publication.ts";
 import { integrationManagerSessionStateKey, integrationManagerSessionTaskKey, integrationManagerStateKey } from "../../src/domain/integration-manager.ts";
 import { createBuilderPlatform } from "../../src/platform.ts";
-import { mapKey, W } from "./cto-platform.ts";
+import { mapKey, now, W } from "./cto-platform.ts";
 import { setupVerifiedWorkstreamPlatform } from "./verified-workstream-platform.ts";
 
 export const MANAGER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -66,7 +66,8 @@ export async function preparedFixture(withValidation = false, withRegression = f
   const receipts = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
   let sends = 0;
   sessions.list = async (agentId: string, companyId: string) => [{ observationVersion: 1, sessionId: MANAGER_SESSION,
-    agentId, companyId, status: "active", taskKey, closedAt: null, contextState: "valid", managedAgentOwnership: "owned" }];
+    agentId, companyId, status: "active", taskKey, closedAt: null, createdAt: now, updatedAt: now,
+    lastRunId: null, lastError: null, contextState: "valid", managedAgentOwnership: "owned" }];
   sessions.sendMessage = async (sessionId: string, companyId: string, input: any) => {
     assert.equal(sessionId, MANAGER_SESSION); assert.equal(companyId, W);
     assert.deepEqual([...input.executionPolicy.toolNames], ["builder.integrate-verified-task", "builder.read-integration-progress",
