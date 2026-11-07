@@ -16,7 +16,8 @@ export const mapKey = (input: SpsStateKey) => JSON.stringify(input);
 export const ctx = (sessionId = S, runId = R) => ({ companyId: W, agentId: A, sessionId, runId });
 export const now = "2026-11-02T01:02:03.004Z";
 
-export async function fixture() {
+export async function fixture(projectId = P) {
+  const P = projectId;
   const values = new Map<string, JsonValue>();
   let writes = 0, sends = 0, cancelCalls = 0;
   let beforeCas = async (_input: SpsStateKey, _value: JsonValue) => {};

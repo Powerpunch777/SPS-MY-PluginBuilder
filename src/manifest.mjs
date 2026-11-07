@@ -1,4 +1,5 @@
 import { defineSpsPluginManifest } from "@sonparkserver/plugin-sdk/manifest";
+import { SPS_PLATFORM_CAPABILITIES } from "@sonparkserver/plugin-sdk/platform";
 import { defineSpsUiContributions } from "@sonparkserver/plugin-sdk/ui";
 import { READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL, INSPECT_SPEC_ASSURANCE_TOOL } from "./tool-declarations.mjs";
 import { PUBLISH_TECHNOLOGY_DECISIONS_TOOL, READ_TECHNOLOGY_DECISIONS_TOOL } from "./tool-declarations.mjs";
@@ -7,7 +8,8 @@ import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "./cto-question-reply-tool-declarations.mjs";
-import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL } from "./task-packet-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
+  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL } from "./task-packet-tool-declarations.mjs";
 import { READ_CONSULTATION_ANALYSIS_TOOL } from "./tool-declarations.mjs";
 import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL } from "./spec-assurance/tool-declarations.mjs";
 import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
@@ -19,6 +21,8 @@ const surface = defineSpsUiContributions({
   entrypoint: "./dist/ui-v0.1.0",
   contributions: [{ surface: "page", id: "builder", label: "SPS Builder", exportName: "BuilderPage", routePath: "builder" }],
 });
+const taskFolderCapabilities = ["sps.workspaceSources.read", "local.folders"]
+  .filter(capability => SPS_PLATFORM_CAPABILITIES.includes(capability));
 
 export default defineSpsPluginManifest({
   id: "com.sonparkserver.my-plugin-builder",
@@ -31,9 +35,13 @@ export default defineSpsPluginManifest({
   minimumHostVersion: "0.4.137",
   ...surface,
   capabilities: [...surface.capabilities, "ui.workspaceShell.provide", "plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
-    "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES],
+    "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES, ...taskFolderCapabilities],
   entrypoints: { ...surface.entrypoints, worker: "./dist/worker.js", workspaceWorker: "./dist/worker.js" },
   companyActivation: { defaultEnabled: false },
+  ...(taskFolderCapabilities.includes("local.folders") ? { localFolders: [{
+    folderKey: "project-source", displayName: "Project source", access: "readWrite",
+    description: "Select this Workspace's project source root. Task path restrictions and separate Git/Runner permissions still apply.",
+  }] } : {}),
   tools: [READ_SOLUTION_TOOL, PROPOSE_DESIGN_TOOL, READ_DESIGN_DRAFT_TOOL, READ_DESIGN_SOURCES_TOOL, READ_CONSULTATION_ANALYSIS_TOOL, READ_LEAD_MEMORY_TOOL, UPDATE_LEAD_MEMORY_TOOL, RESOLVE_DESIGN_QUESTION_TOOL, CREATE_CTO_TOOL, LIST_CTOS_TOOL, PUBLISH_DESIGN_BASELINE_TOOL, READ_DESIGN_BASELINE_TOOL, INSPECT_SPEC_ASSURANCE_TOOL, PUBLISH_TECHNOLOGY_DECISIONS_TOOL, READ_TECHNOLOGY_DECISIONS_TOOL,
     PUBLISH_WORKSTREAM_TOOL, READ_WORKSTREAMS_TOOL, READ_CTO_WORKSTREAM_TOOL, ACKNOWLEDGE_WORKSTREAM_TOOL,
     DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL,
@@ -41,6 +49,7 @@ export default defineSpsPluginManifest({
     SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL,
     ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL,
     READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
+    DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL,
     SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL,
     PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL,
     READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,

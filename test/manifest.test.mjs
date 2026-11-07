@@ -1,15 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SPS_PLATFORM_CAPABILITIES } from "@sonparkserver/plugin-sdk/platform";
 import manifest from "../src/manifest.mjs";
 import { CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL, DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL } from "../src/delivery-tool-declarations.mjs";
 import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-tool-declarations.mjs";
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "../src/cto-question-reply-tool-declarations.mjs";
-import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL } from "../src/task-packet-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
+  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL } from "../src/task-packet-tool-declarations.mjs";
 import { INSPECT_SPEC_ASSURANCE_TOOL, READ_CHANGE_IMPACT_TOOL } from "../src/tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
   assert.equal(manifest.companyActivation?.defaultEnabled, false);
+});
+
+test("supported Hosts can configure the declared Task source alias without an inferred root", () => {
+  if (!SPS_PLATFORM_CAPABILITIES.includes("local.folders")) {
+    assert.equal(manifest.localFolders, undefined);
+    return;
+  }
+  assert.deepEqual(manifest.localFolders, [{ folderKey: "project-source", displayName: "Project source", access: "readWrite",
+    description: "Select this Workspace's project source root. Task path restrictions and separate Git/Runner permissions still apply." }]);
+  assert.equal(Object.hasOwn(manifest.localFolders[0], "path"), false);
+  assert.equal(Object.hasOwn(manifest.localFolders[0], "requiredFiles"), false);
 });
 
 test("Workspace Shell routes match the declared page route rather than a package-key URL", () => {
@@ -206,6 +219,19 @@ test("CTO Task Worker tools expose registration without granting execution", () 
   assert.deepEqual(schema.properties.role.enum, ["worker", "qa"]);
   assert.match(PREPARE_TASK_WORKER_TOOL.description, /does not start an AI run/);
   assert.deepEqual(READ_TASK_WORKERS_TOOL.parametersSchema.required, ["projectId", "ctoId", "workstreamId"]);
+});
+
+test("Task dispatch and Worker/QA file tools are registered with separate role scopes", () => {
+  for (const declaration of [DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL]) {
+    assert.deepEqual(manifest.tools.find(tool => tool.name === declaration.name), declaration);
+    assert.equal(declaration.parametersSchema.additionalProperties, false);
+  }
+  assert.deepEqual(DISPATCH_TASK_WORKER_TOOL.parametersSchema.required,
+    ["projectId", "ctoId", "workstreamId", "taskId", "packetRevision", "role"]);
+  for (const declaration of [READ_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL]) {
+    assert.deepEqual(declaration.parametersSchema.required, ["relativePath"]);
+  }
+  assert.deepEqual(WRITE_TASK_SOURCE_FILE_TOOL.parametersSchema.required, ["relativePath", "contents"]);
 });
 
 test("CTO QA pass criteria are a bounded nonempty text list", () => {

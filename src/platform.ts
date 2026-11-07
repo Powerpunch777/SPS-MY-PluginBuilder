@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { defineSpsPlatformContract } from "@sonparkserver/plugin-sdk/platform";
+import { defineSpsPlatformContract, SPS_PLATFORM_CAPABILITIES } from "@sonparkserver/plugin-sdk/platform";
 import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
@@ -27,9 +27,11 @@ import { submitCtoQuestion, readCtoQuestions, readOwnCtoQuestion, readUserCtoQue
 import { dispatchQuestionToLead, readBoundCtoIntake } from "./cto-intake-delivery.ts";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "./cto-question-reply-tool-declarations.mjs";
 import { answerCtoQuestion, readCtoQuestionAnswer, acknowledgeCtoQuestionAnswer } from "./cto-question-reply-tools.ts";
-import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL } from "./task-packet-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
+  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL } from "./task-packet-tool-declarations.mjs";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
-import { prepareTaskWorker, readTaskWorkers } from "./task-worker-tools.ts";
+import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
+  writeTaskWorkerFile, deleteTaskWorkerFile } from "./task-worker-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -65,6 +67,8 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
 const MAX_INITIAL_SNAPSHOT_BYTES = 192 * 1024;
 const queues = new Map<string, Promise<unknown>>();
+const taskFolderCapabilities = ["sps.workspaceSources.read", "local.folders"]
+  .filter(capability => SPS_PLATFORM_CAPABILITIES.includes(capability as (typeof SPS_PLATFORM_CAPABILITIES)[number]));
 
 function workspaceId(value: unknown): string {
   if (typeof value !== "string" || !UUID.test(value)) throw new TypeError("A trusted SPS Workspace is required.");
@@ -809,7 +813,8 @@ async function firstDesignReviewView(companyId: string, platform: SpsPlatformInv
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
     capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
-      "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES],
+      "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES,
+      ...taskFolderCapabilities as (typeof SPS_PLATFORM_CAPABILITIES)[number][]],
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
     handler: (params, context, platform) => readLeadSolution(params, context, platform) },
@@ -997,6 +1002,33 @@ export function createBuilderPlatform() {
       handler: (params, runContext, platform) => {
         const context = parseLeadToolContext(runContext);
         return serialize(context.companyId, () => readTaskWorkers(params, context, platform));
+      } },
+    { name: DISPATCH_TASK_WORKER_TOOL.name, declaration: { displayName: DISPATCH_TASK_WORKER_TOOL.displayName,
+      description: DISPATCH_TASK_WORKER_TOOL.description, parametersSchema: DISPATCH_TASK_WORKER_TOOL.parametersSchema },
+      handler: (params, runContext, platform) => {
+        const context = parseLeadToolContext(runContext);
+        return serialize(context.companyId, () => dispatchPreparedTaskWorker(params, context, platform));
+      } },
+    { name: READ_TASK_SOURCE_FILE_TOOL.name, declaration: { displayName: READ_TASK_SOURCE_FILE_TOOL.displayName,
+      description: READ_TASK_SOURCE_FILE_TOOL.description, parametersSchema: READ_TASK_SOURCE_FILE_TOOL.parametersSchema },
+      handler: (params, runContext, platform) => {
+        const context = exactToolRecord(runContext, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
+        const companyId = workspaceId(context.companyId);
+        return serialize(companyId, () => readTaskWorkerFile(params, runContext, platform));
+      } },
+    { name: WRITE_TASK_SOURCE_FILE_TOOL.name, declaration: { displayName: WRITE_TASK_SOURCE_FILE_TOOL.displayName,
+      description: WRITE_TASK_SOURCE_FILE_TOOL.description, parametersSchema: WRITE_TASK_SOURCE_FILE_TOOL.parametersSchema },
+      handler: (params, runContext, platform) => {
+        const context = exactToolRecord(runContext, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
+        const companyId = workspaceId(context.companyId);
+        return serialize(companyId, () => writeTaskWorkerFile(params, runContext, platform));
+      } },
+    { name: DELETE_TASK_SOURCE_FILE_TOOL.name, declaration: { displayName: DELETE_TASK_SOURCE_FILE_TOOL.displayName,
+      description: DELETE_TASK_SOURCE_FILE_TOOL.description, parametersSchema: DELETE_TASK_SOURCE_FILE_TOOL.parametersSchema },
+      handler: (params, runContext, platform) => {
+        const context = exactToolRecord(runContext, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
+        const companyId = workspaceId(context.companyId);
+        return serialize(companyId, () => deleteTaskWorkerFile(params, runContext, platform));
       } }],
     data: [{ key: "builder.reuse-candidates", handler: async (params, platform) => {
       exactToolRecord(params, ["companyId"], ["renderEnvironment"]);

@@ -27,6 +27,15 @@ export type TaskPacket = Readonly<{
   evidenceRequired: readonly string[];
   reuse: readonly TaskPacketReuse[];
   testPlan: null | TaskPacketTestPlan;
+  sourceAccess?: TaskPacketSourceAccess;
+}>;
+
+export type TaskPacketSourceAccess = Readonly<{
+  sourceId: string;
+  folderKey: string;
+  readPaths: readonly string[];
+  writePaths: readonly string[];
+  qaWritePaths: readonly string[];
 }>;
 
 export type TaskPacketReuse = Readonly<{
@@ -223,6 +232,39 @@ function parseTestPlan(value: unknown): TaskPacketTestPlan | null {
   });
 }
 
+function sourcePath(value: unknown, label: string): string {
+  const result = safeString(value, label, 1_024);
+  const segments = result.split("/");
+  if (result.startsWith("/") || result.includes("\\") || result.includes(":") || result.endsWith("/")
+    || segments.some(segment => segment === "" || segment === "." || segment === ".." || segment.endsWith(".")
+      || segment.endsWith(" ") || /[<>:"|?*]/u.test(segment) || segment.toLowerCase() === ".git"
+      || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(segment))) {
+    throw new TypeError(`${label} must be a canonical relative source path.`);
+  }
+  return result;
+}
+
+function sourcePaths(value: unknown, label: string): readonly string[] {
+  const paths = list(value, 128, label).map((item, index) => sourcePath(item, `${label}[${index}]`));
+  if (new Set(paths.map(item => item.toLowerCase())).size !== paths.length) {
+    throw new TypeError(`${label} must not contain case-colliding paths.`);
+  }
+  return Object.freeze(paths);
+}
+
+function parseSourceAccess(value: unknown): TaskPacketSourceAccess {
+  const row = record(value, ["sourceId", "folderKey", "readPaths", "writePaths", "qaWritePaths"], "packet.sourceAccess");
+  const readPaths = sourcePaths(row.readPaths, "packet.sourceAccess.readPaths");
+  const writePaths = sourcePaths(row.writePaths, "packet.sourceAccess.writePaths");
+  const qaWritePaths = sourcePaths(row.qaWritePaths, "packet.sourceAccess.qaWritePaths");
+  if (new Set([...writePaths, ...qaWritePaths].map(item => item.toLowerCase())).size !== writePaths.length + qaWritePaths.length) {
+    throw new TypeError("packet.sourceAccess Worker and QA write permissions must be disjoint.");
+  }
+  return Object.freeze({ sourceId: uuid(row.sourceId, "packet.sourceAccess.sourceId"),
+    folderKey: identifier(row.folderKey, "packet.sourceAccess.folderKey"),
+    readPaths, writePaths, qaWritePaths });
+}
+
 const PACKET_FIELDS = [
   "projectId", "ctoId", "workstreamId", "taskId", "revision", "kind", "title", "goal", "scopeNodeIds",
   "requirementIds", "dependencies", "included", "excluded", "constraints", "acceptance", "evidenceRequired", "reuse", "testPlan",
@@ -232,7 +274,9 @@ export function parseTaskPacket(value: unknown, projectId: string, ctoId: string
   const expectedProjectId = identifier(projectId, "projectId");
   const expectedCtoId = identifier(ctoId, "ctoId");
   const expectedWorkstreamId = identifier(workstreamId, "workstreamId");
-  const row = record(value, PACKET_FIELDS, "packet");
+  const sourceAccessDescriptor = value && typeof value === "object" && !Array.isArray(value)
+    ? Object.getOwnPropertyDescriptor(value, "sourceAccess") : undefined;
+  const row = record(value, sourceAccessDescriptor ? [...PACKET_FIELDS, "sourceAccess"] : PACKET_FIELDS, "packet");
   const actualProjectId = identifier(row.projectId, "packet.projectId");
   const actualCtoId = identifier(row.ctoId, "packet.ctoId");
   const actualWorkstreamId = identifier(row.workstreamId, "packet.workstreamId");
@@ -247,6 +291,12 @@ export function parseTaskPacket(value: unknown, projectId: string, ctoId: string
   if (new Set(reuse.map(item => item.id)).size !== reuse.length) throw new TypeError("packet.reuse IDs must be unique.");
   const testPlan = parseTestPlan(row.testPlan);
   if (row.kind === "qa" && testPlan === null) throw new TypeError("QA packets require a testPlan.");
+  const sourceAccess = sourceAccessDescriptor ? parseSourceAccess(row.sourceAccess) : undefined;
+  if (sourceAccess && (row.kind === "qa" ? sourceAccess.writePaths.length > 0 || sourceAccess.qaWritePaths.some(path =>
+    stringList(row.included, "packet.included", 32, 1, "text").some(item => item.toLowerCase() === path.toLowerCase()))
+    : sourceAccess.qaWritePaths.length > 0)) {
+    throw new TypeError("Task Packet write permissions do not match its development or QA role scope.");
+  }
   const packet: TaskPacket = Object.freeze({
     projectId: actualProjectId, ctoId: actualCtoId, workstreamId: actualWorkstreamId, taskId,
     revision: positiveInteger(row.revision, "packet.revision"), kind: row.kind,
@@ -260,6 +310,7 @@ export function parseTaskPacket(value: unknown, projectId: string, ctoId: string
     acceptance: stringList(row.acceptance, "packet.acceptance", 32, 1, "text"),
     evidenceRequired: stringList(row.evidenceRequired, "packet.evidenceRequired", 32, 1, "text"),
     reuse: Object.freeze(reuse), testPlan,
+    ...(sourceAccess ? { sourceAccess } : {}),
   });
   if (encoder.encode(JSON.stringify(packet)).byteLength > MAX_PACKET_BYTES) {
     throw new TypeError(`packet exceeds the ${MAX_PACKET_BYTES}-byte limit.`);

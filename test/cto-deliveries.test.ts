@@ -124,7 +124,7 @@ test("accepts the exact Task Worker CTO profile while preserving all historical 
   assert.deepEqual(parseCtoDelivery(six, workspaceId, projectId, ctoId).executionPolicy.toolNames, sixNames);
   assert.deepEqual(parseCtoDelivery(eight, workspaceId, projectId, ctoId).executionPolicy.toolNames, eightNames);
   assert.deepEqual(parseCtoDelivery(ten, workspaceId, projectId, ctoId).executionPolicy.toolNames, tenNames);
-  assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: [...eightNames, "builder.extra"] } }), workspaceId, projectId, ctoId), /exactly two, four, six, eight or ten/);
+  assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: [...eightNames, "builder.extra"] } }), workspaceId, projectId, ctoId), /exact supported dense CTO policy profile/);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1",
     toolNames: tenNames.map(name => name === "builder.prepare-task-worker" ? "builder.extra" : name) } }),
   workspaceId, projectId, ctoId), /canonical sorted CTO planning profile/);
@@ -156,7 +156,7 @@ test("rejects unknown keys, accessors, symbols, custom prototypes and malformed 
   assert.throws(() => parseCtoDelivery({ ...delivery(), extra: true }, workspaceId, projectId, ctoId), /unknown or missing fields/);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v2", toolNames: ["builder.acknowledge-workstream", "builder.read-cto-workstream"] } }), workspaceId, projectId, ctoId), /mode is unsupported/);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: ["builder.read-cto-workstream", "builder.acknowledge-workstream"] } }), workspaceId, projectId, ctoId), /canonical sorted/);
-  assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: ["builder.acknowledge-workstream", "builder.read-cto-workstream", "builder.extra"] } }), workspaceId, projectId, ctoId), /exactly two/);
+  assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: ["builder.acknowledge-workstream", "builder.read-cto-workstream", "builder.extra"] } }), workspaceId, projectId, ctoId), /exact supported dense CTO policy profile/);
   const policyAccessor = { mode: "plugin-tools-only-v1", toolNames: ["builder.acknowledge-workstream", "builder.read-cto-workstream"] };
   Object.defineProperty(policyAccessor, "mode", { enumerable: true, get() { calls += 1; return "plugin-tools-only-v1"; } });
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: policyAccessor }), workspaceId, projectId, ctoId), /data field/);

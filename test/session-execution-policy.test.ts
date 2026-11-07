@@ -38,10 +38,12 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   const specializedOnly = new Set<string>(["builder.read-cto-intake", "builder.answer-cto-question",
     "builder.propose-ui-contract", "builder.request-final-review", "builder.record-reuse-candidate",
+    "builder.read-task-source-file", "builder.write-task-source-file", "builder.delete-task-source-file",
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());
   const allPlanningTools = new Set<string>([...LEAD_PLANNING_TOOL_NAMES, ...CTO_WORKSTREAM_TOOL_NAMES,
+    ...specializedOnly,
     ...LEAD_CHANNELS.flatMap(channel => policyForLeadChannel(channel).toolNames),
     ...CTO_INTAKE_EXECUTION_POLICY.toolNames, ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...allPlanningTools].sort(), manifestNames.sort());
@@ -53,7 +55,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
     assert.ok(!ctoToolNames.has(name));
   }
   assert.deepEqual([...CTO_WORKSTREAM_TOOL_NAMES].sort(), [
-    "builder.acknowledge-workstream", "builder.prepare-task-worker", "builder.publish-task-packet", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.read-task-packets", "builder.read-task-workers", "builder.submit-cto-question", "builder.update-cto-memory",
+    "builder.acknowledge-workstream", "builder.dispatch-task-worker", "builder.prepare-task-worker", "builder.publish-task-packet", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.read-task-packets", "builder.read-task-workers", "builder.submit-cto-question", "builder.update-cto-memory",
   ]);
   for (const channel of LEAD_CHANNELS) {
     assert.ok(!policyForLeadChannel(channel).toolNames.some(name => name === "builder.prepare-task-worker" || name === "builder.read-task-workers"));

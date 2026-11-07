@@ -84,3 +84,13 @@ test("encoded input and aggregate initial-state limits preserve the last readabl
   assert.equal((await readBuilderSnapshot(A, platform)).messages.length, 3);
   assert.equal(writes.length, 3);
 });
+
+test("registers CTO dispatch separately from Task-scoped Worker and QA file tools", () => {
+  const contract = createBuilderPlatform() as unknown as { tools: Array<{ name: string; declaration: { parametersSchema: { additionalProperties?: boolean } } }> };
+  const byName = new Map(contract.tools.map(tool => [tool.name, tool]));
+  for (const name of ["builder.dispatch-task-worker", "builder.read-task-source-file",
+    "builder.write-task-source-file", "builder.delete-task-source-file"]) {
+    assert.ok(byName.has(name), `${name} must be registered by the actual platform contract`);
+    assert.equal(byName.get(name)?.declaration.parametersSchema.additionalProperties, false);
+  }
+});
