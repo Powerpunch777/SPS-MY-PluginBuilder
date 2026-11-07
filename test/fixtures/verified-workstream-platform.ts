@@ -34,7 +34,8 @@ const runDto = (runId: string, status: string) => ({ runId, status, cancellation
   termination: status === "running" ? "not_applicable" : "confirmed", errorCode: null, error: null });
 
 /** All Core/Host contracts here are deterministic fixture DTOs, not a real AI or AppContainer run. */
-export async function setupVerifiedWorkstreamPlatform(withUnmappedRequirement = false) {
+export async function setupVerifiedWorkstreamPlatform(withUnmappedRequirement = false,
+  options: Readonly<{ undecidedRequirementIds?: readonly string[]; omitDecisionModel?: boolean }> = {}) {
   const f = await fixture(W);
   // The generic fixture seeds an unapproved baseline/workstream. Start those journals empty
   // so this test exercises the actual initial approval and publication path.
@@ -74,12 +75,15 @@ export async function setupVerifiedWorkstreamPlatform(withUnmappedRequirement = 
     coverageTargets: [{ targetKind: "requirement", targetId: "REQ-1", ruleIds: ["feature-behavior"] },
       { targetKind: "ac", targetId: "AC-1", ruleIds: ["feature-behavior"] }],
     scenarios: [{ id: "open-ready", state: "new", event: "open", nextState: "ready", exceptionId: null }],
-    itemDecisions: [{ requirementId: "REQ-1", status: "RESOLVED", reason: "Approval-backed fixture relationship.", sourceIds: [sourceId] },
-      ...(withUnmappedRequirement ? [{ requirementId: unmapped.id, status: "RESOLVED", reason: "Approved but not assigned.", sourceIds: [sourceId] }] : [])],
+    itemDecisions: [{ requirementId: "REQ-1", status: options.undecidedRequirementIds?.includes("REQ-1") ? "UNDECIDED" : "RESOLVED",
+      reason: "Approval-backed fixture relationship.", sourceIds: [sourceId] },
+      ...(withUnmappedRequirement ? [{ requirementId: unmapped.id,
+        status: options.undecidedRequirementIds?.includes(unmapped.id) ? "UNDECIDED" : "RESOLVED",
+        reason: "Approved but not assigned.", sourceIds: [sourceId] }] : [])],
     acceptanceCriteria: [{ requirementId: "REQ-1", acId: "AC-1", sourceId, quote: sourceText },
       ...(withUnmappedRequirement ? [{ requirementId: unmapped.id, acId: unmapped.acceptanceCriteriaIds[0], sourceId, quote: sourceText }] : [])] };
   const proposal = await proposeFirstDesignReview({ projectId: W, expectedDraftRevisionId: draft.revisionId,
-    expectedReviewHeadRevisionId: null, pack, designModel,
+    expectedReviewHeadRevisionId: null, pack, ...(options.omitDecisionModel ? {} : { designModel }),
     sourcePins: [{ requirementId: "REQ-1", acId: null, sourceId }, { requirementId: "REQ-1", acId: "AC-1", sourceId },
       ...(withUnmappedRequirement ? [{ requirementId: unmapped.id, acId: unmapped.acceptanceCriteriaIds[0], sourceId }] : [])] },
   mainContext, f.platform);
@@ -253,8 +257,11 @@ export async function setupVerifiedWorkstreamPlatform(withUnmappedRequirement = 
     f.values.set(storageKey, structuredClone(value)); wakes.push(structuredClone(wake)); return { status: "committed" };
   }) as never;
   const verifyTool = registeredTools.find(tool => tool.name === "builder.verify-workstream");
+  const dispatchTool = registeredTools.find(tool => tool.name === "builder.dispatch-task-worker");
   assert.ok(verifyTool);
-  return { f, verifyTool, ctoContext, wakes, get atomicWakeCalls() { return atomicWakeCalls; }, async verify() {
+  assert.ok(dispatchTool);
+  return { f, verifyTool, dispatchTool, ctoContext, wakes, requests, sourceTurnKey: key(`lead-chat.turn.v1.${mainContext.runId}`),
+    get atomicWakeCalls() { return atomicWakeCalls; }, async verify() {
     return verifyTool!.handler({ projectId: W, ctoId: CTO, workstreamId: "ws-1" }, ctoContext, f.platform) as Promise<any>;
   }, reportStore: () => createTaskQaReportStore(reportScope, revisionState) };
 }

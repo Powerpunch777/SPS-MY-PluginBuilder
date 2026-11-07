@@ -5,6 +5,8 @@ import type { JsonValue } from "@sonparkserver/plugin-sdk/platform";
 import { parseTaskWorkerRegistry, taskWorkerRegistryKey } from "../src/domain/task-workers.ts";
 import { taskPacketRecordDigest } from "../src/domain/task-packets.ts";
 import { prepareTaskWorker, readTaskWorkers } from "../src/task-worker-tools.ts";
+import { createBuilderPlatform } from "../src/platform.ts";
+import { parseTaskPacket } from "../src/domain/task-packets.ts";
 import { dispatchCtoWorkstream } from "../src/cto-workstream-delivery.ts";
 import { createTaskPacketStore } from "../src/task-packet-tools.ts";
 import { workstreamInstructionDigest } from "../src/cto-delivery-store.ts";
@@ -271,4 +273,48 @@ test("invalid role is rejected before authority access", async () => {
   await assert.rejects(prepareTaskWorker({ projectId: P, ctoId: CTO, workstreamId: "ws-1", taskId: "task-1", packetRevision: 1, role: "manager" }, {}, {} as never), /role must be worker or qa/);
   await assert.rejects(prepareTaskWorker({ projectId: P, ctoId: CTO, workstreamId: "ws-1", taskId: "task-1", role: "worker" }, {}, {} as never), /Invalid Builder tool fields/);
   await assert.rejects(prepareTaskWorker({ projectId: P, ctoId: CTO, workstreamId: "ws-1", taskId: "task-1", packetRevision: 0, role: "worker" }, {}, {} as never), /positive safe integer/);
+});
+
+test("registered dispatch fails closed before send when a legacy Baseline has no pinned source closure", async () => {
+  const { f, runContext, taskStore } = await activeFixture();
+  installOwnedHost(f);
+  const board = (await taskStore.current())!.revision;
+  const current = board.packets.find(item => item.packet.taskId === "task-dev")!;
+  const sourceAccess = { sourceId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", folderKey: "approved-source",
+    readPaths: ["src/feature.ts"], writePaths: ["src/feature.ts"], qaWritePaths: [] };
+  const updated = { ...current, packet: parseTaskPacket({ ...current.packet, sourceAccess }, P, CTO, "ws-1") };
+  await taskStore.publish({ expectedBaseRevisionId: board.revisionId, revision: { ...board, revisionId: "legacy-no-model-task-board",
+    packets: [updated, ...board.packets.filter(item => item.packet.taskId !== "task-dev")] } });
+  Object.assign(f.platform, { localFolders: {
+    async status(folderKey: string) { return { folderKey, configured: true, healthy: true, readable: true, writable: true }; },
+    async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) {
+      return { folderKey, workspaceSourceId, match: "same_root" };
+    }, async readWorkspaceSourceTextV1() { return ""; }, async writeWorkspaceSourceTextAtomicV1() {},
+    async deleteWorkspaceSourceFileV1() {},
+  } });
+  const requests = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
+  let workerSends = 0;
+  const originalGetRequest = f.platform.agents.sessions.getRequest.bind(f.platform.agents.sessions);
+  Object.assign(f.platform.agents.sessions, {
+    async getRequest(sessionId: string, workspaceId: string, requestId: string) {
+      assert.equal(workspaceId, W);
+      if (sessionId !== SESSION) return originalGetRequest(sessionId, workspaceId, requestId);
+      return structuredClone(requests.get(requestId) ?? null);
+    },
+    async sendMessage(sessionId: string, workspaceId: string, options: { requestId: string }) {
+      assert.equal(sessionId, SESSION); assert.equal(workspaceId, W); workerSends += 1;
+      const runId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+      requests.set(options.requestId, { requestId: options.requestId, state: "submitted", runId });
+      f.runs.set(runId, { runId, status: "running", cancellationRequested: false, termination: "not_applicable",
+        error: null, errorCode: null, output: { state: "not_ready", text: null } });
+      return { runId };
+    },
+  });
+  const params = { projectId: P, ctoId: CTO, workstreamId: "ws-1", taskId: "task-dev", packetRevision: 1, role: "worker" };
+  const prepared = await prepareTaskWorker(params, runContext, f.platform);
+  assert.equal((prepared.data as { status: string }).status, "registered");
+  const dispatch = createBuilderPlatform().tools.find(tool => tool.name === "builder.dispatch-task-worker");
+  assert(dispatch);
+  await assert.rejects(Promise.resolve(dispatch.handler(params, runContext, f.platform)), /original-source-unavailable/u);
+  assert.equal(workerSends, 0, "missing source closure must not be treated as a no-model/no-blocker decision");
 });

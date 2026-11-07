@@ -221,6 +221,36 @@ test("current approved provider binds UNDECIDED only to the Task's exact require
   assert.equal(hasUndecidedTaskRequirement(["REQ-OTHER"], unrelated?.itemDecisions), false);
 });
 
+test("current approved review without a decision model yields no synthetic UNDECIDED blocker", async () => {
+  const f = fixture(); await f.published;
+  const proposal = await proposeFirstDesignReview(f.params, f.runContext, f.platform);
+  if (!proposal.revision) throw new Error("No-model review proposal was not published.");
+  const approved = await approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: proposal.revision.revisionId }, f.context);
+  if (!("revision" in approved)) throw new Error("Exact no-model review approval was not published.");
+  const binding = await assertCurrentFirstDesignApproval({ projectId: PROJECT, approvedRevisionId: approved.revision.revisionId }, f.runContext, f.platform);
+  assert(binding);
+  const draft = (await f.drafts.current())!.revision;
+  const specification = { ...approved.revision.draft.specification, projectId: PROJECT, revisionId: "no-model-approved-spec",
+    approvalEvidenceRef: binding.reviewReference };
+  const published = await createDesignBaselineStore(WORKSPACE, PROJECT, f.state).publish({ expectedBaseRevisionId: null,
+    revision: { projectId: PROJECT, revisionId: "no-model-approved-baseline", sourceDraftRevisionId: approved.revision.draftRevisionId,
+      draftDigest: digest(JSON.stringify(draft)), createdAt: "2026-11-06T00:02:00.000Z",
+      author: { agentId: AGENT, sessionId: SESSION, runId: RUN, selectionRevision: 1 },
+      userDecision: { sourceId: binding.reviewReference, sourceSha256: binding.bundleDigest,
+        interpretation: "Exact design approved without an item-decision model." },
+      specification, graph: { ...approved.revision.draft.graph, graphRevisionId: "no-model-approved-graph",
+        approvedSpecRevisionId: specification.revisionId } } });
+  assert.equal(published.status, "published");
+  const sessions = { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT,
+    sessions: { main: SESSION, "ui-design": null, background: null, "cto-inbox": null, decisions: null, "integration-review": null } };
+  const provider = createCurrentBaselineAssuranceProvider({ workspaceId: WORKSPACE, projectId: PROJECT, sessions, platform: f.platform });
+  const material = await provider({ identity: { workspaceId: WORKSPACE, projectId: PROJECT,
+    specRevisionId: specification.revisionId, specDigest: digest(JSON.stringify(specification)) }, requirementIds: ["REQ-1"] });
+  assert(material, "the exact original source and approved Baseline closure are readable");
+  assert.equal(material.itemDecisions, undefined);
+  assert.equal(hasUndecidedTaskRequirement(["REQ-1"], material.itemDecisions), false);
+});
+
 test("authenticated first-design flow stores proposal and exact-user attestation before any Baseline", async () => {
   const f = fixture();
   await f.published;
