@@ -143,3 +143,16 @@ export const READ_PROTECTED_TASK_QA_HISTORY_TOOL = Object.freeze({
     properties: { projectId: id, ctoId: id, workstreamId: id, qaTaskId: id,
       cursor: { type: ["string", "null"], maxLength: 512 } } },
 });
+
+export const PUBLISH_TASK_QA_REPORT_TOOL = Object.freeze({
+  name: "builder.publish-task-qa-report", displayName: "Publish exact independent Task QA report",
+  description: "Only the exact active independent QA Worker may assess every current Task acceptance and test-plan criterion against its exact completed protected Core run. Verdict is derived from the technical receipt and criterion assessments, never a caller pass flag. This is not Workstream VERIFIED, integration, or user delivery approval.",
+  parametersSchema: { type: "object", additionalProperties: false,
+    required: ["projectId", "ctoId", "workstreamId", "qaTaskId", "approvalId", "planSha256", "runId", "expectedBaseRevisionId", "checks", "summary"],
+    properties: { projectId: id, ctoId: id, workstreamId: id, qaTaskId: id, ...protectedTaskQaPlan,
+      runId: { type: "string", format: "uuid" }, expectedBaseRevisionId: { anyOf: [id, { type: "null" }] },
+      checks: { type: "array", minItems: 1, maxItems: 128, items: { type: "object", additionalProperties: false,
+        required: ["criterionId", "verdict", "note"], properties: { criterionId: { type: "string", minLength: 1, maxLength: 100 },
+          verdict: { type: "string", enum: ["passed", "failed", "not-tested"] }, note: { type: "string", minLength: 1, maxLength: 4096 } } } },
+      summary: { type: "string", minLength: 1, maxLength: 8192 } } },
+});

@@ -14,3 +14,4 @@ export const ACCEPT_TASK_SOURCE_SUBMISSION_TOOL: Tool<"builder.accept-task-sourc
 export const REQUEST_PROTECTED_TASK_QA_TOOL: Tool<"builder.request-protected-task-qa">;
 export const READ_PROTECTED_TASK_QA_TOOL: Tool<"builder.read-protected-task-qa">;
 export const READ_PROTECTED_TASK_QA_HISTORY_TOOL: Tool<"builder.read-protected-task-qa-history">;
+export const PUBLISH_TASK_QA_REPORT_TOOL: Tool<"builder.publish-task-qa-report">;

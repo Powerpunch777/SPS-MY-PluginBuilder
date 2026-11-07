@@ -8,6 +8,7 @@ import { readAcceptedTaskSourceForQa, readCtoTaskSourceSubmission } from "./task
 import { resolveCurrentTaskWorkerToolCall } from "./task-worker-tools.ts";
 import { createTaskQaRunReferenceStore, recordTaskQaRunReference, type TaskQaRunReference } from "./task-qa-run-references.ts";
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "./task-worker-runtime.ts";
+import { taskQaCriteria } from "./task-qa-criteria.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
@@ -368,6 +369,7 @@ function sameRun(run: ProtectedRun, target: Target) {
 function result(run: ProtectedRun, target: Target, status: "queued" | "existing" | "read"): ProtectedTaskQaResult {
   if (!sameRun(run, target)) throw new Error("Core protected run does not match this exact Task, acceptance, approved plan, and source.");
   return Object.freeze({ status, runId: run.id, technicalStatus: run.status, termination: run.termination,
+    qaCriteria: taskQaCriteria(target.qa.packet.acceptance, target.qa.packet.testPlan?.passCriteria ?? [], target.implementation.packet.acceptance),
     requestId: target.requestId, approvalId: target.approvalId, planSha256: target.planSha256,
     sourceId: target.source.sourceId, commitSha: target.commitSha, treeSha: target.treeSha,
     sourceFreshness: target.tipCurrent ? "current" : "stale",

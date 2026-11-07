@@ -41,8 +41,8 @@ function identity(overrides: Record<string, unknown> = {}) {
 function target(assertCurrent: () => Promise<void> = async () => {}): ProtectedTaskQaTarget {
   const keys = identity();
   return { workspaceId: W, projectId: "project", ctoId: "cto-one", workstreamId: "ws-1",
-    implementation: {} as ProtectedTaskQaTarget["implementation"], implementationDigest: "d".repeat(64),
-    qa: {} as ProtectedTaskQaTarget["qa"], qaDigest: "e".repeat(64),
+    implementation: { packet: { acceptance: ["Implementation acceptance"] } } as unknown as ProtectedTaskQaTarget["implementation"], implementationDigest: "d".repeat(64),
+    qa: { packet: { acceptance: ["Feature acceptance"], testPlan: { passCriteria: ["Pinned tests pass"] } } } as unknown as ProtectedTaskQaTarget["qa"], qaDigest: "e".repeat(64),
     qaWorker: {} as ProtectedTaskQaTarget["qaWorker"], qaRequestId: "qa-request", qaRunId: RUN,
     source: { sourceId: SOURCE, folderKey: "project-source", branch: "feature/task" }, commitSha: COMMIT,
     treeSha: TREE, acceptanceId: "f".repeat(64), submissionId: "9".repeat(64), ...keys,

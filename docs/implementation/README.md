@@ -24,6 +24,27 @@
 | Manager 자동 통합 / Final Packet | Manager 이벤트 소비는 실제 자동 실행에 아직 미연결. 최종 검토 페이지, Main G7 확인, Integration Review 요청, 인증 사용자 결정 경로는 역할별로 등록함. 격리 Host에서 패킷 없는 확정을 거부함. 현재 패킷·원문 근거 reader 및 원자 승인 writer가 연결되기 전에는 실제 납품 확정 불가. |
 | Reuse | Background가 기존 사용자 조사 원문의 정확한 행·해시에서 후보를 기록하고 Main/Background와 문서센터가 같은 저널을 조회함. 원문의 CRLF를 보존하며 Lead 원문 16 KiB와 저장소 인용문 32 KiB 한도를 구분함. 로컬 등록 handler·문서 검사 및 실제 소스 Host에서 도구 등록·Workspace별 빈 조회·실행 사칭 거부를 확인. 실제 AI 조사·자산별 권리·호환성은 미검증이며 미확인 후보의 재사용은 차단 상태. |
 
+### 2026-11-07 Task 인수·보호 QA 후속 연결
+
+- `f0aa9b0`과 `68ab18c`는 Worker의 정확한 제출 Commit/Tree를 현재 Task에서 찾고,
+  해당 CTO가 받은 사실을 불변 인수 기록으로 남긴다. 인수는 현재 branch tip이나 QA 합격이 아니다.
+- `d956754`·`ce65860`·`c737c09`는 현재 독립 QA Worker의 실제 dispatch Run, 개발 Task 의존 핀,
+  인수 기록, Host Source/branch proof와 승인된 테스트 계획을 결합한다. 요청 ID와 subject는
+  이 원본 핀에서 결정하며 임의 대체하지 않는다. 과거 Task-to-Run 참조는 기존 Revision
+  journal에 보존하고, Core가 실행 상태의 원본이다. QA 대화가 끝나도 CTO의 읽기 전용
+  조회는 가능하며 새 AI 실행을 만들지 않는다. 변경된 Task/소스의 결과는 이력으로 남긴다.
+- 후보 SDK/Host의 실제 Worker subprocess와 임시 DB/Git에서 메타데이터만으로 실행 요청,
+  같은 요청의 단일 기록, 철회·다른 Workspace·소스 핀 불일치 거부를 확인했다. 별도의 격리
+  시험은 서명된 요청과 실제 보호 실행의 완료·종료 확인까지 연결했다. 이 두 증거를 합쳐
+  실제 Builder의 AI QA 또는 두 CTO 종단 간 인수가 완료됐다고 주장하지 않는다.
+- 보호 실행의 `succeeded`는 기술 실행 결과다. 등록된 QA 보고 경로는 개발 Task의 인수 조건,
+  QA Task의 인수 조건과 테스트 계획 기준을 모두 평가하고, 정확한 Core 완료 receipt와
+  독립 QA 작성자를 고정한다. 실패·미검사 항목은 합격으로 바꾸지 않는다. 현재 이 보고
+  경로의 독립 통합 QA는 진행 중이며, Workstream VERIFIED 발행과 Manager 자동 통합은
+  여전히 별도 미완료 의존성이다.
+- 제품 SDK pin은 변경하지 않았다. 후보 API의 존재, 실제 실행 연결, fixture 판정,
+  설치된 앱/AI 검증을 구분하며 미지원 Host에서 대체 실행하거나 PASS를 만들지 않는다.
+
 빌드·타입·테스트는 선언된 SDK commit `c69915a518f0eb600f0ace8238144059911f8d04`와
 일치하는 고정 사본에서 검증한다. 기존 설치 의존성과 작업 데이터를 덮어쓰지 않는다.
 로컬 fixture·브라우저 미리보기 결과는 실제 Host·AI·실기기 인수나 원문 AC 전체 합격이 아니다.

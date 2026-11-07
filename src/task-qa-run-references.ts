@@ -35,6 +35,7 @@ function scope(value: unknown): TaskQaReferenceScope {
       || /[\u0000-\u001f\u007f]/u.test(value); })) throw new TypeError("Invalid protected QA reference scope.");
   return Object.freeze(Object.fromEntries(scopeFields.map(field => [field, row[field]]))) as TaskQaReferenceScope;
 }
+export const parseTaskQaReferenceScope = scope;
 
 function binding(value: unknown): TaskQaRunBinding {
   const row = exactToolRecord(value, bindingFields);
@@ -60,15 +61,21 @@ function reference(rawScope: unknown, rawBinding: unknown): TaskQaRunReference {
   return Object.freeze({ ...body, revisionId: `task-qa-run-v1:${hash(body)}` });
 }
 
+export function parseTaskQaRunReference(value: unknown): TaskQaRunReference {
+  const row = exactToolRecord(value, ["schemaVersion", "revisionId", "scope", "binding"]);
+  const parsed = reference(row.scope, row.binding);
+  if (row.schemaVersion !== 1 || row.revisionId !== parsed.revisionId) throw new TypeError("Invalid immutable QA run reference.");
+  return parsed;
+}
+
 /** Only immutable business references live here. Core remains the run-status authority. */
 export function createTaskQaRunReferenceStore(rawScope: TaskQaReferenceScope, state: RevisionState) {
   const selected = scope(rawScope);
   const journal = createRevisionJournal(selected.workspaceId, hash(selected), state, {
     prefix: "task-protected-qa-runs", revisionId: (value: TaskQaRunReference) => value.revisionId,
     parse(value: unknown): TaskQaRunReference {
-      const row = exactToolRecord(value, ["schemaVersion", "revisionId", "scope", "binding"]);
-      const parsed = reference(row.scope, row.binding);
-      if (row.schemaVersion !== 1 || row.revisionId !== parsed.revisionId || JSON.stringify(parsed.scope) !== JSON.stringify(selected)) {
+      const parsed = parseTaskQaRunReference(value);
+      if (JSON.stringify(parsed.scope) !== JSON.stringify(selected)) {
         throw new TypeError("Stored QA run reference does not match its immutable scope or content.");
       }
       return parsed;

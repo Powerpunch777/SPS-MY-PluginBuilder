@@ -43,7 +43,7 @@ export type CtoDelivery = Readonly<{
   }>;
   executionPolicy: Readonly<{
     mode: "plugin-tools-only-v1";
-    toolNames: readonly (typeof TASK_HANDOFF_POLICY_TOOLS[number])[];
+    toolNames: readonly (typeof TASK_PROTECTED_QA_HISTORY_POLICY_TOOLS[number])[];
   }>;
   createdAt: string;
   phase: typeof PHASES[number];

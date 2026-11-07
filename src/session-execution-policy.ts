@@ -25,6 +25,7 @@ import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_
   SUBMIT_TASK_SOURCE_TOOL, READ_TASK_SOURCE_SUBMISSIONS_TOOL, ACCEPT_TASK_SOURCE_SUBMISSION_TOOL,
   REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL } from "./task-packet-tool-declarations.mjs";
 import { READ_PROTECTED_TASK_QA_HISTORY_TOOL } from "./task-packet-tool-declarations.mjs";
+import { PUBLISH_TASK_QA_REPORT_TOOL } from "./task-packet-tool-declarations.mjs";
 import type { LeadChannel } from "./domain/model.ts";
 import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,
   RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL } from "./spec-assurance/tool-declarations.mjs";
@@ -88,6 +89,7 @@ export const CTO_WORKSTREAM_TOOL_NAMES = Object.freeze([
 export const TASK_WORKER_FILE_TOOL_NAMES = Object.freeze([
   READ_TASK_SOURCE_FILE_TOOL.name, WRITE_TASK_SOURCE_FILE_TOOL.name, DELETE_TASK_SOURCE_FILE_TOOL.name, SUBMIT_TASK_SOURCE_TOOL.name,
   REQUEST_PROTECTED_TASK_QA_TOOL.name, READ_PROTECTED_TASK_QA_TOOL.name,
+  PUBLISH_TASK_QA_REPORT_TOOL.name,
 ].sort());
 export const TASK_WORKER_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
   mode: "plugin-tools-only-v1", toolNames: TASK_WORKER_FILE_TOOL_NAMES,

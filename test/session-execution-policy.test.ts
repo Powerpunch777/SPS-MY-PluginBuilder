@@ -40,7 +40,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
     "builder.read-cto-questions", "builder.review-cto-question",
     "builder.propose-ui-contract", "builder.request-final-review", "builder.record-reuse-candidate",
     "builder.read-task-source-file", "builder.write-task-source-file", "builder.delete-task-source-file", "builder.submit-task-source",
-    "builder.request-protected-task-qa",
+    "builder.request-protected-task-qa", "builder.publish-task-qa-report",
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());
