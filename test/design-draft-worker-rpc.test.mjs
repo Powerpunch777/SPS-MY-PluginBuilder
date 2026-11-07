@@ -131,6 +131,12 @@ test("built Worker routes design sources to an unapproved draft and back without
     assert.ok(typeof call.id === "number" || typeof call.id === "string");
     calls.push(call.method);
     assert.ok(call.params && typeof call.params === "object" && !Array.isArray(call.params));
+    if (call.method === "agents.owned.get") {
+      assert.equal(call.params.companyId, workspaceA);
+      assert.match(call.params.pluginAgentKey, /^builder-task-worker:[a-f0-9]{64}$/u);
+      send({ jsonrpc: "2.0", id: call.id, result: { status: "unsupported" } });
+      return;
+    }
     if (call.method === "agents.sessions.getRequest") {
       assert.deepEqual(Object.keys(call.params).sort(), ["companyId", "requestId", "sessionId"]);
       assert.equal(call.params.companyId, workspaceA);
