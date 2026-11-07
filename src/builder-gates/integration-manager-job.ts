@@ -171,13 +171,17 @@ export async function resolveCurrentIntegrationManagerAuthority(workspaceId: str
     throw new Error("manager-owned-profile-unavailable");
   }
   const profile = receipt.agent;
-  if (profile.agentId !== binding.selectedAgentId || profile.role !== "integration-manager"
-    || !["idle", "running"].includes(String(profile.status))) {
+  if (profile.agentId !== binding.selectedAgentId) throw new Error("manager-selected-agent-does-not-match-owned-role-profile");
+  if (profile.role !== "integration-manager" || !["idle", "running", "paused"].includes(String(profile.status))) {
     throw new Error("manager-profile-not-current-and-active");
   }
   const agents = await platform.agents.list({ companyId: workspaceId, limit: 100 });
-  if (!Array.isArray(agents) || agents.length > 100 || agents.some(agent => agent.companyId !== workspaceId)
-    || !agents.some(agent => agent.id === binding.selectedAgentId && ["idle", "running"].includes(String(agent.status)))) {
+  const memberMatches = Array.isArray(agents) && agents.length <= 100 && !agents.some(agent => agent.companyId !== workspaceId)
+    ? agents.filter(agent => agent.id === binding.selectedAgentId) : [];
+  const member = memberMatches.length === 1 ? memberMatches[0] : null;
+  const statusAllowed = profile.status === "idle" || profile.status === "running"
+    || profile.status === "paused" && exactObject(member) && member.pauseReason === "system";
+  if (!member || member.status !== profile.status || !statusAllowed) {
     throw new Error("manager-workspace-membership-unavailable");
   }
   const lead = parseLeadAgentBinding(await platform.state.get(stateKey(workspaceId, "lead-agent.v1")) ?? {
@@ -247,6 +251,49 @@ async function findCurrentEvent(workspaceId: string, eventId: string, platform: 
     : { status: "unknown" as const, reason: unknown ?? "verified-event-not-found-in-current-workstream-board" };
 }
 
+type CurrentEvent = Extract<VerifiedEventLookup, { status: "current" }>;
+type EventConsumeResult = Readonly<{ status: "accepted" | "pending" | "uncertain" | "stale" | "unknown" | "unsupported" | "conflict" | "waiting-dependencies";
+  eventId: string; reason: string; waitingDependencies?: true; requestId?: string; receipt?: Readonly<{ receiptId: string; runId: string }> }>;
+
+async function consumeCurrentEvent(workspaceId: string, located: CurrentEvent, platform: Host): Promise<EventConsumeResult> {
+  const scope = { workspaceId, projectId: workspaceId, workstreamId: located.workstreamId, eventId: located.snapshot.eventId };
+  const readCurrent = async (currentScope: { workspaceId: string; projectId: string; workstreamId: string; eventId: string }) =>
+    createWorkstreamVerificationPublication(revisionState(platform)).readCurrent(currentScope);
+  let readiness: Awaited<ReturnType<typeof readIntegrationReadiness>>;
+  try { readiness = await readIntegrationReadiness(workspaceId, located.workstreamId, platform); }
+  catch { return { status: "unknown", eventId: scope.eventId, reason: "integration-plan-or-prerequisite-reader-unavailable" }; }
+  if (readiness.status === "unknown") return { status: "unknown", eventId: scope.eventId, reason: readiness.reason };
+  if (readiness.status === "waiting-dependencies") {
+    const waiting = await consumeVerifiedWorkstream(scope, platform.state, readCurrent);
+    return { status: "waiting-dependencies", waitingDependencies: true, eventId: scope.eventId, reason: readiness.reason,
+      ...(waiting.requestId ? { requestId: waiting.requestId } : {}) };
+  }
+
+  const sessions = platform.agents.sessions;
+  if (typeof sessions.sendMessage !== "function" || typeof sessions.getRequest !== "function" || typeof sessions.getRun !== "function") {
+    const unsupported = await consumeVerifiedWorkstream(scope, platform.state, readCurrent);
+    return { ...unsupported, reason: "manager-session-dispatch-or-receipt-api-unavailable" };
+  }
+  let authority: ManagerAuthority;
+  try { authority = await resolveCurrentIntegrationManagerAuthority(workspaceId, platform); }
+  catch (error) {
+    const reason = error instanceof Error ? error.message : "manager-current-authority-unavailable";
+    return { status: reason === "manager-selected-agent-does-not-match-owned-role-profile" ? "unsupported" : "unknown",
+      eventId: scope.eventId, reason: reason.slice(0, 200) };
+  }
+  let policy: { mode: string; toolNames: readonly string[] } | null;
+  try { policy = (await import("../session-execution-policy.ts")).INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY; }
+  catch { return { status: "unknown", eventId: scope.eventId, reason: "manager-restricted-tool-policy-unavailable" }; }
+  if (!policy || policy.mode !== "plugin-tools-only-v1"
+    || JSON.stringify([...policy.toolNames].sort()) !== JSON.stringify(MANAGER_EXECUTION_TOOLS)) {
+    return { status: "unknown", eventId: scope.eventId, reason: "manager-restricted-tool-policy-unavailable-or-mismatched" };
+  }
+  if (readiness.status !== "ready") return { status: "unknown", eventId: scope.eventId, reason: "integration-readiness-state-invalid" };
+  const port = platformManagerDispatchPort({ workspaceId, workstreamId: located.workstreamId,
+    eventId: scope.eventId, authority, planDigest: readiness.planDigest, plan: readiness.plan, platform });
+  return consumeVerifiedWorkstream(scope, platform.state, readCurrent, port);
+}
+
 /** Event-only Workspace job consumer. Core owns active invocation and lease checks. */
 export async function consumeVerifiedWorkstreamJob(job: Job, platformInput: SpsPlatformInvocationContext) {
   const platform = platformInput as Host;
@@ -256,41 +303,30 @@ export async function consumeVerifiedWorkstreamJob(job: Job, platformInput: SpsP
   }
   const located = await findCurrentEvent(job.companyId, job.eventId, platform);
   if (located.status !== "current") return located;
-  const scope = { workspaceId: job.companyId, projectId: job.companyId,
-    workstreamId: located.workstreamId, eventId: job.eventId };
-  const readCurrent = async (currentScope: { workspaceId: string; projectId: string; workstreamId: string; eventId: string }) =>
-    createWorkstreamVerificationPublication(revisionState(platform)).readCurrent(currentScope);
-  let readiness: Awaited<ReturnType<typeof readIntegrationReadiness>>;
-  try { readiness = await readIntegrationReadiness(job.companyId, located.workstreamId, platform); }
-  catch { return { status: "unknown" as const, eventId: job.eventId, reason: "integration-plan-or-prerequisite-reader-unavailable" }; }
-  if (readiness.status === "unknown") return { status: "unknown" as const, eventId: job.eventId, reason: readiness.reason };
-  if (readiness.status === "waiting-dependencies") {
-    const waiting = await consumeVerifiedWorkstream(scope, platform.state, readCurrent);
-    return { ...waiting, reason: readiness.reason };
-  }
+  const main = await consumeCurrentEvent(job.companyId, located, platform);
+  if (main.status === "stale" || main.status === "unknown" || main.status === "unsupported" || main.status === "conflict") return main;
 
-  const sessions = platform.agents.sessions;
-  if (typeof sessions.sendMessage !== "function" || typeof sessions.getRequest !== "function" || typeof sessions.getRun !== "function") {
-    const unsupported = await consumeVerifiedWorkstream(scope, platform.state, readCurrent);
-    return { ...unsupported, reason: "manager-session-dispatch-or-receipt-api-unavailable" };
+  const board = await readWorkstreams(job.companyId, job.companyId, platform);
+  if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) {
+    return { status: "unknown" as const, eventId: job.eventId, reason: "dependent-workstream-board-unavailable-or-over-bound" };
   }
-  let authority: ManagerAuthority;
-  try { authority = await resolveCurrentIntegrationManagerAuthority(job.companyId, platform); }
-  catch (error) {
-    const reason = error instanceof Error ? error.message : "manager-current-authority-unavailable";
-    return { status: "unknown" as const, eventId: job.eventId, reason: reason.slice(0, 200) };
+  const publication = createWorkstreamVerificationPublication(revisionState(platform));
+  const dependentOutcomes: EventConsumeResult[] = [];
+  for (const workstream of board.revision.workstreams) {
+    if (!workstream.spec.dependencies.includes(located.workstreamId)) continue;
+    const latest = await publication.readLatestCurrent({ workspaceId: job.companyId, projectId: job.companyId,
+      workstreamId: workstream.spec.id });
+    if (latest.status === "unknown") return { status: "unknown" as const, eventId: job.eventId,
+      reason: "dependent-verified-head-unavailable" };
+    if (latest.status === "stale") continue;
+    const dependent = await consumeCurrentEvent(job.companyId, { status: "current", workstreamId: workstream.spec.id,
+      snapshot: latest.snapshot }, platform);
+    dependentOutcomes.push(dependent);
   }
-  let policy: { mode: string; toolNames: readonly string[] } | null;
-  try { policy = (await import("../session-execution-policy.ts")).INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY; }
-  catch { return { status: "unknown" as const, eventId: job.eventId, reason: "manager-restricted-tool-policy-unavailable" }; }
-  if (!policy || policy.mode !== "plugin-tools-only-v1"
-    || JSON.stringify([...policy.toolNames].sort()) !== JSON.stringify(MANAGER_EXECUTION_TOOLS)) {
-    return { status: "unknown" as const, eventId: job.eventId, reason: "manager-restricted-tool-policy-unavailable-or-mismatched" };
-  }
-  if (readiness.status !== "ready") return { status: "unknown" as const, eventId: job.eventId, reason: "integration-readiness-state-invalid" };
-  const port = platformManagerDispatchPort({ workspaceId: job.companyId, workstreamId: located.workstreamId,
-    eventId: job.eventId, authority, planDigest: readiness.planDigest, plan: readiness.plan, platform });
-  return consumeVerifiedWorkstream(scope, platform.state, readCurrent, port);
+  const unresolved = dependentOutcomes.find(item => !["accepted", "waiting-dependencies", "stale"].includes(item.status));
+  if (unresolved) return { status: "unknown" as const, eventId: unresolved.eventId,
+    reason: `dependent-workstream-dispatch-${unresolved.status}:${unresolved.reason}` };
+  return { ...main, dependencyRescans: dependentOutcomes.map(item => ({ eventId: item.eventId, status: item.status, reason: item.reason })) };
 }
 
 /** Read capability for an already-dispatched, exact active Manager run. */

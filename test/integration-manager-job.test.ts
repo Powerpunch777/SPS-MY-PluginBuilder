@@ -30,7 +30,7 @@ const requestKey = { scopeKind: "company" as const, scopeId: WORKSPACE, namespac
   stateKey: `verified-consumption.v1.${createHash("sha256").update(`${WORKSPACE}\0ws-1`, "utf8").digest("hex")}` };
 const taskKey = integrationManagerSessionTaskKey(WORKSPACE, WORKSPACE, MANAGER);
 
-function managerHost(options: { selectedAgentId?: string; profileStatus?: string; sessionStatus?: string } = {}) {
+function managerHost(options: { selectedAgentId?: string; profileStatus?: string; sessionStatus?: string; pauseReason?: string } = {}) {
   const values = new Map<string, JsonValue>([
     [integrationManagerStateKey(WORKSPACE).stateKey, { schemaVersion: 1, workspaceId: WORKSPACE, revision: 2,
       selectedAgentId: options.selectedAgentId ?? MANAGER }],
@@ -52,7 +52,8 @@ function managerHost(options: { selectedAgentId?: string; profileStatus?: string
     agents: {
       owned: { async get() { return { status: "resolved", revision: 1, agent: { agentId: MANAGER,
         role: "integration-manager", status: options.profileStatus ?? "idle" } }; } },
-      async list() { return [{ id: MANAGER, companyId: WORKSPACE, status: options.profileStatus ?? "idle" }]; },
+      async list() { return [{ id: MANAGER, companyId: WORKSPACE, status: options.profileStatus ?? "idle",
+        ...(options.profileStatus === "paused" ? { pauseReason: options.pauseReason ?? "system" } : {}) }]; },
       sessions: {
         async list() { return [{ observationVersion: 1, sessionId: SESSION, agentId: MANAGER, companyId: WORKSPACE,
           status: options.sessionStatus ?? "active", taskKey, closedAt: null, contextState: "valid", managedAgentOwnership: "owned" }]; },
@@ -98,9 +99,13 @@ test("Manager authority requires selected owned identity and a current independe
   const f = managerHost();
   assert.deepEqual(await resolveCurrentIntegrationManagerAuthority(WORKSPACE, f.host), { agentId: MANAGER, sessionId: SESSION, taskKey });
   const mismatch = managerHost({ selectedAgentId: "66666666-6666-4666-8666-666666666666" });
-  await assert.rejects(resolveCurrentIntegrationManagerAuthority(WORKSPACE, mismatch.host), /manager-profile-not-current-and-active/u);
+  await assert.rejects(resolveCurrentIntegrationManagerAuthority(WORKSPACE, mismatch.host), /manager-selected-agent-does-not-match-owned-role-profile/u);
   const inactive = managerHost({ sessionStatus: "inactive" });
   await assert.rejects(resolveCurrentIntegrationManagerAuthority(WORKSPACE, inactive.host), /manager-session-not-current-owned-independent/u);
+  const systemPaused = managerHost({ profileStatus: "paused", pauseReason: "system" });
+  assert.deepEqual(await resolveCurrentIntegrationManagerAuthority(WORKSPACE, systemPaused.host), { agentId: MANAGER, sessionId: SESSION, taskKey });
+  const userPaused = managerHost({ profileStatus: "paused", pauseReason: "user" });
+  await assert.rejects(resolveCurrentIntegrationManagerAuthority(WORKSPACE, userPaused.host), /manager-workspace-membership-unavailable/u);
 });
 
 test("pending Core request authorizes Manager read before terminal run; terminal receipt then consumes ledger", async () => {
