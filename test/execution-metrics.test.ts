@@ -240,6 +240,30 @@ test("a known Run ID whose observation failed is not counted as an observed Run"
   assert.equal(result.summary.measuredRuns, 0);
 });
 
+test("an exact Core skipped receipt remains a no-Run observation in execution metrics", async () => {
+  const { f } = await setupVerifiedWorkstreamPlatform();
+  const sessions = f.platform.agents.sessions;
+  const read = sessions.getRequest.bind(sessions);
+  let firstSession: string | null = null, diagnosticReads = 0;
+  sessions.getRequest = async (sessionId: string, workspaceId: string, requestId: string, options?: { includeDiagnostic: true }) => {
+    firstSession ??= sessionId;
+    if (firstSession !== sessionId) return read(sessionId, workspaceId, requestId);
+    if (options?.includeDiagnostic) diagnosticReads++;
+    return { requestId, state: "uncertain" as const, runId: null,
+      ...(options?.includeDiagnostic ? { diagnostic: { kind: "not_started", wakeupStatus: "skipped" } } : {}) };
+  };
+  const before = { writes: f.writes, sends: f.sends };
+  const result = await readBuilderExecutionMetrics(W, f.platform);
+  assert.equal(result.status, "ready");
+  if (result.status !== "ready") return;
+  assert.equal(diagnosticReads, 1);
+  assert.equal(result.summary.observedRuns, 1);
+  assert.equal(result.runs[0]?.runStatus, "unknown");
+  assert.equal(result.runs[0]?.runId, null);
+  assert.equal(result.runs[0]?.reason, "worker-session-request-confirmed-not-started-no-automatic-retry");
+  assert.deepEqual({ writes: f.writes, sends: f.sends }, before);
+});
+
 test("foreign registry and malformed Workspace fail before Run reads", async () => {
   const { f } = await setupVerifiedWorkstreamPlatform();
   let reads = 0;

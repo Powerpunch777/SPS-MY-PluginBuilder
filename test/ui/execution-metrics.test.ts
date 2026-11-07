@@ -51,6 +51,19 @@ function metricsWithCommitAcceptance(overrides: Record<string, unknown> = {}) {
       ...(overrides.summary as Record<string, unknown> | undefined) } };
 }
 
+function metricsWithUnstartedRequest() {
+  const base = metrics();
+  const unresolved = { ...base.runs[0]!, runStatus: "unknown", normalEnded: false,
+    timing: null, queueMs: null, executionMs: null };
+  return { ...base, runs: [
+    { ...unresolved, taskId: "task-skipped", runId: null, reason: "worker-session-request-confirmed-not-started-no-automatic-retry" },
+    { ...unresolved, taskId: "task-unresolved", requestId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", runId: null,
+      reason: "worker-session-request-state-uncertain" },
+    { ...unresolved, taskId: "task-pending", requestId: "ffffffff-ffff-4fff-8fff-ffffffffffff", runId: null, runStatus: "pending",
+      reason: "worker-session-request-has-no-run-id-yet" },
+  ], summary: { observedRuns: 0, normalEndedRuns: 0, measuredRuns: 0, totalExecutionMs: null, totalQueueMs: null } };
+}
+
 async function loadMetricsPanel() {
   const temporary = await mkdtemp(path.join(projectRoot, PANEL_TEMP_PREFIX));
   const output = path.join(temporary, "ExecutionMetricsSection.mjs");
@@ -109,6 +122,16 @@ test("metrics projection distinguishes unknown, unmeasured timings, Run end, and
     ], summary: metrics().summary });
     assert.equal((parseDTO(unresolved, WORKSPACE) as { summary: { observedRuns: number } }).summary.observedRuns, 2,
       "pending/unknown observations with a known run ID are not counted as observed Runs");
+
+    const unstarted = metricsWithUnstartedRequest();
+    const unstartedMarkup = renderPanel(Panel, unstarted);
+    assert.match(unstartedMarkup, /task-skipped<\/td><td>worker<\/td><td>미시작 확인/u);
+    assert.match(unstartedMarkup, /task-unresolved<\/td><td>worker<\/td><td>상태 미확인/u);
+    assert.match(unstartedMarkup, /task-pending<\/td><td>worker<\/td><td>실행 배정 대기/u);
+    assert.doesNotMatch(unstartedMarkup, /confirmed-not-started|재실행/u);
+    const contradictory = { ...unstarted, runs: unstarted.runs.map((run, index) => index === 0
+      ? { ...run, runId: metrics().runs[0]!.runId } : run) };
+    assert.doesNotMatch(renderPanel(Panel, contradictory), /미시작 확인/u);
 
     const oldHost = metrics({ runs: [
       { ...metrics().runs[0], timing: null, queueMs: null, executionMs: null, reason: "host-run-timing-unavailable-or-inconsistent" },
@@ -210,10 +233,12 @@ test("Builder mounts execution metrics only in System and has no page-level hori
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.setContent("<div id='root'></div>");
     await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
-    await page.evaluate(value => (window as unknown as { mountBuilder(value: unknown): void }).mountBuilder(value), metrics());
+    await page.evaluate(value => (window as unknown as { mountBuilder(value: unknown): void }).mountBuilder(value), metricsWithUnstartedRequest());
     assert.equal(await page.getByRole("region", { name: "개발 실행 지표" }).count(), 0, "the panel is absent from the default Lead view");
     await page.getByRole("button", { name: "시스템" }).click();
     assert.equal(await page.getByRole("region", { name: "개발 실행 지표" }).count(), 1);
+    assert.equal(await page.getByRole("cell", { name: "미시작 확인", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("cell", { name: "상태 미확인", exact: true }).count(), 1);
     assert.notEqual(await page.getByRole("region", { name: "개발 실행 지표" }).locator("table").evaluate(element => getComputedStyle(element).color),
       "rgb(0, 0, 0)", "the table must not fall back to black text on the dark Workspace background");
     assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true, "390px viewport must not overflow horizontally");

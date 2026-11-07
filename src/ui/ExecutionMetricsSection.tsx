@@ -100,6 +100,15 @@ export function parseExecutionMetricsDTO(value: unknown, workspaceId: string): E
 }
 const duration = (value: number | null) => value === null ? "미측정" : `${(value / 1000).toLocaleString("ko-KR", { maximumFractionDigits: 2 })}초`;
 
+function runStatusLabel(run: ExecutionMetrics["runs"][number]) {
+  if (run.runStatus === "unknown" && run.runId === null
+    && run.reason === "worker-session-request-confirmed-not-started-no-automatic-retry") return "미시작 확인";
+  if (run.runStatus === "unknown") return "상태 미확인";
+  if (run.runStatus === "pending") return "실행 배정 대기";
+  if (run.runStatus === "unsupported") return "조회 미지원";
+  return run.runStatus;
+}
+
 export function ExecutionMetricsPanel({ value, workspaceId, loading, error, onRefresh }: {
   value: unknown; workspaceId: string; loading?: boolean; error?: boolean; onRefresh?(): void;
 }) {
@@ -122,7 +131,7 @@ export function ExecutionMetricsPanel({ value, workspaceId, loading, error, onRe
         <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", textAlign: "left", color: "var(--builder-text,#ededed)" }}><thead><tr>
           {["Workstream / Task", "역할", "Run 상태", "실행 시간", "큐 대기", "Commit 인수 대기"].map(label => <th key={label} style={{ padding: 8 }}>{label}</th>)}
         </tr></thead><tbody>{metrics.runs.map(run => <tr key={`${run.requestId}:${run.role}`}>
-          <td style={{ padding: 8, overflowWrap: "anywhere" }}>{run.workstreamId} / {run.taskId}</td><td>{run.role}</td><td>{run.runStatus}</td>
+          <td style={{ padding: 8, overflowWrap: "anywhere" }}>{run.workstreamId} / {run.taskId}</td><td>{run.role}</td><td>{runStatusLabel(run)}</td>
           <td>{duration(run.executionMs)}</td><td>{duration(run.queueMs)}</td><td>{duration(run.commitAcceptanceMs ?? null)}</td>
         </tr>)}</tbody></table>
       </div>}
