@@ -166,7 +166,7 @@ export async function resolveCurrentIntegrationManagerAuthority(workspaceId: str
   const owned = platform.agents.owned;
   if (!owned || typeof owned.get !== "function") throw new Error("manager-owned-profile-api-unavailable");
   const receipt = await owned.get({ companyId: workspaceId, pluginAgentKey: "integration-manager" });
-  if (!exactObject(receipt) || !["created", "resolved"].includes(String(receipt.status))
+  if (!exactObject(receipt) || receipt.status !== "created" && receipt.status !== "resolved"
     || !Number.isSafeInteger(receipt.revision) || (receipt.revision as number) < 1 || !exactObject(receipt.agent)) {
     throw new Error("manager-owned-profile-unavailable");
   }
@@ -316,6 +316,7 @@ export async function consumeVerifiedWorkstreamJob(job: Job, platformInput: SpsP
     if (!workstream.spec.dependencies.includes(located.workstreamId)) continue;
     const latest = await publication.readLatestCurrent({ workspaceId: job.companyId, projectId: job.companyId,
       workstreamId: workstream.spec.id });
+    if (latest.status === "unknown" && latest.reason === "verified-head-unavailable") continue;
     if (latest.status === "unknown") return { status: "unknown" as const, eventId: job.eventId,
       reason: "dependent-verified-head-unavailable" };
     if (latest.status === "stale") continue;
