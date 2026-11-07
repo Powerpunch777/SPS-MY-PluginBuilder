@@ -28,6 +28,21 @@ export const READ_SPEC_ASSURANCE_PACK_TOOL = Object.freeze({
 
 const firstId = { type: "string", minLength: 1, maxLength: 160 };
 const idList = (maxItems, minItems = 0) => ({ type: "array", minItems, maxItems, uniqueItems: true, items: firstId });
+const gapScope = { projectId: firstId, expectedBaselineRevisionId: firstId, requirementId: firstId };
+const gapRequired = Object.keys(gapScope);
+
+export const RECORD_SPEC_GAPS_TOOL = Object.freeze({
+  name: "builder.record-spec-assurance-gaps", displayName: "Record current specification gap candidates",
+  description: "Main evaluates the selected requirement against its exact current approved Baseline and records candidate gaps. Do not supply findings. A candidate is not a resolved decision, verified coverage, or permission.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false, required: gapRequired, properties: gapScope }),
+});
+
+export const READ_SPEC_GAPS_TOOL = Object.freeze({
+  name: "builder.read-spec-assurance-gaps", displayName: "Read recorded specification gap candidates",
+  description: "Main reads candidates for the exact current approved Baseline and requirement. For subsequent pages pass the returned observation revision and next offset. Missing candidates are not automatically resolved.",
+  parametersSchema: Object.freeze({ type: "object", additionalProperties: false, required: gapRequired,
+    properties: { ...gapScope, observationRevisionId: firstId, offset: { type: "integer", minimum: 0, maximum: 256 } } }),
+});
 const predicate = { type: "object", additionalProperties: false, properties: {
   all: idList(1000), any: idList(1000), none: idList(1000),
 } };

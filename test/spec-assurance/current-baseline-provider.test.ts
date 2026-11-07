@@ -97,12 +97,11 @@ test("reads the published current baseline and actual cited user turn, but leave
   assert(result.gaps.some(gap => gap.reason === "no-applicable-domain-rules"));
 });
 
-test("registered inspection is Main-scoped, Workspace-bound, and performs no writes or worker effects", async () => {
-  const f = await publishInitial();
+async function setupRouteBaseline(f: ReturnType<typeof fixture>) {
   const routeStore = createDesignBaselineStore(WORKSPACE, WORKSPACE, f.state);
   const routeBaseline = f.baseline();
-  const routePublished = await routeStore.publish({ expectedBaseRevisionId: null, revision: { ...routeBaseline,
-    projectId: WORKSPACE, specification: { ...routeBaseline.specification, projectId: WORKSPACE } } });
+  const baseline = { ...routeBaseline, projectId: WORKSPACE, specification: { ...routeBaseline.specification, projectId: WORKSPACE } };
+  const routePublished = await routeStore.publish({ expectedBaseRevisionId: null, revision: baseline });
   assert.equal(routePublished.status, "published");
   const bindingKey: SpsStateKey = { scopeKind: "company", scopeId: WORKSPACE, namespace: "sonpark.my-builder", stateKey: "lead-agent.v1" };
   const sessionsKey: SpsStateKey = { scopeKind: "company", scopeId: WORKSPACE, namespace: "sonpark.my-builder", stateKey: "lead-sessions.v1.1" };
@@ -110,13 +109,123 @@ test("registered inspection is Main-scoped, Workspace-bound, and performs no wri
   f.values.set(fullKey(sessionsKey), { workspaceId: WORKSPACE, selectionRevision: 1, agentId: AGENT,
     sessions: { main: SESSION, "ui-design": null, background: null, "cto-inbox": null,
       decisions: "77777777-7777-4777-8777-777777777777", "integration-review": null } });
+  let cancellationRequested = false;
+  Object.assign(f.platform.agents, { sessions: { async getRun(sessionId: string, companyId: string, runId: string) {
+    assert.equal(sessionId, SESSION); assert.equal(companyId, WORKSPACE); assert.equal(runId, RUN);
+    return { runId, status: "running", cancellationRequested, termination: "not_applicable" };
+  } } });
+  return { routeStore, baseline, runContext: { companyId: WORKSPACE, agentId: AGENT, runId: RUN, sessionId: SESSION },
+    setCancelled(value: boolean) { cancellationRequested = value; } };
+}
+
+test("registered Main tools persist, deduplicate and read candidate gaps without allowing forged findings", async () => {
+  const f = fixture();
+  const { routeStore, baseline, runContext, setCancelled } = await setupRouteBaseline(f);
+  const params = { projectId: WORKSPACE, expectedBaselineRevisionId: baseline.revisionId, requirementId: "REQ-1" };
+  const record = createBuilderPlatform().tools.find(tool => tool.name === "builder.record-spec-assurance-gaps")!;
+  const read = createBuilderPlatform().tools.find(tool => tool.name === "builder.read-spec-assurance-gaps")!;
+  const run = (tool: typeof record, input: unknown = params, context = runContext) =>
+    Promise.resolve().then(() => tool.handler(input as never, context as never, f.platform));
+  assert.deepEqual((await run(read)).data, { status: "not-checked" });
+  await assert.rejects(run(record, { ...params, gaps: [{ status: "resolved" }] }));
+  await assert.rejects(run(record, { ...params, projectId: OTHER_WORKSPACE }), /authenticated Workspace/);
+  await assert.rejects(run(record, params, { ...runContext, sessionId: "77777777-7777-4777-8777-777777777777" }), /Only the Main/);
+  await assert.rejects(run(record, { ...params, requirementId: "missing" }), /not in the current approved Baseline/);
+  setCancelled(true);
+  await assert.rejects(run(record), /active, uncancelled Main Run/);
+  setCancelled(false);
+  assert(![...f.values.keys()].some(key => key.includes("d3-gap-")));
+
+  let lostResponse = false;
+  const cas = f.state.compareAndSet!;
+  f.state.compareAndSet = async (key, expected, value) => {
+    const response = await cas(key, expected, value);
+    if (response.swapped && key.stateKey.startsWith("d3-gap-") && key.stateKey.includes("-head.v1.") && !lostResponse) {
+      lostResponse = true;
+      throw new Error("Observation persisted but the response was lost");
+    }
+    return response;
+  };
+  const saved = (await run(record)).data as { status: string; revisionId: string; checkerStatus: string; retainedCandidateCount: number };
+  assert.equal(saved.status, "recorded");
+  assert.equal(saved.checkerStatus, "UNKNOWN");
+  assert(saved.retainedCandidateCount > 0);
+  assert(lostResponse);
+  const restarted = createBuilderPlatform().tools.find(tool => tool.name === record.name)!;
+  const replay = (await run(restarted)).data as { status: string; revisionId: string };
+  assert.equal(replay.status, "existing");
+  assert.equal(replay.revisionId, saved.revisionId);
+  const readback = (await run(read)).data as { head: { revisionId: string }; candidates: { status: string; resolutionEvidence: string[] }[] };
+  assert.equal(readback.head.revisionId, saved.revisionId);
+  assert(readback.candidates.every(gap => gap.status === "candidate" && gap.resolutionEvidence.length === 0));
+
+  const next = { ...baseline, revisionId: "baseline-r2", specification: { ...baseline.specification, revisionId: "spec-r2" },
+    graph: { ...baseline.graph, approvedSpecRevisionId: "spec-r2", graphRevisionId: "graph-r2" } };
+  const newer = await routeStore.publish({ expectedBaseRevisionId: baseline.revisionId, revision: next });
+  assert.equal(newer.status, "published");
+  assert.deepEqual((await run(read)).data, { status: "stale" });
+  assert.deepEqual((await run(record)).data, { status: "stale" });
+  assert.deepEqual((await run(read, { ...params, expectedBaselineRevisionId: next.revisionId })).data, { status: "not-checked" });
+  assert.equal([...f.values.keys()].filter(key => key.includes("d3-gap-") && key.includes("-revision.v1.")).length, 1);
+});
+
+test("a partial recheck never erases an earlier candidate or silently changes a pinned page", async () => {
+  const f = fixture();
+  const { baseline, runContext } = await setupRouteBaseline(f);
+  const params = { projectId: WORKSPACE, expectedBaselineRevisionId: baseline.revisionId, requirementId: "REQ-1" };
+  const tools = createBuilderPlatform().tools;
+  const record = tools.find(tool => tool.name === "builder.record-spec-assurance-gaps")!;
+  const read = tools.find(tool => tool.name === "builder.read-spec-assurance-gaps")!;
+  const first = (await record.handler(params, runContext as never, f.platform)).data as { revisionId: string };
+  type Readback = { candidates: { fingerprint: string; presentInLatestObservation: boolean }[] };
+  const observed = (await read.handler(params, runContext as never, f.platform)).data as Readback;
+  assert(observed.candidates.length > 0);
+  assert(observed.candidates.every(gap => gap.presentInLatestObservation));
+  const sourceKey = [...f.values.keys()].find(key => key.includes(`lead-chat.turn.v1.${TURN}`))!;
+  f.values.delete(sourceKey);
+  const second = (await record.handler(params, runContext as never, f.platform)).data as { revisionId: string; coverageAuthority: string };
+  assert.notEqual(second.revisionId, first.revisionId);
+  assert.equal(second.coverageAuthority, "failed");
+  const latest = (await read.handler(params, runContext as never, f.platform)).data as Readback;
+  assert(observed.candidates.every(gap => latest.candidates.some(row => row.fingerprint === gap.fingerprint)));
+  assert(latest.candidates.some(gap => !gap.presentInLatestObservation));
+  assert.deepEqual((await read.handler({ ...params, observationRevisionId: first.revisionId, offset: 1 }, runContext as never, f.platform)).data,
+    { status: "stale" });
+});
+
+test("a Baseline change during publication cannot carry gap candidates into the new revision", async () => {
+  const f = fixture();
+  const { routeStore, baseline, runContext } = await setupRouteBaseline(f);
+  const params = { projectId: WORKSPACE, expectedBaselineRevisionId: baseline.revisionId, requirementId: "REQ-1" };
+  const tools = createBuilderPlatform().tools;
+  const record = tools.find(tool => tool.name === "builder.record-spec-assurance-gaps")!;
+  const read = tools.find(tool => tool.name === "builder.read-spec-assurance-gaps")!;
+  const next = { ...baseline, revisionId: "baseline-r2", specification: { ...baseline.specification, revisionId: "spec-r2" },
+    graph: { ...baseline.graph, approvedSpecRevisionId: "spec-r2", graphRevisionId: "graph-r2" } };
+  const cas = f.state.compareAndSet!;
+  f.state.compareAndSet = async (key, expected, value) => {
+    if (key.stateKey.startsWith("d3-gap-") && key.stateKey.includes("-head.v1.")) {
+      const advanced = await routeStore.publish({ expectedBaseRevisionId: baseline.revisionId, revision: next });
+      assert.equal(advanced.status, "published");
+    }
+    return cas(key, expected, value);
+  };
+  const historical = (await record.handler(params, runContext as never, f.platform)).data as { status: string; baselineRevisionId: string };
+  assert.equal(historical.status, "recorded-historical");
+  assert.equal(historical.baselineRevisionId, baseline.revisionId);
+  assert.deepEqual((await read.handler({ ...params, expectedBaselineRevisionId: next.revisionId }, runContext as never, f.platform)).data,
+    { status: "not-checked" });
+});
+
+test("registered inspection is Main-scoped, Workspace-bound, and performs no writes or worker effects", async () => {
+  const f = await publishInitial();
+  const { runContext } = await setupRouteBaseline(f);
   const stateCount = f.values.size;
   let writes = 0;
   const originalCas = f.state.compareAndSet;
   f.state.compareAndSet = async (...args) => { writes++; return originalCas!(...args); };
   const tool = createBuilderPlatform().tools.find(value => value.name === "builder.inspect-spec-assurance");
   assert(tool, "inspection must be registered on the actual platform contract");
-  const runContext = { companyId: WORKSPACE, agentId: AGENT, runId: RUN, sessionId: SESSION };
   const output = await tool.handler({ projectId: WORKSPACE }, runContext as never, f.platform) as { data: { result: { status: string; identity: { specRevisionId: string } } } };
   assert.equal(output.data.result.status, "UNKNOWN");
   assert.equal(output.data.result.identity.specRevisionId, "spec-r1");

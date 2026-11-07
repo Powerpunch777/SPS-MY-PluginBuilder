@@ -4,3 +4,5 @@ export const SPEC_ASSURANCE_PACK_PROPOSAL_TOOL: Declaration<"builder.propose-spe
 export const READ_SPEC_ASSURANCE_PACK_TOOL: Declaration<"builder.read-spec-assurance-pack">;
 export const READ_FIRST_DESIGN_REVIEW_TOOL: Declaration<"builder.read-first-design-review">;
 export const PROPOSE_FIRST_DESIGN_REVIEW_TOOL: Declaration<"builder.propose-first-design-review">;
+export const RECORD_SPEC_GAPS_TOOL: Declaration<"builder.record-spec-assurance-gaps">;
+export const READ_SPEC_GAPS_TOOL: Declaration<"builder.read-spec-assurance-gaps">;

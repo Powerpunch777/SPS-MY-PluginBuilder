@@ -47,7 +47,9 @@ import { READ_CONSULTATION_ANALYSIS_TOOL } from "./tool-declarations.mjs";
 import { createBaselineBodySource } from "./project-documents/baseline-body-source.ts";
 import { proposeSpecAssurancePack } from "./spec-assurance/pack-producer.ts";
 import { createSpecAssurancePackStore } from "./spec-assurance/pack-store.ts";
-import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL } from "./spec-assurance/tool-declarations.mjs";
+import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,
+  RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL } from "./spec-assurance/tool-declarations.mjs";
+import { readCurrentSpecGaps, recordCurrentSpecGaps } from "./spec-assurance/gap-observations.ts";
 import { createUiContractStore } from "./ui-contracts/store.ts";
 import { parseUiApproval, parseUiRevision, revisionDigest, type UiApproval, type UiRevision } from "./ui-contracts/domain.ts";
 import { uiReviewApprovalPrompt, uiReviewRequestId } from "./ui-contracts/review-dispatch.ts";
@@ -929,6 +931,18 @@ export function createBuilderPlatform() {
     { name: INSPECT_SPEC_ASSURANCE_TOOL.name, declaration: { displayName: INSPECT_SPEC_ASSURANCE_TOOL.displayName,
       description: INSPECT_SPEC_ASSURANCE_TOOL.description, parametersSchema: INSPECT_SPEC_ASSURANCE_TOOL.parametersSchema },
       handler: (params, context, platform) => inspectSpecAssurance(params, context, platform) },
+    { name: RECORD_SPEC_GAPS_TOOL.name, declaration: { displayName: RECORD_SPEC_GAPS_TOOL.displayName,
+      description: RECORD_SPEC_GAPS_TOOL.description, parametersSchema: RECORD_SPEC_GAPS_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Specification gap observation only. This does not resolve a gap or approve a decision.",
+        data: await recordCurrentSpecGaps(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: READ_SPEC_GAPS_TOOL.name, declaration: { displayName: READ_SPEC_GAPS_TOOL.displayName,
+      description: READ_SPEC_GAPS_TOOL.description, parametersSchema: READ_SPEC_GAPS_TOOL.parametersSchema },
+      handler: async (params, context, platform) => ({
+        content: "Recorded specification gap candidates for this Baseline and requirement.",
+        data: await readCurrentSpecGaps(params, context, platform) as unknown as JsonValue,
+      }) },
     { name: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.name, declaration: { displayName: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.displayName,
       description: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.description, parametersSchema: PUBLISH_TECHNOLOGY_DECISIONS_TOOL.parametersSchema },
       handler: (params, context, platform) => publishLeadTechnologyDecisions(params, context, platform) },

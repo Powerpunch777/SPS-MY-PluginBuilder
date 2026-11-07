@@ -37,6 +37,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   const manifestNames = manifestTools.map(tool => tool.name);
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   const specializedOnly = new Set<string>(["builder.read-cto-intake", "builder.answer-cto-question",
+    "builder.read-cto-questions", "builder.review-cto-question",
     "builder.propose-ui-contract", "builder.request-final-review", "builder.record-reuse-candidate",
     "builder.read-task-source-file", "builder.write-task-source-file", "builder.delete-task-source-file", "builder.submit-task-source",
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
@@ -81,7 +82,8 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
 test("Lead channel policies preserve shared reads and keep formal writes Main-only", () => {
   const policies = Object.fromEntries(LEAD_CHANNELS.map(channel => [channel, policyForLeadChannel(channel)]));
   const formalWrites = ["builder.publish-design-baseline", "builder.publish-technology-decisions",
-    "builder.create-cto", "builder.publish-workstream", "builder.dispatch-workstream", "builder.attest-final-packet", "builder.propose-first-design-review"];
+    "builder.create-cto", "builder.publish-workstream", "builder.dispatch-workstream", "builder.attest-final-packet",
+    "builder.propose-first-design-review", "builder.record-spec-assurance-gaps"];
   for (const channel of LEAD_CHANNELS) {
     const allowed = new Set(policies[channel]!.toolNames);
     for (const read of ["builder.read-solution", "builder.read-design-draft", "builder.read-design-sources",
@@ -93,6 +95,9 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
     assert.equal(allowed.has("builder.read-change-impact"), channel === "main" || channel === "integration-review");
     assert.equal(allowed.has("builder.read-reuse-candidates"), channel === "main" || channel === "background");
     assert.equal(allowed.has("builder.record-reuse-candidate"), channel === "background");
+    assert.equal(allowed.has("builder.read-spec-assurance-gaps"), channel === "main");
+    assert.equal(allowed.has("builder.read-cto-questions"), channel === "cto-inbox");
+    assert.equal(allowed.has("builder.review-cto-question"), channel === "cto-inbox");
     if (channel === "main") for (const write of formalWrites) assert.ok(allowed.has(write), write);
     else for (const write of formalWrites) assert.ok(!allowed.has(write), `${channel} must not have ${write}`);
   }
@@ -106,8 +111,6 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
   for (const channel of LEAD_CHANNELS.filter(channel => channel !== "main")) {
     assert.ok(!policyForLeadChannel(channel).toolNames.includes("builder.read-consultation-analysis"));
   }
-  assert.ok(policyForLeadChannel("cto-inbox").toolNames.includes("builder.review-cto-question"));
-  assert.ok(policyForLeadChannel("integration-review").toolNames.includes("builder.review-cto-question"));
   assert.ok(policyForLeadChannel("integration-review").toolNames.includes("builder.request-final-review"));
   assert.ok(!policyForLeadChannel("main").toolNames.includes("builder.request-final-review"));
   assert.ok(LEAD_CHANNELS.every(channel => !policyForLeadChannel(channel).toolNames.includes("builder.final-review-decision")));

@@ -514,6 +514,12 @@ async function evaluateSpecAssuranceWithCoverage(input: AssuranceInput, trustedC
       .localeCompare(`${b.sourceId}\0${b.sourceDigest}\0${b.revisionId}`))) });
 }
 
+export function assuranceGapFingerprint(identity: AssuranceResult["identity"], gap: Pick<AssuranceGap,
+  "requirementId" | "ruleId" | "sourceIds" | "uiIds" | "contractIds" | "workstreamIds" | "taskIds" | "reason">) {
+  return hash(JSON.stringify([identity.workspaceId, identity.projectId, identity.specRevisionId, identity.specDigest,
+    gap.requirementId, gap.ruleId, gap.sourceIds, gap.uiIds, gap.contractIds, gap.workstreamIds, gap.taskIds, gap.reason]));
+}
+
 function makeGap(input: AssuranceInput, requirementId: string, ruleId: string, reason: string,
   trustedCoverage: SpecCoverageResult | null): AssuranceGap {
   const sourceIds = [...new Set(trustedCoverage?.targets.find(item => item.targetKind === "requirement" && item.targetId === requirementId
@@ -523,8 +529,8 @@ function makeGap(input: AssuranceInput, requirementId: string, ruleId: string, r
   const contractIds = [...new Set(input.scope.contractIds ?? [])].sort();
   const workstreamIds = [...new Set(input.scope.workstreamIds ?? [])].sort();
   const taskIds = [...new Set(input.scope.taskIds ?? [])].sort();
-  const fingerprint = hash(JSON.stringify([input.identity.workspaceId, input.identity.projectId, input.identity.specRevisionId,
-    input.identity.specDigest, requirementId, ruleId, sourceIds, uiIds, contractIds, workstreamIds, taskIds, reason]));
+  const fingerprint = assuranceGapFingerprint(input.identity, { requirementId, ruleId, sourceIds, uiIds, contractIds,
+    workstreamIds, taskIds, reason });
   const detectionMethod = reason.startsWith("coverage-") ? "coverage-evaluator"
     : reason.startsWith("excluded-combination:") || reason.startsWith("combination-not-modelled:")
       ? "bounded-transition-model" : "checker-integration-unavailable";
