@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { runAcceptance as baselineAcceptance } from "./core-host-acceptance.mjs";
+import { resolveLiveDesignTestModel } from "./live-design-acceptance-model.mjs";
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function eventually(read, check, label, timeout = 45_000) {
@@ -18,6 +19,7 @@ async function eventually(read, check, label, timeout = 45_000) {
 // Explicitly authorized operator only. No arbitrary code, shell, user profile
 // changes or provider substitution; real account usage is never the default.
 export async function runDesignAcceptance(context, questionAnswers = false, ctoRegistrations = false, recordBaseline = false, workstreamDelivery = false) {
+  const modelOverride = resolveLiveDesignTestModel(process.env.SPS_BUILDER_LIVE_DESIGN_TEST_MODEL);
   assert.equal(process.env.SPS_BUILDER_LIVE_CODEX, "1");
   assert.ok([questionAnswers, ctoRegistrations, recordBaseline, workstreamDelivery].filter(Boolean).length <= 1);
   const selectedOptIn = workstreamDelivery ? "SPS_BUILDER_LIVE_WORKSTREAMS" : recordBaseline ? "SPS_BUILDER_LIVE_BASELINE" : ctoRegistrations ? "SPS_BUILDER_LIVE_CTOS"
@@ -48,7 +50,7 @@ export async function runDesignAcceptance(context, questionAnswers = false, ctoR
   const agent = await request(`/api/companies/${company.id}/agents`, { method: "POST", body: {
     name: "Isolated authorized design Lead", role: "engineer", adapterType: "codex_local",
     adapterConfig: { engine: "cli", cwd: workingDirectory, timeoutSec: 180, graceSec: 3,
-      dangerouslyBypassApprovalsAndSandbox: false },
+      dangerouslyBypassApprovalsAndSandbox: false, ...(modelOverride ?? {}) },
     instructionsBundle: { files: { "AGENTS.md": `Authorized design-only test. Use only the sps-plugin-session MCP list_plugin_tools and execute_plugin_tool tools, and only Builder read-design-sources, read-design-draft, propose-design${questionAnswers ? " and resolve-design-question" : ctoRegistrations ? ", create-cto and list-ctos (logical identity/session registration only, never execution)" : recordBaseline || workstreamDelivery ? ", read-first-design-review, propose-first-design-review, read-design-baseline, publish-design-baseline and read-solution" : ""}${d3Tools}${workstreamDelivery ? ", read-technology-decisions, publish-technology-decisions, create-cto, list-ctos, read-workstreams, publish-workstream and dispatch-workstream (Lead planning only); in the separately registered CTO session, only read-cto-memory, update-cto-memory, read-cto-workstream and acknowledge-workstream for the exact Core-bound assignment" : ""} operations. Follow the role and stage of the current run. Core's per-session tool policy is authoritative. Never run commands, edit/read files, generate code, search the web, create Core Agents or contact other services. Chat is not first-design approval. Publish the first Baseline only after reading its exact stored user approval and an explicit publication request. A write with an unknown outcome must not be retried; reconcile it by reading. Do not claim external legal approval, implementation or delivery.` } },
   } });
   const data = (key, params = {}, companyId = company.id) => request(`/api/plugins/${plugin.id}/data/${key}`, {
