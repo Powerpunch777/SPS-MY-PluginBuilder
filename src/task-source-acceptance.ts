@@ -278,7 +278,7 @@ async function verifyProducerRun(current: Current, submission: TaskSourceSubmiss
   }
   const run = await sessions.getRun(worker.sessionId, current.workspaceId, submission.producer.runId);
   await current.assertCurrent();
-  const runRow = run && typeof run === "object" ? exactToolRecord(run, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output"]) : null;
+  const runRow = run && typeof run === "object" ? exactToolRecord(run, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing"]) : null;
   if (!runRow || runRow.runId !== submission.producer.runId || typeof runRow.status !== "string"
     || !["running", "succeeded", "failed", "cancelled", "interrupted", "timed_out"].includes(runRow.status)) {
     throw new Error("Task producer Run identity could not be verified.");

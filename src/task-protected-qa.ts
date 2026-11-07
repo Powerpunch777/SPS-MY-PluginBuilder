@@ -252,7 +252,7 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
     throw new Error("The prepared QA Worker has no exact authoritative dispatch request and Run.");
   }
   const qaRun = exactToolRecord(await sessions.getRun(qaWorker.sessionId, context.companyId, requestRow.runId),
-    ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output"]);
+    ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing"]);
   const allowTerminalQaRun = !qaActor && !!input.runId;
   const activeQaRun = qaRun.status === "running" && qaRun.cancellationRequested === false && qaRun.termination === "not_applicable";
   const closedQaRun = allowTerminalQaRun && ["succeeded", "failed", "cancelled", "interrupted", "timed_out"].includes(qaRun.status as string);
@@ -324,7 +324,7 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
     if (!currentReceipt || currentReceipt.requestId !== qaRequestId || currentReceipt.state !== "submitted"
       || currentReceipt.runId !== requestRow.runId) throw new Error("The exact QA Worker dispatch request changed during protected QA preparation.");
     const currentRun = exactToolRecord(await sessions.getRun!(qaWorker.sessionId, context.companyId, requestRow.runId as string),
-      ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output"]);
+      ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing"]);
     const currentRunActive = currentRun.status === "running" && currentRun.cancellationRequested === false
       && currentRun.termination === "not_applicable";
     const currentRunClosed = allowTerminalQaRun && ["succeeded", "failed", "cancelled", "interrupted", "timed_out"]

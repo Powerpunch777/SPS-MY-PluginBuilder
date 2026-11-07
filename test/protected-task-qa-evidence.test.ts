@@ -29,7 +29,8 @@ const runKey = (runId: string) => ({ runId, status: "running", cancellationReque
   termination: "not_applicable", errorCode: null, error: null });
 
 // The Core and Host methods are DTO fixtures. This does not run a protected process or QA model.
-async function setup() {
+async function setup(options: Readonly<{ timing?: boolean; wrongProducerRun?: boolean; cancelQaRun?: boolean;
+  unrelatedRunField?: boolean; onEnqueue?: () => void }> = {}) {
   const f = await fixture(P);
   await dispatchCtoWorkstream(f.params, ctx(), f.platform);
   const ctoRunId = [...f.runs.keys()][0]!;
@@ -110,13 +111,19 @@ async function setup() {
   const originalGetRun = sessions.getRun.bind(sessions);
   const runStatuses = new Map([[DEV_RUN, "running"], [QA_RUN, "running"]]);
   (sessions as any).getRun = async (sessionId: string, companyId: string, runId: string) => runStatuses.has(runId)
-    ? { ...runKey(runId), status: runStatuses.get(runId) } : originalGetRun(sessionId, companyId, runId);
+    ? { ...runKey(options.wrongProducerRun && runId === DEV_RUN ? QA_RUN : runId), status: runStatuses.get(runId),
+      ...(options.timing ? { timing: { createdAt: now, startedAt: now, finishedAt: null } } : {}),
+      ...(options.unrelatedRunField ? { callerApproved: true } : {}) } : originalGetRun(sessionId, companyId, runId);
   const accepted = await acceptCtoTaskSourceSubmission({ projectId: P, ctoId: CTO, workstreamId: "ws-1", taskId: "task-dev",
     submissionId: submitted.submission!.submissionId }, ctoContext, f.platform);
   assert.equal(accepted.status, "accepted");
   (sessions as any).getRun = async (sessionId: string, companyId: string, runId: string) => runStatuses.has(runId)
-    ? { ...runKey(runId), status: runStatuses.get(runId), cancellationRequested: false,
-      termination: runStatuses.get(runId) === "succeeded" ? "confirmed" : "not_applicable" }
+    ? { ...runKey(runId), status: runStatuses.get(runId),
+      termination: options.cancelQaRun && runId === QA_RUN ? "pending"
+        : runStatuses.get(runId) === "succeeded" ? "confirmed" : "not_applicable",
+      cancellationRequested: options.cancelQaRun === true && runId === QA_RUN,
+      ...(options.timing ? { timing: { createdAt: now, startedAt: now, finishedAt: null } } : {}),
+      ...(options.unrelatedRunField ? { callerApproved: true } : {}) }
     : originalGetRun(sessionId, companyId, runId);
 
   let reportReceiptDigest = "4".repeat(64);
@@ -129,7 +136,7 @@ async function setup() {
       childTerminationConfirmed: true, jobEmpty: true, profileCleanupSucceeded: true, sandboxCleanupSucceeded: true, fixtureMustBeRetained: false },
     timestamps: { createdAt: now, claimedAt: now, startedAt: now, finishedAt: now }, qaVerdict: "not-established" });
   Object.assign(f.platform, { protectedTests: {
-    async enqueueApprovedV1(input: Record<string, string>) { return { ...coreRow(input.subjectKey), status: "queued", termination: "not_applicable", receipt: null }; },
+    async enqueueApprovedV1(input: Record<string, string>) { options.onEnqueue?.(); return { ...coreRow(input.subjectKey), status: "queued", termination: "not_applicable", receipt: null }; },
     async getRunV1(_companyId: string, _runId: string, subjectKeyHash: string) {
       const targetSubject = (await import("../src/task-qa-run-references.ts")).createTaskQaRunReferenceStore(
         { workspaceId: W, projectId: P, ctoId: CTO, workstreamId: "ws-1", qaTaskId: "task-qa" }, f.state as never);
@@ -171,6 +178,25 @@ async function setup() {
   return { f, ctoNow, reportStore, referenceStore, reportParams, workers, read() { return readCurrentProtectedTaskQaEvidence({ scope: { workspaceId: W, projectId: P, workstreamId: "ws-1", taskId: "task-dev" },
     ctoId: CTO, runContext: ctoNow, platform: f.platform }); } };
 }
+
+test("registered source acceptance and QA admission accept optional Run timing without loosening authority", async t => {
+  await t.test("current producer and QA Runs with timing complete the existing scoped path", async () => {
+    const f = await setup({ timing: true });
+    assert.equal((await f.read()).status, "available");
+  });
+  await t.test("a different producer Run identity still blocks source acceptance", async () => {
+    await assert.rejects(setup({ timing: true, wrongProducerRun: true }), /Task producer Run identity could not be verified/u);
+  });
+  await t.test("cancelled QA Run still blocks admission before protected enqueue", async () => {
+    let enqueues = 0;
+    await assert.rejects(setup({ timing: true, cancelQaRun: true, onEnqueue: () => { enqueues += 1; } }),
+      /active uncancelled Worker\/QA Run/u);
+    assert.equal(enqueues, 0);
+  });
+  await t.test("unrelated Run fields remain rejected", async () => {
+    await assert.rejects(setup({ timing: true, unrelatedRunField: true }), /Invalid Builder tool fields/u);
+  });
+});
 
 test("current CTO can read exact current Task/report/Core evidence without another run", async () => {
   const f = await setup();
