@@ -8,6 +8,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { build } from "esbuild";
 import { createEmptyBuilderSnapshot } from "../src/domain/snapshot.ts";
 import type { BuilderSnapshot } from "../src/domain/model.ts";
+import { setupVerifiedWorkstreamPlatform } from "./fixtures/verified-workstream-platform.ts";
+import { createDesignBaselineStore } from "../src/design-baseline-tools.ts";
+import { W } from "./fixtures/cto-platform.ts";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const primaryBridge = "__spsPluginBridge__";
@@ -60,10 +63,12 @@ test("BuilderPage uses the public UI bridge for scoped data and action hooks", a
       data: null, loading: false, error: null, refresh() {},
     };
     let actionCalls = 0;
+    let keyedData: Record<string, unknown> | null = null;
     (globalThis as Record<string, unknown>)[primaryBridge] = {
       sdkUi: {
         useHostContext() { hookCalls.push(["context", []]); return hostContext; },
-        usePluginData(...args: unknown[]) { hookCalls.push(["data", args]); return pluginData; },
+        usePluginData(...args: unknown[]) { hookCalls.push(["data", args]);
+          return keyedData ? { ...pluginData, data: keyedData[String(args[0])] ?? null } : pluginData; },
         usePluginAction(...args: unknown[]) {
           hookCalls.push(["action", args]);
           return async () => { actionCalls += 1; return { saved: true, analysisStarted: false }; };
@@ -91,6 +96,22 @@ test("BuilderPage uses the public UI bridge for scoped data and action hooks", a
     assert.ok(hookCalls.some(([hook, args]) => hook === "data" && args[0] === "builder.delivery-documents"));
     assert.ok(hookCalls.some(([hook, args]) => hook === "action" && args[0] === "builder.import-consultation"));
     assert.equal(actionCalls, 0, "SSR wiring must not execute a user action");
+    assert.ok(!hookCalls.some(([hook, args]) => hook === "data" && args[0] === "builder.current-baseline-spec-assurance-pack"),
+      "No current Baseline means no follow-up approval surface");
+
+    const source = await setupVerifiedWorkstreamPlatform();
+    const baseline = await createDesignBaselineStore(W, W, source.f.state).current();
+    assert.ok(baseline);
+    keyedData = { "builder.snapshot": snapshotWithMessage(W, "CURRENT BASELINE REVIEW"),
+      "builder.design-baseline": { workspaceId: W, projectId: W, sequence: baseline.sequence, baseline: baseline.revision } };
+    hookCalls.length = 0;
+    html = render();
+    assert.match(html, /후속 팩 ID/u);
+    assert.ok(hookCalls.some(([hook, args]) => hook === "data" && args[0] === "builder.current-baseline-spec-assurance-pack"
+      && (args[1] as { projectId: string }).projectId === W));
+    assert.ok(hookCalls.some(([hook, args]) => hook === "action" && args[0] === "builder.confirm-current-baseline-spec-assurance-pack"));
+    assert.equal(actionCalls, 0, "Mounting the existing review section never executes a confirmation");
+    keyedData = null;
 
     const foreignWorkspace = "22222222-2222-4222-8222-222222222222";
     pluginData = { data: snapshotWithMessage(foreignWorkspace, "FOREIGN_WORKSPACE_SECRET_MARKER"), loading: false, error: null, refresh() {} };

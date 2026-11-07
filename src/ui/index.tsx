@@ -7,6 +7,7 @@ import { ConsultationAnalysisControl } from "./ConsultationAnalysisControl.tsx";
 import { UiContractPanel } from "./UiContractPanel.tsx";
 import { IntegrationReviewPanel, parseIntegrationReviewDTO, type IntegrationReviewDTO } from "./IntegrationReviewPanel.tsx";
 import { FirstDesignReviewPanel, type FirstDesignReviewApprovalInput, type FirstDesignReviewPanelView } from "./FirstDesignReviewPanel.tsx";
+import { CurrentBaselinePackReviewSection } from "./CurrentBaselinePackReviewSection.tsx";
 import { ChangeImpactPanel, type G5ChangeImpactRequest, type G5ChangeImpactReadDTO } from "./ChangeImpactPanel.tsx";
 import type { G5ComparisonPairsReadDTO } from "../g5-comparison-pairs.ts";
 import type { ApproveUiProposalInput } from "./UiHtmlReview.tsx";
@@ -239,9 +240,11 @@ export function BuilderPage() {
     } finally { finalReview.refresh(); }
   }
   const presented = ctoQuestionsView.snapshot ?? workstreamsView.snapshot ?? technologyView.snapshot ?? baselineView.snapshot ?? memoryView.snapshot ?? current.snapshot;
+  const hasCurrentBaseline = Boolean(baselineView.snapshot?.documents.some(document => document.sourceKind === "design-baseline"));
   return <BuilderShell key={workspaceId} snapshot={draftView.view ? projectDesignDraft(presented, draftView.view) : presented}
     changeImpact={<ChangeImpactPanel projectId={workspaceId} onReadComparisonPairs={readG5ComparisonPairs} onQueryImpact={compareChangeImpact} />}
-    firstDesignReview={draftView.view || firstDesign.status === "ready" || firstDesign.status === "stale"
+    firstDesignReview={draftView.view || firstDesign.status === "ready" || firstDesign.status === "stale" || hasCurrentBaseline ? <>
+      {(draftView.view || firstDesign.status === "ready" || firstDesign.status === "stale")
       ? <FirstDesignReviewPanel key={"expectedHead" in firstDesign ? firstDesign.expectedHead : workspaceId} view={firstDesign}
         onApprove={async input => {
           try {
@@ -249,7 +252,9 @@ export function BuilderPage() {
             if (result?.status !== "published" && result?.status !== "conflict") throw new Error("First-design approval was not confirmed.");
             return result;
           } finally { firstReview.refresh(); designBaseline.refresh(); deliveryDocuments.refresh(); }
-        }} /> : undefined}
+        }} /> : null}
+      {hasCurrentBaseline && <CurrentBaselinePackReviewSection key={workspaceId} workspaceId={workspaceId} />}
+    </> : undefined}
     documentsLoading={state.loading || design.loading || baselineDocument.loading || deliveryDocuments.loading || designBaseline.loading || technology.loading || reuseCandidates.loading || workstreams.loading || memory.loading}
     documentsError={documentsView.error ?? reuseView.error ?? baselineView.error ?? technologyView.error ?? workstreamsView.error ?? draftView.error
       ?? (state.error || baselineDocument.error || design.error || memory.error ? "문서를 불러오지 못했습니다." : null)}
