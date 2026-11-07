@@ -5,7 +5,7 @@ import type { JsonValue, SpsActionContext, SpsPlatformInvocationContext, SpsStat
 import { createEmptyBuilderSnapshot } from "../src/domain/snapshot.ts";
 import { publishDesignBaseline, readDesignBaseline, readLeadDesignBaseline } from "../src/design-baseline-tools.ts";
 import { proposeLeadDesign, readLeadSolution } from "../src/platform.ts";
-import { approveFirstDesignReview, proposeFirstDesignReview } from "../src/spec-assurance/review-first-design.ts";
+import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "../src/spec-assurance/review-first-design.ts";
 
 const WORKSPACE = "11111111-1111-4111-8111-111111111111";
 const PROJECT = WORKSPACE;
@@ -186,6 +186,20 @@ function publishParams(sourceDraftRevisionId = "draft-r01", expectedBaseRevision
   };
 }
 
+async function followupUserApproval(f: ReturnType<typeof fixture>) {
+  const current = await readFirstDesignReviewBundle(WORKSPACE, PROJECT, f.state);
+  const review = await proposeFirstDesignReview({ projectId: PROJECT, expectedDraftRevisionId: "draft-r01",
+    expectedReviewHeadRevisionId: current!.revisionId, pack: { packId: "fixture", version: "2", applicability: {},
+      rules: [{ id: "REQ-1-test", requirementIds: ["REQ-1"], appliesWhen: {}, requiresCheck: true }],
+      transitions: [], exceptions: [], excludedCombinations: [] },
+    sourcePins: [{ requirementId: "REQ-1", acId: "AC-1", sourceId: CONSULTATION_ID }] }, f.context, f.platform);
+  if (review.status !== "published") throw new Error("Follow-up fixture proposal did not publish.");
+  const approved = await approveFirstDesignReview({ projectId: PROJECT, expectedBundleRevisionId: review.revision.revisionId },
+    { ...f.platform, companyId: WORKSPACE, actor: { type: "user", companyId: WORKSPACE, userId: "test-user" } } as SpsActionContext);
+  if (approved.status !== "published") throw new Error("Follow-up fixture approval did not publish.");
+  return `first-design-review:${approved.revision.revisionId}`;
+}
+
 test("publishes one detached baseline from the exact authenticated draft review; reads survive restart", async () => {
   const { f, sourceDraft, approved, initial, sourceId } = await prepared();
   const draftStorePrefix = [...f.values.keys()].find(value => value.includes("design-draft-lead-1-revision.v1."));
@@ -273,7 +287,11 @@ test("all five non-Main Lead sessions are denied official baseline publication b
 test("baseline revision history uses compare-and-set and stale expected revisions conflict without writes", async () => {
   const { f, initial } = await prepared();
   assert.equal(((await publishDesignBaseline(initial(), f.context, f.platform)).data as { status: string }).status, "published");
-  const second = { ...publishParams("draft-r01", "baseline-r01"), revisionId: "baseline-r02" };
+  const chatOnly = { ...publishParams("draft-r01", "baseline-r01"), revisionId: "baseline-r02" };
+  const beforeApproval = f.successfulWrites;
+  await assert.rejects(publishDesignBaseline(chatOnly, f.context, f.platform), /approved design-review bundle/);
+  assert.equal(f.successfulWrites, beforeApproval);
+  const second = { ...chatOnly, userSourceId: await followupUserApproval(f) };
   assert.equal(((await publishDesignBaseline(second, f.context, f.platform)).data as { status: string }).status, "published");
   const beforeStale = f.successfulWrites;
   const stale = { ...second, revisionId: "baseline-r03", expectedBaseRevisionId: "baseline-r01" };
@@ -393,7 +411,8 @@ test("independent baseline writers publish one head; exact new baseline IDs deri
   assert.equal(results.filter(result => (result.data as { status: string }).status === "published").length, 1);
   assert.equal(results.filter(result => (result.data as { status: string }).status === "conflict").length, 1);
   const first = (await readDesignBaseline(WORKSPACE, PROJECT, f.platform))!;
-  await publishDesignBaseline({ ...publishParams(), expectedBaseRevisionId: first.revision.revisionId, revisionId: "next-baseline" }, f.context, f.platform);
+  await publishDesignBaseline({ ...publishParams(), expectedBaseRevisionId: first.revision.revisionId, revisionId: "next-baseline",
+    userSourceId: await followupUserApproval(f) }, f.context, f.platform);
   const next = (await readDesignBaseline(WORKSPACE, PROJECT, f.platform))!;
   assert.notEqual(first.revision.specification.revisionId, next.revision.specification.revisionId);
   assert.notEqual(first.revision.graph.graphRevisionId, next.revision.graph.graphRevisionId);

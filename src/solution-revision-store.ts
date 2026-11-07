@@ -89,7 +89,7 @@ function restoreRevisionOrder(value: unknown, rawOrder: unknown): unknown {
       const ownKeys = Reflect.ownKeys(item);
       if (!Array.isArray(keys) || Object.getPrototypeOf(keys) !== Array.prototype || keys.length !== ownKeys.length
         || Reflect.ownKeys(keys).length !== keys.length + 1) throw new TypeError("Solution revision key order does not match its data.");
-      const result: Record<string, unknown> = Object.create(null);
+      const result: Record<string, unknown> = {};
       const seen = new Set<string>();
       for (let index = 0; index < keys.length; index++) {
         const keyDescriptor = Object.getOwnPropertyDescriptor(keys, String(index));
@@ -98,7 +98,8 @@ function restoreRevisionOrder(value: unknown, rawOrder: unknown): unknown {
         const descriptor = Object.getOwnPropertyDescriptor(item, key);
         if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Invalid solution revision JSON field.");
         seen.add(key);
-        result[key] = restore(descriptor.value, depth + 1);
+        Object.defineProperty(result, key, { enumerable: true, configurable: true, writable: true,
+          value: restore(descriptor.value, depth + 1) });
       }
       restored = result;
     }

@@ -7,6 +7,7 @@ import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuth
 import { assertCurrentFirstDesignApproval } from "./spec-assurance/review-first-design.ts";
 
 const hash = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+class BaselineSourceConflict extends Error {}
 function id(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/.test(value)) {
     throw new TypeError("A bounded design baseline identifier is required.");
@@ -47,7 +48,9 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
   const existing = await readDesignBaseline(context.companyId, projectId, platform);
   if ((existing?.revision.revisionId ?? null) !== expectedBaseRevisionId) return changed("baseline");
   const approvalRevisionId = firstDesignReviewApprovalRevision(userSourceId);
-  if (!approvalRevisionId) throw new Error("A current approved design-review bundle covering the exact previous Baseline is required for Baseline publication.");
+  if (!approvalRevisionId) throw new Error(existing === null
+    ? "The first Baseline requires an authenticated first-design review approval."
+    : "A current approved design-review bundle covering the exact previous Baseline is required for Baseline publication.");
   const readApproval = () => assertCurrentFirstDesignApproval({ projectId, approvedRevisionId: approvalRevisionId }, context, platform);
   const approved = await readApproval();
   if (!approved || approved.bundle.draftRevisionId !== sourceDraftRevisionId
@@ -84,7 +87,7 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
       && latestBaseline.sequence === (existing?.sequence ?? 0) + 1
       && JSON.stringify(latestBaseline.revision) === JSON.stringify(baseline));
     if (!matchesPrior && !matchesPublished) {
-      throw new Error("The previous Baseline changed. Read and reconcile before publication; do not automatically retry.");
+      throw new BaselineSourceConflict("The previous Baseline changed. Read and reconcile before publication; do not automatically retry.");
     }
     await authority.check();
   };
@@ -103,11 +106,17 @@ export async function publishDesignBaseline(params: unknown, runContext: unknown
       await check();
       return receipt;
     } : undefined };
-  const result = await createDesignBaselineStore(context.companyId, projectId, guarded).publish({ expectedBaseRevisionId, revision: baseline });
-  await check();
-  return { content: result.status === "published"
-    ? "Design baseline stored with its exact user decision reference and the Lead's interpretation. This is an internal planning record, not independently verified legal approval, a signature, code execution, deployment, data deletion or delivery authority. Technical decisions and workstream permissions remain separate."
-    : "The baseline changed. Read the current record; do not automatically retry.", data: result as unknown as JsonValue };
+  try {
+    const result = await createDesignBaselineStore(context.companyId, projectId, guarded).publish({ expectedBaseRevisionId, revision: baseline });
+    await check();
+    return { content: result.status === "published"
+      ? "Design baseline stored with its exact user decision reference and the Lead's interpretation. This is an internal planning record, not independently verified legal approval, a signature, code execution, deployment, data deletion or delivery authority. Technical decisions and workstream permissions remain separate."
+      : "The baseline changed. Read the current record; do not automatically retry.", data: result as unknown as JsonValue };
+  } catch (error) {
+    if (!(error instanceof BaselineSourceConflict)) throw error;
+    await authority.check();
+    return changed("baseline");
+  }
 }
 function changed(kind: string) {
   return { content: `The ${kind} changed. Read the current record without automatically retrying.`, data: { status: "conflict" } as JsonValue };

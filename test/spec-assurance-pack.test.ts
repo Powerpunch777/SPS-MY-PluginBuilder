@@ -170,7 +170,7 @@ test("first-review pack proposal rejects changed original source bytes and stale
   await assert.rejects(proposeSpecAssurancePack(f.proposalInput, f.context, f.platform),
     error => error instanceof CurrentBaselineSourceError && error.reason === "original-source-digest-mismatch");
   const badDigest = await publishFirstReviewBaseline({ wrongApprovalDigest: true });
-  await assert.rejects(proposeSpecAssurancePack(badDigest.proposalInput, badDigest.context, badDigest.platform), /exact approved first-design bundle/u);
+  await assert.rejects(proposeSpecAssurancePack(badDigest.proposalInput, badDigest.context, badDigest.platform), /exact approved design-review bundle/u);
 });
 
 test("journal publication is CAS-bound and exact revision replays are idempotent", async () => {
