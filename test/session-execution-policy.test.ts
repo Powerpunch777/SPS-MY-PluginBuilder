@@ -38,7 +38,7 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   const ctoToolNames = new Set<string>(CTO_WORKSTREAM_TOOL_NAMES);
   const specializedOnly = new Set<string>(["builder.read-cto-intake", "builder.answer-cto-question",
     "builder.propose-ui-contract", "builder.request-final-review", "builder.record-reuse-candidate",
-    "builder.read-task-source-file", "builder.write-task-source-file", "builder.delete-task-source-file",
+    "builder.read-task-source-file", "builder.write-task-source-file", "builder.delete-task-source-file", "builder.submit-task-source",
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());

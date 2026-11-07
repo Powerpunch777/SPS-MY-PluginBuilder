@@ -15,6 +15,7 @@ import { createCtoDeliveryStore, workstreamInstructionDigest } from "./cto-deliv
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId, dispatchTaskWorkerSession,
   readTaskWorkerSourceFile, writeTaskWorkerSourceFile, deleteTaskWorkerSourceFile,
   type TaskWorkerFileBinding } from "./task-worker-runtime.ts";
+import { submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
 import { assertSessionExecutionPolicySupport } from "./session-execution-policy.ts";
 
 const asJson = (value: unknown) => value as JsonValue;
@@ -281,6 +282,46 @@ export async function deleteTaskWorkerFile(params: unknown, runContext: unknown,
   }
   return taskFileResult(await deleteTaskWorkerSourceFile({ platform, binding: call.current.binding,
     relativePath: input.relativePath, assertCurrent: call.assertCurrent }));
+}
+
+/** Submits only exact role-owned Task paths from the active Worker/QA Run. */
+export async function submitTaskWorkerSource(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["paths"]);
+  let call: Awaited<ReturnType<typeof resolveTaskWorkerFileCall>>;
+  try { call = await resolveTaskWorkerFileCall(runContext, platform); }
+  catch (error) {
+    if (error instanceof Error && error.message.startsWith("unsupported:")) return taskToolUnsupported(error.message.slice("unsupported:".length));
+    throw error;
+  }
+  const access = call.current.packet.packet.sourceAccess;
+  if (!access?.branch || !access.expectedHead) {
+    return { content: "This Task Packet has no explicit source branch and expected head. No source commit was attempted.",
+      data: asJson({ status: "unsupported", reason: "task-source-branch-and-expected-head-not-explicit",
+        completion: "not-established", qaVerdict: "not-established" }) };
+  }
+  const binding: TaskSourceSubmissionBinding = Object.freeze({
+    schemaVersion: 1, workspaceId: call.current.context.companyId, projectId: call.current.context.projectId,
+    ctoId: call.current.ctoId, workstreamId: call.current.worker.workstreamId, taskId: call.current.worker.taskId,
+    packetRevision: call.current.worker.packetRevision, packetRecordSha256: call.current.worker.packetRecordSha256,
+    dependencyPins: call.current.packet.dependencyPins, role: call.current.worker.role,
+    agentId: call.current.context.agentId, sessionId: call.current.context.sessionId, runId: call.current.context.runId,
+    source: Object.freeze({ sourceId: access.sourceId, folderKey: access.folderKey, branch: access.branch,
+      expectedHead: access.expectedHead }), readPaths: access.readPaths, writePaths: access.writePaths, qaWritePaths: access.qaWritePaths,
+  });
+  const result = await submitTaskSourceFiles({ runContext, paths: input.paths, platform,
+    state: platform.state as typeof platform.state & RevisionState,
+    resolveAuthority: async receivedContext => {
+      if (receivedContext !== runContext) throw new Error("Task source submission must use the exact active Host run context.");
+      return { binding, assertCurrent: call.assertCurrent };
+    } });
+  const content = result.status === "submitted" ? "Core returned this exact source commit and its Task-bound immutable submission receipt was recorded. CTO acceptance, protected execution, completion and QA verdict remain separate."
+    : result.status === "existing" ? "This exact Task source submission already has a recorded Core commit receipt; no second commit was attempted."
+    : result.status === "conflict" ? "The packet-pinned branch or expected head changed. No automatic retry or branch/head substitution was attempted."
+    : result.status === "unchanged" ? "Core confirmed the requested paths do not create a new commit; no source submission was recorded."
+    : result.status === "unknown" ? "The commit or its immutable receipt is uncertain. Reconcile the same Task submission; do not retry."
+    : "Task source submission is unsupported by the current Host API or declared source alias. No fallback was used.";
+  return { content, data: asJson({ ...result, completion: "not-established", qaVerdict: "not-established",
+    ctoAcceptance: "not-established", protectedTest: "not-established" }) };
 }
 
 /** CTO-authorized one-time dispatch for the exact current prepared packet and role. */

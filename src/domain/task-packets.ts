@@ -33,6 +33,8 @@ export type TaskPacket = Readonly<{
 export type TaskPacketSourceAccess = Readonly<{
   sourceId: string;
   folderKey: string;
+  branch?: string;
+  expectedHead?: string;
   readPaths: readonly string[];
   writePaths: readonly string[];
   qaWritePaths: readonly string[];
@@ -253,7 +255,23 @@ function sourcePaths(value: unknown, label: string): readonly string[] {
 }
 
 function parseSourceAccess(value: unknown): TaskPacketSourceAccess {
-  const row = record(value, ["sourceId", "folderKey", "readPaths", "writePaths", "qaWritePaths"], "packet.sourceAccess");
+  const sourceFields = value && typeof value === "object" && !Array.isArray(value)
+    && Object.hasOwn(value, "branch") && Object.hasOwn(value, "expectedHead");
+  const row = record(value, sourceFields
+    ? ["sourceId", "folderKey", "branch", "expectedHead", "readPaths", "writePaths", "qaWritePaths"]
+    : ["sourceId", "folderKey", "readPaths", "writePaths", "qaWritePaths"], "packet.sourceAccess");
+  if (Object.hasOwn(row, "branch") !== Object.hasOwn(row, "expectedHead")) {
+    throw new TypeError("packet.sourceAccess branch and expectedHead must be supplied together.");
+  }
+  const branch = Object.hasOwn(row, "branch") ? text(row.branch, "packet.sourceAccess.branch", 240) : undefined;
+  if (branch !== undefined && (!/^(?!\/)(?!.*(?:\.\.|\.lock(?:\/|$)|\/\.|\/\/|@\{))[A-Za-z0-9._/-]{1,240}(?<!\.)$/u.test(branch))) {
+    throw new TypeError("packet.sourceAccess.branch is not a valid exact branch name.");
+  }
+  const hasExpectedHead = Object.hasOwn(row, "expectedHead");
+  const expectedHead = hasExpectedHead ? row.expectedHead : undefined;
+  if (hasExpectedHead && (typeof expectedHead !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(expectedHead))) {
+    throw new TypeError("packet.sourceAccess.expectedHead must be an exact Git object ID.");
+  }
   const readPaths = sourcePaths(row.readPaths, "packet.sourceAccess.readPaths");
   const writePaths = sourcePaths(row.writePaths, "packet.sourceAccess.writePaths");
   const qaWritePaths = sourcePaths(row.qaWritePaths, "packet.sourceAccess.qaWritePaths");
@@ -262,6 +280,7 @@ function parseSourceAccess(value: unknown): TaskPacketSourceAccess {
   }
   return Object.freeze({ sourceId: uuid(row.sourceId, "packet.sourceAccess.sourceId"),
     folderKey: identifier(row.folderKey, "packet.sourceAccess.folderKey"),
+    ...(branch !== undefined ? { branch, expectedHead: expectedHead as string } : {}),
     readPaths, writePaths, qaWritePaths });
 }
 

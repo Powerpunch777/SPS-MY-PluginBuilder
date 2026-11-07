@@ -89,7 +89,7 @@ test("registers CTO dispatch separately from Task-scoped Worker and QA file tool
   const contract = createBuilderPlatform() as unknown as { tools: Array<{ name: string; declaration: { parametersSchema: { additionalProperties?: boolean } } }> };
   const byName = new Map(contract.tools.map(tool => [tool.name, tool]));
   for (const name of ["builder.dispatch-task-worker", "builder.read-task-source-file",
-    "builder.write-task-source-file", "builder.delete-task-source-file"]) {
+    "builder.write-task-source-file", "builder.delete-task-source-file", "builder.submit-task-source"]) {
     assert.ok(byName.has(name), `${name} must be registered by the actual platform contract`);
     assert.equal(byName.get(name)?.declaration.parametersSchema.additionalProperties, false);
   }

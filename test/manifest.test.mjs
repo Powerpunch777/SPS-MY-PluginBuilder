@@ -7,7 +7,8 @@ import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "../src/cto-memory-
 import { SUBMIT_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, READ_CTO_INTAKE_TOOL, READ_OWN_CTO_QUESTION_TOOL, REVIEW_CTO_QUESTION_TOOL } from "../src/cto-question-tool-declarations.mjs";
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "../src/cto-question-reply-tool-declarations.mjs";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
-  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL } from "../src/task-packet-tool-declarations.mjs";
+  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL,
+  SUBMIT_TASK_SOURCE_TOOL } from "../src/task-packet-tool-declarations.mjs";
 import { INSPECT_SPEC_ASSURANCE_TOOL, READ_CHANGE_IMPACT_TOOL } from "../src/tool-declarations.mjs";
 
 test("Host installation does not implicitly enable Builder in every Workspace", () => {
@@ -222,7 +223,8 @@ test("CTO Task Worker tools expose registration without granting execution", () 
 });
 
 test("Task dispatch and Worker/QA file tools are registered with separate role scopes", () => {
-  for (const declaration of [DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL]) {
+  for (const declaration of [DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL,
+    DELETE_TASK_SOURCE_FILE_TOOL, SUBMIT_TASK_SOURCE_TOOL]) {
     assert.deepEqual(manifest.tools.find(tool => tool.name === declaration.name), declaration);
     assert.equal(declaration.parametersSchema.additionalProperties, false);
   }
@@ -232,6 +234,8 @@ test("Task dispatch and Worker/QA file tools are registered with separate role s
     assert.deepEqual(declaration.parametersSchema.required, ["relativePath"]);
   }
   assert.deepEqual(WRITE_TASK_SOURCE_FILE_TOOL.parametersSchema.required, ["relativePath", "contents"]);
+  assert.deepEqual(SUBMIT_TASK_SOURCE_TOOL.parametersSchema.required, ["paths"]);
+  assert.match(SUBMIT_TASK_SOURCE_TOOL.description, /not .*QA pass/);
 });
 
 test("CTO QA pass criteria are a bounded nonempty text list", () => {

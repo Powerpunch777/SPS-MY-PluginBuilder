@@ -8,3 +8,4 @@ export const DISPATCH_TASK_WORKER_TOOL: Tool<"builder.dispatch-task-worker">;
 export const READ_TASK_SOURCE_FILE_TOOL: Tool<"builder.read-task-source-file">;
 export const WRITE_TASK_SOURCE_FILE_TOOL: Tool<"builder.write-task-source-file">;
 export const DELETE_TASK_SOURCE_FILE_TOOL: Tool<"builder.delete-task-source-file">;
+export const SUBMIT_TASK_SOURCE_TOOL: Tool<"builder.submit-task-source">;

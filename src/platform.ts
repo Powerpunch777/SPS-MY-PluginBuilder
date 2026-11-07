@@ -28,10 +28,11 @@ import { dispatchQuestionToLead, readBoundCtoIntake } from "./cto-intake-deliver
 import { ANSWER_CTO_QUESTION_TOOL, READ_CTO_QUESTION_ANSWER_TOOL, ACKNOWLEDGE_CTO_QUESTION_ANSWER_TOOL } from "./cto-question-reply-tool-declarations.mjs";
 import { answerCtoQuestion, readCtoQuestionAnswer, acknowledgeCtoQuestionAnswer } from "./cto-question-reply-tools.ts";
 import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
-  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL } from "./task-packet-tool-declarations.mjs";
+  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL,
+  SUBMIT_TASK_SOURCE_TOOL } from "./task-packet-tool-declarations.mjs";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
-  writeTaskWorkerFile, deleteTaskWorkerFile } from "./task-worker-tools.ts";
+  writeTaskWorkerFile, deleteTaskWorkerFile, submitTaskWorkerSource } from "./task-worker-tools.ts";
 import { createProjectCto, listProjectCtos, readProjectCtos } from "./project-cto-tools.ts";
 import { parseQuestionContext } from "./domain/question-context.ts";
 import { resolveDesignQuestion } from "./design-decision-tools.ts";
@@ -67,7 +68,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-
 const MAX_IMPORT_REQUEST_BYTES = 48 * 1024;
 const MAX_INITIAL_SNAPSHOT_BYTES = 192 * 1024;
 const queues = new Map<string, Promise<unknown>>();
-const taskFolderCapabilities = ["sps.workspaceSources.read", "local.folders"]
+const taskFolderCapabilities = ["sps.workspaceSources.read", "local.folders", "sps.workspaceSources.gitWrite"]
   .filter(capability => SPS_PLATFORM_CAPABILITIES.includes(capability as (typeof SPS_PLATFORM_CAPABILITIES)[number]));
 
 function workspaceId(value: unknown): string {
@@ -1029,6 +1030,13 @@ export function createBuilderPlatform() {
         const context = exactToolRecord(runContext, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
         const companyId = workspaceId(context.companyId);
         return serialize(companyId, () => deleteTaskWorkerFile(params, runContext, platform));
+      } },
+    { name: SUBMIT_TASK_SOURCE_TOOL.name, declaration: { displayName: SUBMIT_TASK_SOURCE_TOOL.displayName,
+      description: SUBMIT_TASK_SOURCE_TOOL.description, parametersSchema: SUBMIT_TASK_SOURCE_TOOL.parametersSchema },
+      handler: (params, runContext, platform) => {
+        const context = exactToolRecord(runContext, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
+        const companyId = workspaceId(context.companyId);
+        return serialize(companyId, () => submitTaskWorkerSource(params, runContext, platform));
       } }],
     data: [{ key: "builder.reuse-candidates", handler: async (params, platform) => {
       exactToolRecord(params, ["companyId"], ["renderEnvironment"]);

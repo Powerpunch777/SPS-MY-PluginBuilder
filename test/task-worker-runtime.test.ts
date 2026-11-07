@@ -5,7 +5,7 @@ import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/pla
 import { taskPacketRecordDigest, parseTaskPacket, type TaskPacketRecord } from "../src/domain/task-packets.ts";
 import type { TaskWorkerRecord } from "../src/domain/task-workers.ts";
 import { deriveTaskWorkerFileBinding, readTaskWorkerProtectedRun, readTaskWorkerSourceFile,
-  writeTaskWorkerSourceFile, dispatchTaskWorkerSession, readTaskWorkerSessionRun,
+  writeTaskWorkerSourceFile, deleteTaskWorkerSourceFile, dispatchTaskWorkerSession, readTaskWorkerSessionRun,
   TASK_WORKER_EXECUTION_POLICY } from "../src/task-worker-runtime.ts";
 
 const W = "10000000-0000-4000-8000-000000000001";
@@ -96,18 +96,18 @@ test("sourceAccess rejects traversal, aliases, collisions, and QA implementation
     qaWritePaths: ["test/feature.test.ts"] } }), /permissions must be disjoint/u);
 });
 
-test("task source reader fails closed when the pinned SDK lacks source-root matching", async () => {
+test("source-bound file API absence never falls back to alias-only legacy IO", async () => {
   let genericReadCalls = 0;
-  const platform = { localFolders: { async readText() { genericReadCalls += 1; return "unscoped"; } } } as unknown as SpsPlatformInvocationContext;
+  const platform = { localFolders: localFolderFixture({ async readText() { genericReadCalls += 1; return "unscoped"; } }) } as unknown as SpsPlatformInvocationContext;
   const result = await readTaskWorkerSourceFile({ platform, binding: fileBinding(), relativePath: "src/feature.ts", assertCurrent: async () => {} });
-  assert.deepEqual(result, { status: "unsupported", reason: "workspace-bound-local-folder-read-unavailable" });
+  assert.deepEqual(result, { status: "unsupported", reason: "source-bound-workspace-file-read-unavailable" });
   assert.equal(genericReadCalls, 0);
 });
 
 test("file reads use Workspace-bound signatures and reject a different or unknown SourceRoot before reading", async () => {
   let reads = 0, validations = 0;
-  const platform = { localFolders: localFolderFixture({ async readText(folderKey: string, path: string) {
-    reads += 1; assert.equal(folderKey, "approved-source"); assert.equal(path, "src/feature.ts"); return "source";
+  const platform = { localFolders: localFolderFixture({ async readWorkspaceSourceTextV1(sourceId: string, folderKey: string, path: string) {
+    reads += 1; assert.equal(sourceId, SOURCE); assert.equal(folderKey, "approved-source"); assert.equal(path, "src/feature.ts"); return "source";
   } }) } as unknown as SpsPlatformInvocationContext;
   const result = await readTaskWorkerSourceFile({ platform, binding: fileBinding(), relativePath: "src/feature.ts",
     async assertCurrent() { validations += 1; } });
@@ -117,7 +117,7 @@ test("file reads use Workspace-bound signatures and reject a different or unknow
   for (const match of ["different_root", "unknown"] as const) {
     const rejected = { localFolders: localFolderFixture({ async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) {
       return { folderKey, workspaceSourceId, match };
-    }, async readText() { reads += 1; return "must not be read"; } }) } as unknown as SpsPlatformInvocationContext;
+    }, async readWorkspaceSourceTextV1() { reads += 1; return "must not be read"; } }) } as unknown as SpsPlatformInvocationContext;
     await assert.rejects(readTaskWorkerSourceFile({ platform: rejected, binding: fileBinding(), relativePath: "src/feature.ts",
       async assertCurrent() {} }), /does not match/u);
   }
@@ -127,9 +127,9 @@ test("file reads use Workspace-bound signatures and reject a different or unknow
 test("file operations enforce exact packet paths and role before calling Core", async () => {
   let writes = 0, validations = 0;
   const binding = fileBinding();
-  const platform = { localFolders: localFolderFixture({ async writeTextAtomic(_folderKey: string, _path: string, _contents: string) {
+  const platform = { localFolders: localFolderFixture({ async writeWorkspaceSourceTextAtomicV1(sourceId: string, _folderKey: string, _path: string, _contents: string) {
     writes += 1;
-    assert.equal(_folderKey, "approved-source"); assert.equal(_path, "src/feature.ts"); assert.equal(_contents, "new source");
+    assert.equal(sourceId, SOURCE); assert.equal(_folderKey, "approved-source"); assert.equal(_path, "src/feature.ts"); assert.equal(_contents, "new source");
   } }) } as unknown as SpsPlatformInvocationContext;
   const result = await writeTaskWorkerSourceFile({ platform, binding, relativePath: "src/feature.ts", contents: "new source",
     async assertCurrent() { validations += 1; } });
@@ -138,8 +138,8 @@ test("file operations enforce exact packet paths and role before calling Core", 
   await assert.rejects(writeTaskWorkerSourceFile({ platform, binding, relativePath: "src/other.ts", contents: "no",
     async assertCurrent() { throw new Error("must not reach source"); } }), /does not allow write/u);
   let qaWrites = 0;
-  const qaPlatform = { localFolders: localFolderFixture({ async writeTextAtomic(_folderKey: string, path: string) {
-    assert.equal(path, "test/feature.test.ts"); qaWrites += 1;
+  const qaPlatform = { localFolders: localFolderFixture({ async writeWorkspaceSourceTextAtomicV1(sourceId: string, _folderKey: string, path: string) {
+    assert.equal(sourceId, SOURCE); assert.equal(path, "test/feature.test.ts"); qaWrites += 1;
   } }) } as unknown as SpsPlatformInvocationContext;
   assert.deepEqual(await writeTaskWorkerSourceFile({ platform: qaPlatform, binding: fileBinding("qa"),
     relativePath: "test/feature.test.ts", contents: "test source", async assertCurrent() {} }), { status: "written" });
@@ -153,11 +153,22 @@ test("a post-write SourceRoot change is reported unknown after the one atomic wr
   let matches = 0, writes = 0;
   const platform = { localFolders: localFolderFixture({ async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) {
     matches += 1; return { folderKey, workspaceSourceId, match: matches === 1 ? "same_root" : "different_root" };
-  }, async writeTextAtomic() { writes += 1; } }) } as unknown as SpsPlatformInvocationContext;
+  }, async writeWorkspaceSourceTextAtomicV1() { writes += 1; } }) } as unknown as SpsPlatformInvocationContext;
   const result = await writeTaskWorkerSourceFile({ platform, binding: fileBinding(), relativePath: "src/feature.ts",
     contents: "bounded update", async assertCurrent() {} });
   assert.deepEqual(result, { status: "unknown", reason: "task-source-folder-changed-after-write" });
   assert.equal(writes, 1); assert.equal(matches, 2);
+});
+
+test("delete uses only the source-bound Host API and exact role-owned path", async () => {
+  let deletes = 0;
+  const platform = { localFolders: localFolderFixture({ async deleteWorkspaceSourceFileV1(sourceId: string, folderKey: string, path: string) {
+    deletes += 1; assert.equal(sourceId, SOURCE); assert.equal(folderKey, "approved-source"); assert.equal(path, "src/feature.ts");
+  } }) } as unknown as SpsPlatformInvocationContext;
+  const result = await deleteTaskWorkerSourceFile({ platform, binding: fileBinding(), relativePath: "src/feature.ts",
+    async assertCurrent() {} });
+  assert.equal(result.status, "deleted");
+  assert.equal(deletes, 1);
 });
 
 test("protected run reader stays unsupported until Core provides task and approved-plan binding", async () => {
@@ -193,7 +204,8 @@ test("Worker dispatch uses the pinned session executionPolicy and one determinis
       assert.match(input.requestId ?? "", /^[0-9a-f-]{36}$/u);
       return { runId: RUN };
     },
-  } }, localFolders: localFolderFixture({ async readText() { return ""; }, async writeTextAtomic() {}, async deleteFile() {} }) }) as unknown as SpsPlatformInvocationContext;
+  } }, localFolders: localFolderFixture({ async readWorkspaceSourceTextV1() { return ""; },
+    async writeWorkspaceSourceTextAtomicV1() {}, async deleteWorkspaceSourceFileV1() {} }) }) as unknown as SpsPlatformInvocationContext;
   let validations = 0;
   const input = { platform, binding: fileBinding(), packet: record(), async assertCurrent() { validations += 1; } };
   const first = await dispatchTaskWorkerSession(input);
@@ -209,6 +221,21 @@ test("Worker dispatch uses the pinned session executionPolicy and one determinis
   assert.equal(validations, 7);
 });
 
+test("Worker dispatch stays unsupported when only legacy alias-based file IO is available", async () => {
+  let sends = 0, genericReads = 0;
+  const platform = ({ agents: { sessions: {
+    async describePolicySupport() { return { schemaVersion: 1, modes: ["plugin-tools-only-v1"], enforcement: "dispatch-and-run",
+      readiness: "unknown", osIsolation: "not-certified" }; },
+    async getRequest() { return null; },
+    async sendMessage() { sends += 1; return { runId: RUN }; },
+  } }, localFolders: localFolderFixture({ async readText() { genericReads += 1; return ""; },
+    async writeTextAtomic() {}, async deleteFile() {} }) }) as unknown as SpsPlatformInvocationContext;
+  const result = await dispatchTaskWorkerSession({ platform, binding: fileBinding(), packet: record(), async assertCurrent() {} });
+  assert.equal(result.status, "unsupported");
+  assert.equal(sends, 0);
+  assert.equal(genericReads, 0);
+});
+
 test("uncertain Worker dispatch is not retried and packet drift after admission stays unknown", async () => {
   const binding = fileBinding();
   let sendCalls = 0, assertCalls = 0;
@@ -219,7 +246,8 @@ test("uncertain Worker dispatch is not retried and packet drift after admission 
       return sendCalls === 0 ? null : { requestId, state: "uncertain" as const, runId: RUN };
     },
     async sendMessage() { sendCalls += 1; throw new Error("transport lost after admission"); },
-  } }, localFolders: localFolderFixture({ async readText() { return ""; }, async writeTextAtomic() {}, async deleteFile() {} }) }) as unknown as SpsPlatformInvocationContext;
+  } }, localFolders: localFolderFixture({ async readWorkspaceSourceTextV1() { return ""; },
+    async writeWorkspaceSourceTextAtomicV1() {}, async deleteWorkspaceSourceFileV1() {} }) }) as unknown as SpsPlatformInvocationContext;
   const uncertain = await dispatchTaskWorkerSession({ platform, binding: fileBinding(), packet: record(), async assertCurrent() {} });
   assert.equal(uncertain.status, "unknown");
   assert.equal(uncertain.runId, null);
@@ -235,7 +263,8 @@ test("uncertain Worker dispatch is not retried and packet drift after admission 
       return sendCalls === 1 ? null : { requestId, state: "submitted" as const, runId: RUN };
     },
     async sendMessage() { sendCalls += 1; return { runId: RUN }; },
-  } }, localFolders: localFolderFixture({ async readText() { return ""; }, async writeTextAtomic() {}, async deleteFile() {} }) }) as unknown as SpsPlatformInvocationContext;
+  } }, localFolders: localFolderFixture({ async readWorkspaceSourceTextV1() { return ""; },
+    async writeWorkspaceSourceTextAtomicV1() {}, async deleteWorkspaceSourceFileV1() {} }) }) as unknown as SpsPlatformInvocationContext;
   const raced = await dispatchTaskWorkerSession({ platform: acceptedPlatform, binding: fileBinding(), packet: record(), async assertCurrent() {
     assertCalls += 1; if (assertCalls === 4) throw new Error("packet revision changed after dispatch");
   } });
@@ -279,7 +308,8 @@ test("QA Agent session is dispatchable with its distinct QA file-scope policy an
       sends += 1; assert.equal(input.executionPolicy, TASK_WORKER_EXECUTION_POLICY);
       assert.match(input.prompt, /qaWritePaths/u); return { runId: RUN };
     },
-  } }, localFolders: localFolderFixture({ async readText() { return ""; }, async writeTextAtomic() {}, async deleteFile() {} }) }) as unknown as SpsPlatformInvocationContext;
+  } }, localFolders: localFolderFixture({ async readWorkspaceSourceTextV1() { return ""; },
+    async writeWorkspaceSourceTextAtomicV1() {}, async deleteWorkspaceSourceFileV1() {} }) }) as unknown as SpsPlatformInvocationContext;
   const result = await dispatchTaskWorkerSession({ platform, binding: fileBinding("qa"), packet: qaRecord, async assertCurrent() {} });
   assert.equal(result.status, "submitted"); assert.equal(result.completion, "not-established");
   assert.equal(result.qaVerdict, "not-established"); assert.equal(sends, 1);

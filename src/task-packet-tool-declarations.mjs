@@ -32,6 +32,10 @@ const packetSchema = { type: "object", additionalProperties: false,
       required: ["sourceId", "folderKey", "readPaths", "writePaths", "qaWritePaths"],
       description: "Optional typed Task file scope. Use the manifest-declared project-source folder alias configured by the Host user; do not invent a folder or local path. Core's stored Host folder grant remains authoritative; the Host must verify the alias resolves to this Workspace Source root. Worker implementation paths and separate QA test/config paths are disjoint; this does not grant Git or protected Node execution.",
       properties: { sourceId: { type: "string", format: "uuid" }, folderKey: id,
+        branch: { type: "string", minLength: 1, maxLength: 240, pattern: "^(?!/)(?!.*(?:\\.\\.|\\.lock(?:/|$)|/\\.|//|@\\{))[A-Za-z0-9._/-]{1,240}(?<!\\.)$",
+          description: "Optional exact source branch. Required with expectedHead to enable immutable source submission; never inferred." },
+        expectedHead: { type: "string", pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          description: "Optional exact Git head object ID. Required with branch; never inferred or chosen by a Worker." },
         readPaths: sourcePaths, writePaths: sourcePaths, qaWritePaths: sourcePaths } },
   },
 };
@@ -93,4 +97,10 @@ export const DELETE_TASK_SOURCE_FILE_TOOL = Object.freeze({
   description: "Available only to the active registered Worker or QA session for its exact current Task Packet. The requested path must be in that role's exact write set. This does not commit Git or establish completion.",
   parametersSchema: { type: "object", additionalProperties: false, required: ["relativePath"],
     properties: { relativePath: taskFilePath } },
+});
+export const SUBMIT_TASK_SOURCE_TOOL = Object.freeze({
+  name: "builder.submit-task-source", displayName: "Submit assigned Task source changes",
+  description: "Available only to the exact active registered Worker or QA session. Commits a nonempty subset of the current role's Task write paths to the packet-pinned source alias, branch and expected head, then records the exact Core commit receipt. A conflict or uncertain outcome is not retried. This is not CTO acceptance, a protected test, task completion or QA pass.",
+  parametersSchema: { type: "object", additionalProperties: false, required: ["paths"],
+    properties: { paths: { type: "array", minItems: 1, maxItems: 64, uniqueItems: true, items: taskFilePath } } },
 });
