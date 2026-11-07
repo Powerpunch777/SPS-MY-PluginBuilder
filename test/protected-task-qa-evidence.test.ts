@@ -30,7 +30,7 @@ const runKey = (runId: string) => ({ runId, status: "running", cancellationReque
 
 // The Core and Host methods are DTO fixtures. This does not run a protected process or QA model.
 async function setup(options: Readonly<{ timing?: boolean; wrongProducerRun?: boolean; cancelQaRun?: boolean;
-  unrelatedRunField?: boolean; onEnqueue?: () => void }> = {}) {
+  unrelatedRunField?: boolean; keepQaRunActive?: boolean; onEnqueue?: () => void }> = {}) {
   const f = await fixture(P);
   await dispatchCtoWorkstream(f.params, ctx(), f.platform);
   const ctoRunId = [...f.runs.keys()][0]!;
@@ -169,14 +169,29 @@ async function setup(options: Readonly<{ timing?: boolean; wrongProducerRun?: bo
   }) as never;
   const report = await publishTaskQaReport(reportParams, qaContext, f.platform) as { status: string };
   assert.equal(report.status, "published");
-  runStatuses.set(QA_RUN, "succeeded");
+  if (!options.keepQaRunActive) runStatuses.set(QA_RUN, "succeeded");
   const reportScope = { workspaceId: W, projectId: P, ctoId: CTO, workstreamId: "ws-1", qaTaskId: "task-qa" };
   const reportStore = () => createTaskQaReportStore(reportScope, f.state as never);
   const referenceStore = () => createTaskQaRunReferenceStore(reportScope, f.state as never);
   const reportCurrent = await reportStore().current();
   assert.ok(reportCurrent);
-  return { f, ctoNow, reportStore, referenceStore, reportParams, workers, read() { return readCurrentProtectedTaskQaEvidence({ scope: { workspaceId: W, projectId: P, workstreamId: "ws-1", taskId: "task-dev" },
-    ctoId: CTO, runContext: ctoNow, platform: f.platform }); } };
+  return { f, ctoNow, reportStore, referenceStore, reportParams, workers,
+    cancelQaRunAfterAcceptanceRead() {
+      const state = f.state as unknown as RevisionState;
+      const originalGet = state.get.bind(state);
+      let observed = false;
+      state.get = async stateKey => {
+        const value = await originalGet(stateKey);
+        if (stateKey.stateKey === `task-source-acceptance.v1.${submitted.submission!.submissionId}`) {
+          observed = true;
+          runStatuses.set(QA_RUN, "cancelled");
+        }
+        return value;
+      };
+      return () => observed;
+    },
+    read() { return readCurrentProtectedTaskQaEvidence({ scope: { workspaceId: W, projectId: P, workstreamId: "ws-1", taskId: "task-dev" },
+      ctoId: CTO, runContext: ctoNow, platform: f.platform }); } };
 }
 
 test("registered source acceptance and QA admission accept optional Run timing without loosening authority", async t => {
@@ -196,6 +211,21 @@ test("registered source acceptance and QA admission accept optional Run timing w
   await t.test("unrelated Run fields remain rejected", async () => {
     await assert.rejects(setup({ timing: true, unrelatedRunField: true }), /Invalid Builder tool fields/u);
   });
+});
+
+test("QA Run cancellation immediately after source acceptance journal read blocks Protected Test enqueue", async () => {
+  let enqueues = 0;
+  const f = await setup({ keepQaRunActive: true, onEnqueue() { enqueues++; } });
+  enqueues = 0;
+  const acceptanceReadObserved = f.cancelQaRunAfterAcceptanceRead();
+  const qaContext = { companyId: W, projectId: P, agentId: QA_AGENT, sessionId: QA_SESSION, runId: QA_RUN };
+  const request = (await import("../src/task-protected-qa.ts")).requestProtectedTaskQa(
+    { approvalId: APPROVAL, planSha256: PLAN }, qaContext, f.f.platform);
+  await assert.rejects(request, error => {
+    assert.equal(acceptanceReadObserved(), true, `acceptance read hook did not run before rejection: ${String(error)}`);
+    return true;
+  });
+  assert.equal(enqueues, 0, "a Run cancelled after the acceptance read must not reach Core enqueue");
 });
 
 test("current CTO can read exact current Task/report/Core evidence without another run", async () => {
