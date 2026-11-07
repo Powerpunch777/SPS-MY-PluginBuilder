@@ -8,6 +8,7 @@ import { createSpecAssuranceConsumer, type AssuranceInput } from "../../src/spec
 import { createCurrentBaselineAssuranceProvider } from "../../src/spec-assurance/current-baseline-provider.ts";
 import { confirmCurrentBaselineSpecAssurancePack, proposeSpecAssurancePack } from "../../src/spec-assurance/pack-producer.ts";
 import { createSpecAssurancePackStore } from "../../src/spec-assurance/pack-store.ts";
+import { createBuilderPlatform } from "../../src/platform.ts";
 import { CONFIRM_CURRENT_BASELINE_SPEC_ASSURANCE_PACK_ACTION, SPEC_ASSURANCE_PACK_PROPOSAL_TOOL }
   from "../../src/spec-assurance/tool-declarations.mjs";
 
@@ -191,4 +192,29 @@ test("confirmation action accepts only exact displayed revision pins", () => {
   const model = schema.properties.designModel;
   assert.deepEqual(model.required, ["facts", "rulesVersion", "coverageRules", "coverageTargets", "scenarios", "itemDecisions", "acceptanceCriteria"]);
   assert.deepEqual(model.properties.coverageRules.items.required, ["id", "requiresCheck", "requiredEvidenceKinds"]);
+});
+
+test("registered current-Baseline review reads exact pins and reuses the authenticated confirmation without changing Baseline", async () => {
+  const f = await propose();
+  const contract = createBuilderPlatform();
+  const read = contract.data.find(item => item.key === "builder.current-baseline-spec-assurance-pack")?.handler;
+  const confirm = contract.actions.find(item => item.key === "builder.confirm-current-baseline-spec-assurance-pack")?.handler;
+  assert.ok(read, "Current-Baseline review data must be registered");
+  assert.ok(confirm, "The existing confirmation must be registered");
+  assert.equal((await read({ companyId: W, projectId: W }, f.platform) as any).status, "empty");
+  const before = await read({ companyId: W, projectId: W, packId: "onboarding" }, f.platform) as any;
+  assert.equal(before.status, "ready");
+  assert.equal(before.data.current.revision.revisionId, f.proposal.revisionId);
+  assert.equal(before.data.currentApproval, null);
+  const input = { projectId: W, packId: "onboarding", expectedProposalRevisionId: f.proposal.revisionId,
+    expectedBaselineRevisionId: f.baseline.revisionId, expectedApprovalRevisionId: null };
+  await assert.rejects(async () => await confirm(input, { ...f.userAction, actor: { type: "agent", companyId: W, agentId: A } } as never));
+  await assert.rejects(async () => await read({ companyId: W, projectId: "22222222-2222-4222-8222-222222222222", packId: "onboarding" }, f.platform));
+  const result = await confirm(input, f.userAction as never) as any;
+  assert.equal(result.status, "published");
+  const after = await read({ companyId: W, projectId: W, packId: "onboarding" }, f.platform) as any;
+  assert.equal(after.data.currentApproval.revision.proposalRevisionId, f.proposal.revisionId);
+  const baseline = await createDesignBaselineStore(W, W, f.state).current();
+  assert.equal(baseline?.revision.revisionId, f.baseline.revisionId);
+  assert.equal(baseline?.sequence, 1);
 });

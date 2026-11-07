@@ -325,6 +325,27 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
           payload: { workspaceId, projectId, packetRevisionId: requestId, packetSha256: input.sha256 } });
       return result.status === "published" ? { status: "published" as const, eventId, packetRevisionId: requestId, sequence: result.sequence } : result;
     },
+    /** Internal adapter: the supplied state must bind its guarded head CAS to Core's authenticated Git guard. */
+    async publishApprovalDecisionGuarded(input: Readonly<{ expectedBaseRevisionId: string; decision: FinalPacketJournalEvent;
+      guards: readonly RevisionPublicationGuard[] }>) {
+      const decision = parseEvent(input.decision);
+      const expected = id(input.expectedBaseRevisionId, "approval request revision");
+      if (decision.kind !== "user-decision" || decision.decision?.action !== "approve"
+        || decision.expectedBaseRevisionId !== expected) throw new TypeError("Only the exact approve decision can use the guarded journal adapter.");
+      const current = (await journal.current())?.revision;
+      if (current?.kind !== "approval-request" || !current.request || current.eventId !== expected
+        || current.requestId !== decision.requestId || current.request.snapshotSha256 !== decision.decision.sourceSnapshotSha256) {
+        return { status: "conflict" as const, actualBaseRevisionId: current?.eventId ?? null };
+      }
+      const main = (await currentAttestation(current.requestId));
+      if (!main?.attestation?.mainReview || main.eventId !== current.request.attestationEventId
+        || main.attestation.snapshotSha256 !== current.request.snapshotSha256
+        || main.attestation.currentPinsSha256 !== current.request.currentPinsSha256
+        || main.attestation.packet.packetSha256 !== current.request.packet.packetSha256) {
+        throw new Error("The exact Main G7 review is unavailable for the guarded approval.");
+      }
+      return journal.publishGuarded({ expectedBaseRevisionId: expected, revision: decision }, input.guards);
+    },
     async reviewEvidence() {
       const current = await evidence();
       if (!current || current.workspaceId !== workspaceId || current.projectId !== projectId) return null;

@@ -434,3 +434,22 @@ test("historical Main attestations without an assessment remain readable but can
   assert.equal(result.status, "blocked");
   assert.equal(await store.headRevisionId(), legacy.eventId);
 });
+
+test("guarded approval journal adapter refuses other decisions, snapshot drift and ordinary CAS fallback", async () => {
+  const f = fixture();
+  const store = f.store(async () => ({ status: "available", value: f.snapshot }));
+  await store.attestFinalPacket({ eventId: "main", requestId: "packet-rev-1", expectedBaseRevisionId: null,
+    mainReview: review(f.snapshot) }, f.runContext, f.platform);
+  await store.publishApprovalRequest({ eventId: "request", requestId: "packet-rev-1", expectedBaseRevisionId: "main",
+    attestationEventId: "main" }, f.reviewContext, f.platform);
+  const decision: FinalPacketJournalEvent = { eventId: "decision", expectedBaseRevisionId: "request", kind: "user-decision",
+    requestId: "packet-rev-1", attestation: null, request: null, decision: { action: "approve", userId: "user-1", reason: null,
+      decidedAt: "2026-11-07T00:00:00.000Z", sourceSnapshotSha256: sha(JSON.stringify(f.snapshot)) } };
+  const guards = [{ stateKey: "current-evidence", expectedValue: { revision: 1 } }];
+  await assert.rejects(store.publishApprovalDecisionGuarded({ expectedBaseRevisionId: "request", guards,
+    decision: { ...decision, decision: { ...decision.decision!, action: "hold", reason: "later" } } }), /Only the exact approve/);
+  assert.equal((await store.publishApprovalDecisionGuarded({ expectedBaseRevisionId: "request", guards,
+    decision: { ...decision, decision: { ...decision.decision!, sourceSnapshotSha256: sha("stale") } } })).status, "conflict");
+  assert.equal((await store.publishApprovalDecisionGuarded({ expectedBaseRevisionId: "request", guards, decision })).status, "unsupported");
+  assert.equal(await store.headRevisionId(), "request");
+});
