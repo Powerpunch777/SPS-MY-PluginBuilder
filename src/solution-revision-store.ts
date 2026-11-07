@@ -22,12 +22,13 @@ export type RevisionPublicationGuard = Readonly<{ stateKey: string; namespace?: 
 export type RevisionJobWake = Readonly<{ name: string; eventId: string; jobKey: string; payload: JsonValue }>;
 type Pointer = Readonly<{ revisionId: string; sequence: number; digest: string }>;
 type Entry<T> = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   workspaceId: string;
   projectId: string;
   sequence: number;
   parent: Pointer | null;
   revision: T;
+  revisionOrder?: readonly (readonly string[])[];
   digest: string;
 }>;
 type HistoryCursor = Readonly<{
@@ -45,6 +46,69 @@ const MAX_ENTRY_BYTES = 192 * 1024;
 const hash = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 const json = (value: unknown) => JSON.stringify(value);
 const asJson = (value: unknown) => value as JsonValue;
+
+// JSONB preserves values and array order, but not object key order. Keep only
+// ordering metadata so existing revision IDs, bytes and Core proof paths survive.
+function captureRevisionOrder(value: unknown): readonly (readonly string[])[] {
+  const result: string[][] = [];
+  const visit = (item: unknown) => {
+    if (Array.isArray(item)) { for (const child of item) visit(child); }
+    else if (item !== null && typeof item === "object") {
+      const keys = Object.keys(item);
+      result.push(keys);
+      for (const key of keys) visit((item as Record<string, unknown>)[key]);
+    }
+  };
+  visit(JSON.parse(json(value)));
+  return Object.freeze(result.map(keys => Object.freeze(keys)));
+}
+
+function restoreRevisionOrder(value: unknown, rawOrder: unknown): unknown {
+  if (!Array.isArray(rawOrder) || Object.getPrototypeOf(rawOrder) !== Array.prototype || rawOrder.length > 32768
+    || Reflect.ownKeys(rawOrder).length !== rawOrder.length + 1) throw new TypeError("Invalid solution revision ordering metadata.");
+  let cursor = 0, visits = 0;
+  const ancestors = new Set<object>();
+  const restore = (item: unknown, depth: number): unknown => {
+    if (depth > 64 || ++visits > 100000) throw new TypeError("Solution revision JSON exceeds its structural bound.");
+    if (item === null || typeof item === "string" || typeof item === "boolean") return item;
+    if (typeof item === "number" && Number.isFinite(item)) return item;
+    if (!item || typeof item !== "object" || ancestors.has(item)) throw new TypeError("Invalid solution revision JSON value.");
+    ancestors.add(item);
+    let restored: unknown;
+    if (Array.isArray(item)) {
+      if (Object.getPrototypeOf(item) !== Array.prototype || Reflect.ownKeys(item).length !== item.length + 1) throw new TypeError("Invalid solution revision JSON array.");
+      restored = Array.from({ length: item.length }, (_, index) => {
+        const descriptor = Object.getOwnPropertyDescriptor(item, String(index));
+        if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Invalid solution revision JSON item.");
+        return restore(descriptor.value, depth + 1);
+      });
+    } else {
+      if (![Object.prototype, null].includes(Object.getPrototypeOf(item))) throw new TypeError("Invalid solution revision JSON object.");
+      const orderDescriptor = Object.getOwnPropertyDescriptor(rawOrder, String(cursor++));
+      const keys: unknown = orderDescriptor?.enumerable && Object.hasOwn(orderDescriptor, "value") ? orderDescriptor.value : null;
+      const ownKeys = Reflect.ownKeys(item);
+      if (!Array.isArray(keys) || Object.getPrototypeOf(keys) !== Array.prototype || keys.length !== ownKeys.length
+        || Reflect.ownKeys(keys).length !== keys.length + 1) throw new TypeError("Solution revision key order does not match its data.");
+      const result: Record<string, unknown> = Object.create(null);
+      const seen = new Set<string>();
+      for (let index = 0; index < keys.length; index++) {
+        const keyDescriptor = Object.getOwnPropertyDescriptor(keys, String(index));
+        const key: unknown = keyDescriptor?.enumerable && Object.hasOwn(keyDescriptor, "value") ? keyDescriptor.value : null;
+        if (typeof key !== "string" || seen.has(key)) throw new TypeError("Invalid solution revision key order.");
+        const descriptor = Object.getOwnPropertyDescriptor(item, key);
+        if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Invalid solution revision JSON field.");
+        seen.add(key);
+        result[key] = restore(descriptor.value, depth + 1);
+      }
+      restored = result;
+    }
+    ancestors.delete(item);
+    return restored;
+  };
+  const restored = restore(value, 0);
+  if (cursor !== rawOrder.length) throw new TypeError("Unused solution revision ordering metadata.");
+  return restored;
+}
 
 function fields(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)
@@ -109,17 +173,36 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
   const headKey = key(`${codec.prefix}-head.v1.${projectKey}`);
   const entryKey = (id: string) => key(`${codec.prefix}-revision.v1.${projectKey}.${hash(id)}`);
 
+  function entryFields(value: unknown, label: string) {
+    const version = value && typeof value === "object" ? Object.getOwnPropertyDescriptor(value, "schemaVersion") : undefined;
+    return fields(value, ["schemaVersion", "workspaceId", "projectId", "sequence", "parent", "revision", "digest",
+      ...(version && Object.hasOwn(version, "value") && version.value === 2 ? ["revisionOrder"] : [])], label);
+  }
+
+  function decodeRevision(row: Record<string, unknown>): T {
+    return codec.parse(row.schemaVersion === 2 ? restoreRevisionOrder(row.revision, row.revisionOrder) : row.revision);
+  }
+
+  function encodeEntry(sequence: number, parent: Pointer | null, revision: T): Entry<T> {
+    const body = { schemaVersion: 2 as const, workspaceId, projectId, sequence, parent, revision,
+      revisionOrder: captureRevisionOrder(revision) };
+    const entry = Object.freeze({ ...body, digest: hash(json(body)) });
+    if (Buffer.byteLength(json(entry), "utf8") > MAX_ENTRY_BYTES) throw new TypeError("Solution revision exceeds 192 KiB; no state was changed.");
+    return entry;
+  }
+
   function parseEntry(value: unknown, expected: Pointer): Entry<T> {
-    const row = fields(value, ["schemaVersion", "workspaceId", "projectId", "sequence", "parent", "revision", "digest"], "solution entry");
-    if (row.schemaVersion !== 1 || row.workspaceId !== workspaceId || row.projectId !== projectId || row.sequence !== expected.sequence
+    const row = entryFields(value, "solution entry");
+    if (row.schemaVersion !== 1 && row.schemaVersion !== 2 || row.workspaceId !== workspaceId || row.projectId !== projectId || row.sequence !== expected.sequence
       || row.digest !== expected.digest) throw new Error("Solution revision identity mismatch.");
     const parent = row.parent === null ? null : pointer(row.parent);
     if (parent === null ? row.sequence !== 1 : parent.sequence !== expected.sequence - 1) {
       throw new Error("Solution revision history is inconsistent.");
     }
-    const revision = codec.parse(row.revision);
+    const revision = decodeRevision(row);
     if (identifier(codec.revisionId(revision)) !== expected.revisionId) throw new Error("Solution revision ID mismatch.");
-    const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence: expected.sequence, parent, revision };
+    const body = { schemaVersion: row.schemaVersion as 1 | 2, workspaceId, projectId, sequence: expected.sequence, parent, revision,
+      ...(row.schemaVersion === 2 ? { revisionOrder: row.revisionOrder as readonly (readonly string[])[] } : {}) };
     if (hash(json(body)) !== row.digest) throw new Error("Solution revision digest mismatch.");
     return Object.freeze({ ...body, digest: expected.digest });
   }
@@ -232,9 +315,7 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
     if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
     const sequence = (current.ref?.sequence ?? 0) + 1;
     if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
-    const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence, parent: current.ref, revision: proposed };
-    const entry: Entry<T> = Object.freeze({ ...body, digest: hash(json(body)) });
-    if (Buffer.byteLength(json(entry), "utf8") > MAX_ENTRY_BYTES) throw new TypeError("Solution revision exceeds 192 KiB; no state was changed.");
+    const entry = encodeEntry(sequence, current.ref, proposed);
     const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
     if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
       const existing = await entryAt(next);
@@ -370,8 +451,8 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       if (actualId === wantedId) return Object.freeze({ status: "not-staged" as const, actualBaseRevisionId: actualId });
       const raw = await state.get(entryKey(wantedId));
       if (raw === null) return Object.freeze({ status: "missing" as const, actualBaseRevisionId: actualId });
-      const row = fields(raw, ["schemaVersion", "workspaceId", "projectId", "sequence", "parent", "revision", "digest"], "staged solution entry");
-      const revision = codec.parse(row.revision);
+      const row = entryFields(raw, "staged solution entry");
+      const revision = decodeRevision(row);
       const ref = pointer({ revisionId: codec.revisionId(revision), sequence: row.sequence, digest: row.digest });
       if (ref.revisionId !== wantedId) throw new Error("Staged solution revision ID does not match its requested key.");
       const entry = parseEntry(raw, ref);
@@ -397,9 +478,7 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       if (proposedId === actualId) throw new TypeError("A new solution revision ID is required.");
       const sequence = (current.ref?.sequence ?? 0) + 1;
       if (!Number.isSafeInteger(sequence)) throw new Error("Solution revision sequence is exhausted.");
-      const body = { schemaVersion: 1 as const, workspaceId, projectId, sequence, parent: current.ref, revision: proposed };
-      const entry: Entry<T> = Object.freeze({ ...body, digest: hash(json(body)) });
-      if (Buffer.byteLength(json(entry), "utf8") > MAX_ENTRY_BYTES) throw new TypeError("Solution revision exceeds 192 KiB; no state was changed.");
+      const entry = encodeEntry(sequence, current.ref, proposed);
       const next = Object.freeze({ revisionId: proposedId, sequence, digest: entry.digest });
       if (!await cas(entryKey(next.revisionId), { exists: false }, asJson(entry))) {
         const existing = await entryAt(next);
