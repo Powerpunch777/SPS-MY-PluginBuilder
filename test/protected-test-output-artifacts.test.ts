@@ -86,3 +86,13 @@ test("missing APIs, legacy receipts, permission failures and changed authority r
   platform.artifacts.list = async () => [structuredClone(f.artifact)];
   assert.equal((await readProtectedOutputArtifacts(f.expected, platform)).status, "unknown");
 });
+
+test("a denied current Git observation never preserves an earlier technical pass", async () => {
+  const f = await fixture();
+  (f.f.platform.localFolders as any).readWorkspaceSourceGitTipV1 = async () => { throw new Error("Source permission revoked"); };
+  const observed = await progressTool().handler({ workstreamId: "ws-1", eventId: f.eventId }, f.managerContext, f.f.platform) as any;
+  assert.equal(observed.data.technicalValidation[0].status, "unknown");
+  assert.equal(observed.data.technicalValidation[0].outputs, null);
+  assert.equal(f.reads, 0);
+  assert.equal(f.enqueueCalls, 1);
+});

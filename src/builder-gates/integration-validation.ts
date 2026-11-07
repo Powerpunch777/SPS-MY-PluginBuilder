@@ -76,7 +76,10 @@ export async function readIntegrationValidationRuns(attempts: readonly Integrati
               approvalId: reference.approvalId, sourceId: attempt.effect.sourceId, commitSha: reference.commitSha,
               treeSha: reference.treeSha, planSha256: reference.planSha256 }, platform);
           }
-        } catch { /* Missing or changed Core authority is not a test pass. */ }
+        } catch {
+          status = "unknown";
+          outputs = null;
+        }
       }
       results.push({ taskId: attempt.scope.taskId, phase, runId: reference.runId, commitSha: reference.commitSha,
         treeSha: reference.treeSha, status, outputs, qaVerdict: "not-established" as const });

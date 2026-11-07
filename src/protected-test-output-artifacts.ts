@@ -27,6 +27,22 @@ function boundRun(raw: unknown, ref: ProtectedOutputReference) {
   return run;
 }
 
+function successfulReceipt(run: ReturnType<typeof parseProtectedRun>) {
+  const receipt = exactToolRecord(run.receipt, ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes",
+    "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
+    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"],
+  PROTECTED_OUTPUT_RECEIPT_FIELDS);
+  if ([receipt.digest, receipt.stdoutSha256, receipt.stderrSha256].some(value => typeof value !== "string" || !HEX.test(value))
+    || [receipt.stdoutBytes, receipt.stderrBytes].some(value => !Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 8 * 1024 * 1024)
+    || receipt.status !== "completed" || receipt.processExitCode !== 0
+    || receipt.timedOut !== false || receipt.cancelled !== false || receipt.outputLimit !== false
+    || receipt.appContainerVerified !== true || receipt.capabilitiesCount !== 0 || receipt.childTerminationConfirmed !== true
+    || receipt.jobEmpty !== true || receipt.profileCleanupSucceeded !== true || receipt.sandboxCleanupSucceeded !== true
+    || receipt.fixtureMustBeRetained !== false) throw new TypeError("Protected output receipt is not a confirmed successful execution.");
+  assertProtectedOutputMetadata(receipt);
+  return receipt;
+}
+
 /** Re-read Core authority around an exact scoped Artifact-byte check. A matching
  * file is output provenance only, never an authored QA verdict or delivery approval. */
 export async function readProtectedOutputArtifacts(reference: ProtectedOutputReference,
@@ -45,20 +61,12 @@ export async function readProtectedOutputArtifacts(reference: ProtectedOutputRef
     if (raw === null) return result("unknown");
     const run = boundRun(raw, ref);
     if (run.status !== "succeeded" || run.termination !== "confirmed" || run.receipt === null) return result("not-ready");
-    const receipt = exactToolRecord(run.receipt, ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes",
-      "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
-      "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"],
-    PROTECTED_OUTPUT_RECEIPT_FIELDS);
-    if (!HEX.test(String(receipt.digest)) || receipt.status !== "completed" || receipt.processExitCode !== 0
-      || receipt.timedOut !== false || receipt.cancelled !== false || receipt.outputLimit !== false
-      || receipt.appContainerVerified !== true || receipt.capabilitiesCount !== 0 || receipt.childTerminationConfirmed !== true
-      || receipt.jobEmpty !== true || receipt.profileCleanupSucceeded !== true || receipt.sandboxCleanupSucceeded !== true
-      || receipt.fixtureMustBeRetained !== false) return result("unknown");
-    assertProtectedOutputMetadata(receipt);
+    const receipt = successfulReceipt(run);
     if (!Object.hasOwn(receipt, "outputManifest")) return result("not-produced");
     const manifest = receipt.outputManifest as Array<{ path: string; byteLength: number; sha256: string }>;
     const pins = exactToolRecord(run.pins, ["approvalId", "sourceId", "planSha256", "profileSha256", "commitSha", "treeSha",
       "manifestSha256", "inputTreeSha256", "nodeSha256", "subjectKeySha256", "timeoutMs"]);
+    const completionSnapshot = JSON.stringify([run.status, run.termination, pins, receipt]);
     const rows = await host.artifacts.list({ subjectKey: ref.subjectKey, runId: ref.runId, limit: 17 });
     if (!Array.isArray(rows) || Object.getPrototypeOf(rows) !== Array.prototype || rows.length !== manifest.length
       || Reflect.ownKeys(rows).length !== rows.length + 1) return result("unknown");
@@ -85,9 +93,9 @@ export async function readProtectedOutputArtifacts(reference: ProtectedOutputRef
       ids.add(row.id); paths.add(data.path);
       files.push(Object.freeze({ artifactId: row.id, ...expected }));
     }
-    const latest = await host.protectedTests.getRunV1(ref.workspaceId, ref.runId, sha(ref.subjectKey));
-    boundRun(latest, ref);
-    if (JSON.stringify(latest) !== JSON.stringify(raw)) return result("unknown");
+    const latest = boundRun(await host.protectedTests.getRunV1(ref.workspaceId, ref.runId, sha(ref.subjectKey)), ref);
+    if (latest.status !== "succeeded" || latest.termination !== "confirmed"
+      || JSON.stringify([latest.status, latest.termination, exactToolRecord(latest.pins, Object.keys(pins)), successfulReceipt(latest)]) !== completionSnapshot) return result("unknown");
     return Object.freeze({ status: "matched", manifestSha256: receipt.outputManifestSha256 as string,
       totalBytes: receipt.outputBytes as number, files: Object.freeze(files.sort((a, b) => a.path.localeCompare(b.path))),
       qaVerdict: "not-established" });
