@@ -79,6 +79,12 @@ function seedPending(f: ReturnType<typeof managerHost>) {
       requestId: ledgerRequestId, status: "pending", dispatchAttempts: 1, receipt: null }] });
 }
 
+function seedAccepted(f: ReturnType<typeof managerHost>, runId = RUN) {
+  f.values.set(requestKey.stateKey, { schemaVersion: 2, workspaceId: WORKSPACE, projectId: WORKSPACE,
+    workstreamId: "ws-1", revision: 2, events: [{ eventId: snapshot.eventId, evidenceDigest: "c".repeat(64),
+      requestId: ledgerRequestId, status: "accepted", dispatchAttempts: 1, receipt: { receiptId: requestUuid, runId } }] });
+}
+
 test("event-only job rejects schedule/manual fallback before Workspace reads", async () => {
   let stateReads = 0;
   const platform = { state: { async get() { stateReads++; return null; } } } as unknown as SpsPlatformInvocationContext;
@@ -133,6 +139,27 @@ test("pending Core request authorizes Manager read before terminal run; terminal
   assert.equal(ledger.events[0]?.receipt.runId, RUN);
 });
 
+test("accepted ledger admission still authorizes only its exact active Manager request/run", async t => {
+  await t.test("exact accepted receipt remains readable while Manager run is active", async () => {
+    const f = managerHost();
+    seedAccepted(f);
+    const readTool = createVerifiedWorkstreamManagerReadHandler(async () => ({ agentId: MANAGER, sessionId: SESSION, taskKey }), currentLookup);
+    const observed = await readTool({ workstreamId: "ws-1", eventId: snapshot.eventId }, {
+      companyId: WORKSPACE, projectId: WORKSPACE, agentId: MANAGER, sessionId: SESSION, runId: RUN,
+    }, f.host);
+    assert.equal((observed.data as { eventId: string }).eventId, snapshot.eventId);
+    assert.deepEqual(f.calls, ["getRequest", "getRun"]);
+  });
+  await t.test("another run cannot borrow accepted ledger authority", async () => {
+    const f = managerHost();
+    seedAccepted(f);
+    const readTool = createVerifiedWorkstreamManagerReadHandler(async () => ({ agentId: MANAGER, sessionId: SESSION, taskKey }), currentLookup);
+    await assert.rejects(readTool({ workstreamId: "ws-1", eventId: snapshot.eventId }, {
+      companyId: WORKSPACE, agentId: MANAGER, sessionId: SESSION, runId: "55555555-5555-4555-8555-555555555555",
+    }, f.host), /[Aa]ccepted ledger receipt|exact Core request receipt/u);
+  });
+});
+
 test("fixed namespace hash preserves canonical Host UUID across logical retries", () => {
   assert.equal(requestUuid, "7ee1257d-73ec-5abd-a54a-1b6a509df5ac");
   assert.equal(managerRequestUuidForLedgerKey(ledgerRequestId), requestUuid);
@@ -147,6 +174,6 @@ test("Manager read cannot use another project, another run, or a null request re
   }, f.host), /single-Workspace Manager tool context/u);
   await assert.rejects(readTool({ workstreamId: "ws-1", eventId: snapshot.eventId }, {
     companyId: WORKSPACE, agentId: MANAGER, sessionId: SESSION, runId: "55555555-5555-4555-8555-555555555555",
-  }, f.host), /exact pending Core request receipt/u);
+  }, f.host), /exact Core request receipt/u);
   assert.equal(INTEGRATION_MANAGER_VERIFIED_READ_TOOL, "builder.read-verified-workstream");
 });
