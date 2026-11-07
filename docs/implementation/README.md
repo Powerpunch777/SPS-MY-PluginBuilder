@@ -352,6 +352,30 @@
   연결 작업 중이므로 전체 사용자 흐름이 완료된 것으로 보지 않는다. 과거 사본에서
   UI 의존 파일을 빠뜨렸던 혼합 검사 실패는 보존하고 정확 사본 검사로 대체했다.
 
+- `77dac9c`은 소유 세션의 종료 이벤트를 정확한 미전달 Manager/Main/Review 요청에
+  연결한다. 실패·취소는 기술 결과로 보존하고 정상 DONE을 일반 재실행 신호로 쓰지
+  않는다. 후속 명세 팩의 기존 data/action 등록도 포함한다. `4e38549`의 등록 경로
+  검사는 인증된 확인 후에도 기존 Baseline Revision/sequence가 바뀌지 않음을 확인했다.
+- `2bee329`·`49d0069`·`2ca65d9`는 기존 최종 납품 저널의 guarded 승인 어댑터를
+  연결한다. 현재 Main/Review 선택·세션·정확한 정상 종료 Run을 확인하고 상태 head를
+  원자 guard에 포함한다. Host의 명시적 지원 보고와 SDK 메서드가 모두 있어야 승인
+  경로를 열며, 지원 미확인·철회·경합을 일반 CAS로 우회하지 않는다.
+- 별도 기술 시험은 정확한 Builder `49d0069`와 고정 SDK 사본에서 실제 Core Host
+  서비스·Git ref 잠금·PostgreSQL 저장을 연결했다. 동일 승인 1회 저장, 응답 유실 재생,
+  멤버십/Git 권한 철회·후보 ref 변경·비사용자 차단 2개 시험 및 Core 타입 검사가 통과했다.
+  QA/Manager/Main/Run 증거는 시험용 자료이며 실제 모델·전체 G6/G7·실제 사용자 최종
+  승인 증거가 아니다. 이 구분과 최초 fixture 변수 오류/수정 로그는 보존했다.
+- 실제 Scheduler/SDK Worker 시험은 Workspace 전용 세션을 `contextState: none`으로
+  인수한 뒤 제한 실행 정책 검사에 도달했다. Core 프로젝트를 별도로 만들지 않는다.
+  임시 Node/Runner 위임의 발급·회수에 따른 정책 admission은 확인했지만 시험 환경의
+  자동 실행 가드로 Manager 모델 Run·Git 통합·CI 효과는 없었다. 다음 실행 인수 대상이다.
+- `9be90b0`은 Source에 고정된 납품 목록에서 생산자가 선언한 파일별 버전을 읽고,
+  현재 Final Packet에 해시와 함께 포함한다. 문서는 실제 문서 Revision을 버전으로
+  참조한다. 버전 없는 옛 목록은 읽을 수 있지만 새 최종 후보에는 사용할 수 없으며
+  패키지 버전이나 파일 해시를 개별 파일 버전으로 추정하지 않는다. 타입/집중 51개와
+  390/1440px 화면 검사는 통과했다. 구형 Host에서 새 지원 차단이 먼저 적용되도록
+  바뀐 오류 기대값의 최초 실패도 보존했다. 전체 회귀 검사는 별도 정확 사본에서 진행한다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)
