@@ -224,6 +224,19 @@ test("a newer immutable Core run reference makes the old report non-current", as
   if (evidence.status === "unknown") assert.equal(evidence.reason, "report-does-not-reference-current-protected-qa-run");
 });
 
+test("a non-current Host Git tip response is not a malformed request or verification evidence", async t => {
+  for (const [status, reason] of [["unknown", "source_unavailable"], ["denied", "branch_not_authorized"]] as const) {
+    await t.test(status, async () => {
+      const f = await setup();
+      const folders = (f.f.platform as any).localFolders;
+      folders.readWorkspaceSourceGitTipV1 = async () => ({ status, reason });
+      const result = await f.read();
+      assert.equal(result.status, "unknown");
+      if (result.status === "unknown") assert.match(result.reason, new RegExp(`host-git-tip-proof-${status}$`, "u"));
+    });
+  }
+});
+
 test("wrong CTO context and missing session/Core readers fail closed", async t => {
   await t.test("wrong CTO identity", async () => {
     const f = await setup();

@@ -9,6 +9,7 @@ import { resolveCurrentTaskWorkerToolCall } from "./task-worker-tools.ts";
 import { createTaskQaRunReferenceStore, recordTaskQaRunReference, type TaskQaRunReference } from "./task-qa-run-references.ts";
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "./task-worker-runtime.ts";
 import { taskQaCriteria } from "./task-qa-criteria.ts";
+import { readWorkspaceSourceGitTipProof } from "./workspace-source-git-tip.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
@@ -288,8 +289,8 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
   try { tipRaw = await folders.readWorkspaceSourceGitTipV1(source.sourceId, source.folderKey, source.branch); }
   catch (error) { if (hostApiUnsupported(error)) return unsupported("host-git-tip-proof-unsupported"); throw error; }
   await assertActorCurrent();
-  const tip = exactToolRecord(tipRaw, ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
-  if (tip.status !== "current") return unsupported(`host-git-tip-proof-${String(tip.status)}`);
+  const tip = readWorkspaceSourceGitTipProof(tipRaw);
+  if (tip.status !== "current") return unsupported(`host-git-tip-proof-${tip.status}`);
   if (tip.sourceId !== source.sourceId || tip.folderKey !== source.folderKey || tip.branch !== source.branch) {
     throw new Error("The Host Git proof does not identify the exact approved Source branch.");
   }
@@ -341,12 +342,12 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
     }
     const currentRoot = exactToolRecord(await sourceApi.matchWorkspaceSourceV1!(source.folderKey, source.sourceId),
       ["folderKey", "workspaceSourceId", "match"]);
-    const currentTip = exactToolRecord(await sourceApi.readWorkspaceSourceGitTipV1!(source.sourceId, source.folderKey, branch),
-      ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
+    const currentTip = readWorkspaceSourceGitTipProof(await sourceApi.readWorkspaceSourceGitTipV1!(source.sourceId, source.folderKey, branch));
+    if (currentTip.status !== "current") throw new Error(`host-git-tip-proof-${currentTip.status}`);
     const sourceChanged = currentRoot.match !== "same_root" || currentRoot.folderKey !== source.folderKey
-      || currentRoot.workspaceSourceId !== source.sourceId || currentTip.status !== "current"
+      || currentRoot.workspaceSourceId !== source.sourceId
       || currentTip.sourceId !== source.sourceId || currentTip.folderKey !== source.folderKey || currentTip.branch !== branch;
-    const branchMoved = currentTip.status === "current" && (currentTip.commitSha !== receipt.commitSha || currentTip.treeSha !== receipt.treeSha);
+    const branchMoved = currentTip.commitSha !== receipt.commitSha || currentTip.treeSha !== receipt.treeSha;
     if (sourceChanged || (!input.runId && branchMoved)) {
       throw new Error("The accepted source root or exact branch tip changed during protected QA preparation.");
     }

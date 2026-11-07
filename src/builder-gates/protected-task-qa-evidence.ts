@@ -8,6 +8,7 @@ import { createTaskQaReportStore, parseTaskQaReport, taskQaCriteria, type TaskQa
 import { createTaskQaRunReferenceStore } from "../task-qa-run-references.ts";
 import { resolveProtectedTaskQaObservation, type ProtectedTaskQaTarget } from "../task-protected-qa.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
+import { readWorkspaceSourceGitTipProof } from "../workspace-source-git-tip.ts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 
@@ -113,9 +114,9 @@ async function checkGitTip(platform: SpsPlatformInvocationContext, target: Prote
   if (root.folderKey !== target.source.folderKey || root.workspaceSourceId !== target.source.sourceId || root.match !== "same_root") {
     throw new Error("host-source-root-changed");
   }
-  const tip = exactToolRecord(await api.readWorkspaceSourceGitTipV1(target.source.sourceId, target.source.folderKey, target.source.branch),
-    ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
-  if (tip.status !== "current" || tip.sourceId !== target.source.sourceId || tip.folderKey !== target.source.folderKey
+  const tip = readWorkspaceSourceGitTipProof(await api.readWorkspaceSourceGitTipV1(target.source.sourceId, target.source.folderKey, target.source.branch));
+  if (tip.status !== "current") throw new Error(`host-git-tip-proof-${tip.status}`);
+  if (tip.sourceId !== target.source.sourceId || tip.folderKey !== target.source.folderKey
     || tip.branch !== target.source.branch || tip.commitSha !== target.commitSha || tip.treeSha !== target.treeSha) {
     throw new Error("accepted-source-branch-tip-drifted");
   }
