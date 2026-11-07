@@ -4,6 +4,7 @@ import { parseTaskWorkerRegistry, type TaskWorkerRecord } from "./domain/task-wo
 import { parseTaskPacketRecord, taskPacketRecordDigest, type TaskPacketRecord } from "./domain/task-packets.ts";
 import { assertSessionExecutionPolicySupport, TASK_WORKER_FILE_TOOL_NAMES,
   TASK_WORKER_SESSION_EXECUTION_POLICY } from "./session-execution-policy.ts";
+import { hasConfirmedNotStartedSessionRequest } from "./session-request-diagnostic.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -160,7 +161,7 @@ export type TaskWorkerDispatchResult = Readonly<{
   completion: "not-established";
   qaVerdict: "not-established";
 }> | Readonly<{ status: "unsupported" | "unknown"; reason: string; requestId: string;
-  requestState: "not-attempted" | "unknown" | "uncertain"; runId: string | null;
+  requestState: "not-attempted" | "unknown" | "uncertain" | "pending"; runId: string | null;
   executionStarted: false | null; completion: "not-established"; qaVerdict: "not-established" }>;
 
 /** Starts one exact Worker or QA session request, limited to registered Task source file tools. */
@@ -171,8 +172,9 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   assertCurrent(): Promise<void>;
 }>): Promise<TaskWorkerDispatchResult> {
   const requestId = taskWorkerRequestId(input.binding);
-  const unknown = (reason: string, runId: string | null = null, requestState: "unknown" | "uncertain" = "unknown"): TaskWorkerDispatchResult => Object.freeze({
-    status: "unknown", reason, requestId, requestState, runId, executionStarted: null, completion: "not-established", qaVerdict: "not-established",
+  const unknown = (reason: string, runId: string | null = null, requestState: "unknown" | "uncertain" | "pending" = "unknown",
+    executionStarted: false | null = null): TaskWorkerDispatchResult => Object.freeze({
+    status: "unknown", reason, requestId, requestState, runId, executionStarted, completion: "not-established", qaVerdict: "not-established",
   });
   const unsupported = (reason: string): TaskWorkerDispatchResult => Object.freeze({
     status: "unsupported", reason, requestId, requestState: "not-attempted", runId: null, executionStarted: false,
@@ -194,6 +196,10 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   try { prior = parseTaskWorkerRequest(await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId), requestId); }
   catch { return unknown("worker-request-read-failed-or-invalid"); }
   await input.assertCurrent();
+  if (prior && prior.runId === null && await hasConfirmedNotStartedSessionRequest({ sessions,
+    sessionId: input.binding.sessionId, workspaceId: input.binding.workspaceId, requestId, assertCurrent: input.assertCurrent })) {
+    return unknown("worker-request-confirmed-not-started-no-automatic-retry", null, prior.state, false);
+  }
   if (prior?.state === "uncertain") return unknown("worker-request-state-uncertain", null, "uncertain");
   if (prior) {
     return Object.freeze({ status: "existing", requestId, requestState: prior.state, runId: prior.runId,
@@ -276,6 +282,10 @@ export async function readTaskWorkerSessionRun(input: Readonly<{
     const request = parseTaskWorkerRequest(await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId), requestId);
     await input.assertCurrent();
     if (!request) return unknown("exact-worker-session-request-not-found");
+    if (request.runId === null && await hasConfirmedNotStartedSessionRequest({ sessions,
+      sessionId: input.binding.sessionId, workspaceId: input.binding.workspaceId, requestId, assertCurrent: input.assertCurrent })) {
+      return unknown("worker-session-request-confirmed-not-started-no-automatic-retry");
+    }
     if (request.state === "uncertain") return unknown("worker-session-request-state-uncertain");
     if (request.runId === null) return Object.freeze({ status: "pending", reason: "worker-session-request-has-no-run-id-yet",
       requestId, runId: null, completion: "not-established", qaVerdict: "not-established" });

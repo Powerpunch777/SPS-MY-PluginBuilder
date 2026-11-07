@@ -15,6 +15,7 @@ import { readWorkstreams } from "../workstream-tools.ts";
 import type { RevisionState } from "../solution-revision-store.ts";
 import type { IntegrationPlan } from "./integration-plan.ts";
 import { INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY } from "../session-execution-policy.ts";
+import { hasConfirmedNotStartedSessionRequest } from "../session-request-diagnostic.ts";
 
 export const INTEGRATION_MANAGER_VERIFIED_READ_TOOL = "builder.read-verified-workstream";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
@@ -144,6 +145,16 @@ function platformManagerDispatchPort(input: Readonly<{ workspaceId: string; work
         if (receipt.requestId !== requestId || !["pending", "submitted", "uncertain"].includes(String(receipt.state))) {
           return { status: "uncertain" as const, reason: "manager-request-receipt-malformed" };
         }
+        if (sendResultRunId !== null && receipt.runId === null) {
+          return { status: "uncertain" as const, reason: "manager-send-and-request-receipts-disagree" };
+        }
+        if ((receipt.state === "pending" || receipt.state === "uncertain") && receipt.runId === null
+          && await hasConfirmedNotStartedSessionRequest({ sessions: platform.agents.sessions,
+            sessionId: input.authority.sessionId, workspaceId: input.workspaceId, requestId, async assertCurrent() {
+              const current = await resolveCurrentIntegrationManagerAuthority(input.workspaceId, platform);
+              if (current.agentId !== input.authority.agentId || current.sessionId !== input.authority.sessionId
+                || current.taskKey !== input.authority.taskKey) throw new Error("manager-authority-changed-during-request-diagnostic");
+            } })) return { status: "uncertain" as const, reason: "manager-request-confirmed-not-started-no-automatic-retry" };
         if (receipt.state === "pending") return receipt.runId === null
           ? { status: "pending" as const, requestId: ledgerRequestId }
           : { status: "uncertain" as const, reason: "manager-pending-receipt-has-run-id" };

@@ -342,6 +342,33 @@ test("session result reader reports only exact Worker run state, never code comp
   assert.deepEqual(calls, [RUN]);
 });
 
+test("confirmed skipped Worker request is diagnostic only and never restarts the Task", async () => {
+  for (const state of ["pending", "uncertain"] as const) {
+    let sends = 0, runReads = 0, diagnostics = 0;
+    const binding = fileBinding();
+    const platform = { agents: { sessions: {
+      async getRequest(_session: string, _workspace: string, requestId: string, options?: { includeDiagnostic: true }) {
+        if (options) diagnostics++;
+        return { requestId, state, runId: null,
+          ...(options ? { diagnostic: { kind: "not_started", wakeupStatus: "skipped" } } : {}) };
+      },
+      async sendMessage() { sends++; return { runId: RUN }; },
+      async getRun() { runReads++; throw new Error("No Run exists"); },
+    } } } as unknown as SpsPlatformInvocationContext;
+    const dispatch = await dispatchTaskWorkerSession({ platform, binding, packet: record(), async assertCurrent() {} });
+    assert.equal(dispatch.status, "unknown");
+    assert.equal(dispatch.requestState, state);
+    assert.equal(dispatch.executionStarted, false);
+    if (dispatch.status === "unknown") assert.equal(dispatch.reason, "worker-request-confirmed-not-started-no-automatic-retry");
+    const observation = await readTaskWorkerSessionRun({ platform, binding, async assertCurrent() {} });
+    assert.equal(observation.status, "unknown");
+    if (observation.status === "unknown") assert.equal(observation.reason, "worker-session-request-confirmed-not-started-no-automatic-retry");
+    assert.equal(observation.completion, "not-established");
+    assert.equal(observation.qaVerdict, "not-established");
+    assert.deepEqual({ sends, runReads, diagnostics }, { sends: 0, runReads: 0, diagnostics: 2 });
+  }
+});
+
 test("QA Agent session is dispatchable with its distinct QA file-scope policy and no protected-pass claim", async () => {
   let sends = 0, reads = 0;
   const qaRecord = record("qa");
