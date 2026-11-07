@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
@@ -10,6 +10,7 @@ import { chromium } from "playwright";
 import { build } from "esbuild";
 import type { FirstDesignReviewBundle } from "../src/spec-assurance/review-first-design.ts";
 import type { FirstDesignReviewPanelProps, FirstDesignReviewPanelView } from "../src/ui/FirstDesignReviewPanel.tsx";
+import { G5_DIMENSIONS } from "../src/domain/g5-change-impact.ts";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const sha = "a".repeat(64);
@@ -95,6 +96,29 @@ function modelFixture(): ReadyFixture {
   return { ...ready, bundle };
 }
 
+function withFollowUpImpact(ready: ReadyFixture): ReadyFixture {
+  const sourceIdentity = { priorBaselineRevisionId: "baseline-fixture-r8", priorSpecRevisionId: "prior-spec-r8",
+    priorGraphRevisionId: "prior-graph-r8", pendingDraftRevisionId: ready.bundle.draftRevisionId,
+    pendingSpecRevisionId: ready.bundle.draft.specification.revisionId,
+    pendingGraphRevisionId: ready.bundle.draft.graph.graphRevisionId, journalBinding: "NOT_VERIFIED_BY_PURE_HELPER" as const };
+  const unavailable = (): NonNullable<FirstDesignReviewBundle["followUpImpact"]>["dimensions"]["ui"] =>
+    ({ status: "UNKNOWN", priorRevisionId: null, pendingRevisionId: null, scope: "not-produced-for-pending-draft", candidates: [] });
+  const dimensions: NonNullable<FirstDesignReviewBundle["followUpImpact"]>["dimensions"] = {
+    requirements: { status: "CANDIDATES", priorRevisionId: sourceIdentity.priorSpecRevisionId,
+      pendingRevisionId: sourceIdentity.pendingSpecRevisionId, scope: "dimension-local",
+      candidates: [{ dimension: "requirements", recordId: "REQ-1", basis: "direct-revision-diff", via: [] }] },
+    graph: { status: "NO_CANDIDATE_OBSERVED", priorRevisionId: sourceIdentity.priorGraphRevisionId,
+      pendingRevisionId: sourceIdentity.pendingGraphRevisionId, scope: "dimension-local", candidates: [] },
+    ui: unavailable(), technology: unavailable(), ctoWorkstreams: unavailable(), tasks: unavailable(), scheduleProductScope: unavailable(),
+  };
+  return { ...ready, bundle: { ...ready.bundle, priorBaseline: { revisionId: "baseline-fixture-r8", sequence: 8, digest: sha },
+    followUpImpact: { projectId: ready.bundle.projectId, sourceIdentity, overallStatus: "UNKNOWN", dimensions,
+      completeness: { localComparisonsUseValidatedContent: true,
+        unsupportedDimensions: G5_DIMENSIONS.filter(key => key !== "requirements" && key !== "graph"),
+        noCandidateMeaning: "NO_CANDIDATE_OBSERVED_IN_THIS_DIMENSION_ONLY_NOT_NO_IMPACT" },
+      approvalCreated: false, baselinePublished: false, executionAuthorized: false } } };
+}
+
 async function loadPanel() {
   const temporary = await mkdtemp(path.join(projectRoot, "node_modules", ".first-design-review-test-"));
   const output = path.join(temporary, "FirstDesignReviewPanel.mjs");
@@ -141,6 +165,43 @@ test("follow-up review renders the exact prior Baseline revision, sequence, and 
     assert.ok(html.includes(priorBaseline.digest));
     assert.match(html, /이전 Baseline digest \(SHA-256\)/u);
     assert.match(html, /<button[^>]*>정확한 제안 승인/u);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("follow-up comparison displays local candidates and missing dimensions without inventing approval", async () => {
+  const { Panel, temporary } = await loadPanel();
+  try {
+    const ready = withFollowUpImpact(fixture());
+    const html = renderToStaticMarkup(createElement(Panel, { view: ready, onApprove() {} }));
+    for (const content of ["승인 전 변경 영향 후보", "변경 후보 1개", "전체 영향 미확인",
+      "현재 차원에서 후보 미관측", "일정·상품 범위", "prior-spec-r8", "spec-fixture-r2"]) assert.ok(html.includes(content), content);
+    assert.match(html, /후보 미관측은 무영향 판정이 아닙니다/u);
+    assert.match(html, /<button[^>]*>정확한 제안 승인/u);
+    const stale = renderToStaticMarkup(createElement(Panel, { view: { ...ready, status: "stale" }, onApprove() {} }));
+    assert.doesNotMatch(stale, /변경 후보 1개/u);
+    assert.match(stale, /변경 영향 후보를 확인할 수 없습니다/u);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("malformed, foreign and authority-shaped follow-up comparisons cannot enable approval", async () => {
+  const { Panel, temporary } = await loadPanel();
+  try {
+    const ready = withFollowUpImpact(fixture()), report = ready.bundle.followUpImpact!;
+    const cases = [
+      { ...ready.bundle, priorBaseline: null },
+      { ...ready.bundle, followUpImpact: { ...report, projectId: "foreign-project" } },
+      { ...ready.bundle, followUpImpact: { ...report, executionAuthorized: true } },
+      { ...ready.bundle, followUpImpact: { ...report, sourceIdentity: { ...report.sourceIdentity, pendingDraftRevisionId: "other-draft" } } },
+      { ...ready.bundle, followUpImpact: { ...report, dimensions: { ...report.dimensions,
+        ui: { ...report.dimensions.ui, status: "NO_CANDIDATE_OBSERVED" } } } },
+      { ...ready.bundle, followUpImpact: { ...report, dimensions: { ...report.dimensions,
+        requirements: { ...report.dimensions.requirements, candidates: [] } } } },
+    ];
+    for (const bundle of cases) {
+      const html = renderToStaticMarkup(createElement(Panel, { view: { ...ready, bundle }, onApprove() {} }));
+      assert.doesNotMatch(html, /<button[^>]*>정확한 제안 승인/u);
+      assert.doesNotMatch(html, /변경 후보 1개/u);
+    }
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
@@ -271,7 +332,7 @@ test("callback receives only proposalRevisionId and expectedHead; CAS conflict m
 test("design model requires its kind, exact identity, and complete arrays before approval", async () => {
   const { Panel, temporary } = await loadPanel();
   try {
-    const ready = modelFixture();
+    const ready = withFollowUpImpact(modelFixture());
     const invalidModels = [
       { ...ready.bundle.designModel!, kind: "design-model-v2" },
       { ...ready.bundle.designModel!, rulesManifest: { ...ready.bundle.designModel!.rulesManifest,
@@ -311,7 +372,7 @@ test("design model renders pinned quotes responsively and approval sends only th
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await page.setContent("<div id='root'></div>");
     await page.addScriptTag({ content: result.outputFiles[0]!.text });
-    const ready = modelFixture();
+    const ready = withFollowUpImpact(modelFixture());
     await page.evaluate(view => (window as unknown as { mount: (value: unknown) => void }).mount(view), ready);
 
     const quote = ("원문 인용: 사용자는 가입 안내를 확인하고 나중에 이어서 진행할 수 있어야 합니다. ").repeat(12);
@@ -319,6 +380,8 @@ test("design model renders pinned quotes responsively and approval sends only th
     await page.getByText(quote, { exact: true }).waitFor();
     await page.getByText(longSourceId, { exact: true }).first().waitFor();
     await page.getByText("coverage-r3", { exact: true }).waitFor();
+    await page.getByRole("heading", { name: "승인 전 변경 영향 후보" }).waitFor();
+    await page.getByText("변경 후보 1개", { exact: true }).waitFor();
 
     const inspectLayout = () => page.evaluate(() => {
       const overflowing = Array.from(document.querySelectorAll<HTMLElement>(".sps-fdr *"))
@@ -339,8 +402,15 @@ test("design model renders pinned quotes responsively and approval sends only th
         overflowing, overlaps };
     });
     assert.deepEqual(await inspectLayout(), { pageFits: true, panelFits: true, overflowing: [], overlaps: [] });
+    if (process.env.SPS_BUILDER_QA_SCREENSHOT_DIR) {
+      await mkdir(process.env.SPS_BUILDER_QA_SCREENSHOT_DIR, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.SPS_BUILDER_QA_SCREENSHOT_DIR, "follow-up-review-1440.png"), fullPage: true });
+    }
     await page.setViewportSize({ width: 390, height: 844 });
     assert.deepEqual(await inspectLayout(), { pageFits: true, panelFits: true, overflowing: [], overlaps: [] });
+    if (process.env.SPS_BUILDER_QA_SCREENSHOT_DIR) {
+      await page.screenshot({ path: path.join(process.env.SPS_BUILDER_QA_SCREENSHOT_DIR, "follow-up-review-390.png"), fullPage: true });
+    }
     await page.getByRole("button", { name: "정확한 제안 승인" }).click();
     assert.deepEqual(await page.evaluate(() => (window as unknown as { calls: unknown[] }).calls), [
       { proposalRevisionId, expectedHead },

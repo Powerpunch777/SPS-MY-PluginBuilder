@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { FirstDesignReviewBundle } from "../spec-assurance/review-first-design.ts";
+import { G5_DIMENSIONS } from "../domain/g5-change-impact.ts";
 
 export type FirstDesignReviewApprovalInput = Readonly<{ proposalRevisionId: string; expectedHead: string }>;
 export type FirstDesignReviewPanelView =
@@ -40,6 +41,62 @@ const consultationClasses = Object.freeze({
   correction: "정정",
   "change-request": "변경 요청",
 } as const);
+const impactLabels = Object.freeze({ requirements: "요구사항", ui: "UI", technology: "기술",
+  graph: "Graph", ctoWorkstreams: "CTO Workstream", tasks: "Task", scheduleProductScope: "일정·상품 범위" });
+function dataRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return plain(value) && Reflect.ownKeys(value).length === keys.length && keys.every(key => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor?.enumerable && Object.hasOwn(descriptor, "value");
+  });
+}
+function dataList(value: unknown, maximum: number): value is unknown[] {
+  return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype && value.length <= maximum
+    && Reflect.ownKeys(value).length === value.length + 1 && Array.from({ length: value.length }, (_, index) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      return descriptor?.enumerable && Object.hasOwn(descriptor, "value");
+    }).every(Boolean);
+}
+function validFollowUpImpact(value: unknown, bundle: Record<string, unknown>) {
+  if (!plain(bundle.priorBaseline) || !plain(bundle.draft) || !plain(bundle.draft.specification) || !plain(bundle.draft.graph)
+    || !dataRecord(value, ["projectId", "sourceIdentity", "overallStatus", "dimensions", "completeness",
+      "approvalCreated", "baselinePublished", "executionAuthorized"])
+    || value.projectId !== bundle.projectId || value.overallStatus !== "UNKNOWN"
+    || value.approvalCreated !== false || value.baselinePublished !== false || value.executionAuthorized !== false
+    || !dataRecord(value.sourceIdentity, ["priorBaselineRevisionId", "priorSpecRevisionId", "priorGraphRevisionId",
+      "pendingDraftRevisionId", "pendingSpecRevisionId", "pendingGraphRevisionId", "journalBinding"])
+    || value.sourceIdentity.priorBaselineRevisionId !== bundle.priorBaseline.revisionId
+    || !text(value.sourceIdentity.priorSpecRevisionId) || !text(value.sourceIdentity.priorGraphRevisionId)
+    || value.sourceIdentity.pendingDraftRevisionId !== bundle.draftRevisionId
+    || value.sourceIdentity.pendingSpecRevisionId !== bundle.draft.specification.revisionId
+    || value.sourceIdentity.pendingGraphRevisionId !== bundle.draft.graph.graphRevisionId
+    || value.sourceIdentity.journalBinding !== "NOT_VERIFIED_BY_PURE_HELPER"
+    || !dataRecord(value.dimensions, G5_DIMENSIONS)
+    || !dataRecord(value.completeness, ["localComparisonsUseValidatedContent", "unsupportedDimensions", "noCandidateMeaning"])
+    || value.completeness.localComparisonsUseValidatedContent !== true
+    || value.completeness.noCandidateMeaning !== "NO_CANDIDATE_OBSERVED_IN_THIS_DIMENSION_ONLY_NOT_NO_IMPACT"
+    || !dataList(value.completeness.unsupportedDimensions, G5_DIMENSIONS.length)
+    || JSON.stringify(value.completeness.unsupportedDimensions) !== JSON.stringify(G5_DIMENSIONS.filter(key => key !== "requirements" && key !== "graph"))) return false;
+  for (const dimension of G5_DIMENSIONS) {
+    const item = value.dimensions[dimension];
+    if (!dataRecord(item, ["status", "priorRevisionId", "pendingRevisionId", "candidates", "scope"])
+      || !dataList(item.candidates, 20_000)) return false;
+    const supported = dimension === "requirements" || dimension === "graph";
+    if (!supported) {
+      if (item.status !== "UNKNOWN" || item.priorRevisionId !== null || item.pendingRevisionId !== null
+        || item.scope !== "not-produced-for-pending-draft" || item.candidates.length) return false;
+      continue;
+    }
+    if (item.scope !== "dimension-local" || !["CANDIDATES", "NO_CANDIDATE_OBSERVED"].includes(String(item.status))
+      || (item.status === "CANDIDATES") !== Boolean(item.candidates.length)
+      || item.priorRevisionId !== value.sourceIdentity[dimension === "requirements" ? "priorSpecRevisionId" : "priorGraphRevisionId"]
+      || item.pendingRevisionId !== value.sourceIdentity[dimension === "requirements" ? "pendingSpecRevisionId" : "pendingGraphRevisionId"]
+      || !item.candidates.every(candidate => dataRecord(candidate, ["dimension", "recordId", "basis", "via"])
+        && candidate.dimension === dimension && text(candidate.recordId)
+        && ["direct-revision-diff", "derived-reference"].includes(String(candidate.basis))
+        && dataList(candidate.via, 10_000) && candidate.via.every(text))) return false;
+  }
+  return true;
+}
 function predicate(value: unknown): boolean {
   return plain(value) && ["all", "any", "none"].every(key => value[key] === undefined
     || Array.isArray(value[key]) && (value[key] as unknown[]).every(text));
@@ -91,6 +148,7 @@ function readBundle(value: unknown): ReadableBundle | null {
     || value.pack.identity.workspaceId !== value.workspaceId || value.pack.identity.projectId !== value.projectId
     || value.pack.identity.specRevisionId !== value.draft.specification.revisionId
     || !digest(value.pack.identity.specDigest)) return null;
+  if (Object.hasOwn(value, "followUpImpact") && !validFollowUpImpact(value.followUpImpact, value)) return null;
 
   if (!Array.isArray(value.draft.specification.requirements)) return null;
   const requirements: { id: string; description: string; acceptanceCriteriaIds: readonly string[] }[] = [];
@@ -297,6 +355,27 @@ export function FirstDesignReviewPanel({ view, onApprove }: FirstDesignReviewPan
                   <small className="sps-fdr-mono">원문 SHA-256 · {item.sourceDigest}</small>
                   <small>Main 근거</small><pre className="sps-fdr-pre">{item.rationale}</pre>
                 </li>)}</ul>
+              </>}
+          </section>}
+          {bundle!.followUpImpact && <section className="sps-fdr-section" aria-label="승인 전 변경 영향 후보">
+            <h3>승인 전 변경 영향 후보</h3>
+            {view.status === "stale" || !current
+              ? <p className="sps-fdr-warning" role="status">현재 제안과 일치하지 않아 변경 영향 후보를 확인할 수 없습니다.</p>
+              : <>
+                <p className="sps-fdr-warning">전체 영향 미확인</p>
+                <dl className="sps-fdr-grid">
+                  {G5_DIMENSIONS.map(dimension => {
+                    const item = bundle!.followUpImpact!.dimensions[dimension];
+                    return <div key={dimension} className="sps-fdr-item"><dt>{impactLabels[dimension]}</dt>
+                      <dd>{item.status === "UNKNOWN" ? "미확인" : item.status === "CANDIDATES" ? `변경 후보 ${item.candidates.length}개` : "현재 차원에서 후보 미관측"}</dd>
+                      {item.priorRevisionId && <small className="sps-fdr-mono">{item.priorRevisionId} → {item.pendingRevisionId}</small>}
+                      {item.candidates.length > 0 && <details><summary>후보 목록</summary>
+                        <ul>{item.candidates.map((candidate, index) => <li key={index} className="sps-fdr-mono">{candidate.recordId}</li>)}</ul>
+                      </details>}
+                    </div>;
+                  })}
+                </dl>
+                <p className="sps-fdr-muted">후보 미관측은 무영향 판정이 아닙니다. 비교 결과는 변경 승인, Baseline 발행 또는 실행 권한을 대신하지 않습니다.</p>
               </>}
           </section>}
           {snapshot.issues.length > 0 && <div className="sps-fdr-section" role="status">
