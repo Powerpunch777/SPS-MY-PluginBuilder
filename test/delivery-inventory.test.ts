@@ -18,7 +18,7 @@ const file = { path: "app.js", source: "git", classification: "source-launcher",
 const output = { path: "bundle.bin", source: "ci-output", classification: "build-bundle", target: "desktop", requirementIds: ["REQ-1"] };
 
 // Exact Git object bytes and protected Run/Artifact DTOs, not live Core or CI.
-async function setup(files = [file, output], includeArtifact = true, withRegression = true) {
+async function setup(files = [file, output], includeArtifact = true, withRegression = true, leadReviewSession?: string) {
   const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, files }));
   const launcher = Buffer.from("export const ready = true;\n");
   const blobs = [[file.path, launcher], [manifestPath, manifest]] as const;
@@ -26,7 +26,7 @@ async function setup(files = [file, output], includeArtifact = true, withRegress
   const treeSha = objectId("tree", Buffer.concat(entries.flatMap(entry => [Buffer.from(`100644 ${entry.path}\0`), Buffer.from(entry.objectId, "hex")])));
   const commit = Buffer.from(`tree ${treeSha}\nauthor Test <test@example.invalid> 0 +0000\ncommitter Test <test@example.invalid> 0 +0000\n\nfixture\n`);
   const commitSha = objectId("commit", commit);
-  const f = await validationFixture(withRegression, false, true, { inventoryPath: manifestPath, commitSha, treeSha });
+  const f = await validationFixture(withRegression, false, true, { inventoryPath: manifestPath, commitSha, treeSha, leadReviewSession });
   const { localFolders } = f.f.platform as unknown as { localFolders: { readWorkspaceSourceGitSnapshotV1?: (input: { paths: string[] }) => Promise<unknown>;
     matchWorkspaceSourceV1?: (folderKey: string, sourceId: string) => Promise<unknown> } };
   localFolders.matchWorkspaceSourceV1 = async (folderKey, workspaceSourceId) => ({ folderKey, workspaceSourceId, match: "same_root" });
@@ -293,4 +293,91 @@ test("current final reader rejects altered Artifact bytes instead of retaining a
     data: { ...row.data, contentBase64: Buffer.from("changed artifact bytes").toString("base64") } }));
   assert.equal((await reader()).status, "unknown");
   assert.equal((await mainTool().handler({}, ctx(), platform) as any).data.status, "unknown");
+});
+
+test("Main attestation atomically queues the existing Review session, which can request but never approve", async () => {
+  const reviewSession = "adadadad-adad-4dad-8dad-adadadadadad", reviewRun = "aeaeaeae-aeae-4eae-8eae-aeaeaeaeaeae";
+  const { f } = await setup(undefined, true, true, reviewSession), platform = f.f.platform, state = platform.state as RevisionState;
+  const docs = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides, preparation }, ctx(), platform);
+  assert.equal(docs.status, "published");
+  const handoff = (await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null },
+    f.managerContext, platform) as any).data;
+  const snapshot = await createCurrentFinalEvidenceReader(W, platform)();
+  if (snapshot.status !== "available") throw new Error(JSON.stringify(snapshot));
+  const wakes: any[] = [], original = state.guardedCompareAndSetWithJobWakeV1!;
+  state.guardedCompareAndSetWithJobWakeV1 = async (target, expected, value, wake) => {
+    const result = await original(target, expected, value, wake);
+    if (result.status === "committed") wakes.push(wake);
+    return result;
+  };
+  const attest = createBuilderPlatform().tools.find(tool => tool.name === "builder.attest-final-packet")!;
+  const input = { eventId: "main-atomic-review-attestation", requestId: snapshot.value.packet.packetRevisionId, expectedBaseRevisionId: handoff.eventId };
+  assert.equal((await attest.handler(input, ctx(), platform) as any).data.status, "attested");
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0].jobKey, "builder.request-packet-user-review");
+  assert.equal(wakes[0].eventId, input.eventId);
+  const originalAgents = platform.agents.list;
+  Object.assign(platform.agents, { async list(query: any) {
+    const rows = await originalAgents(query);
+    return [{ id: A, companyId: W, name: "Lead", status: "idle" }, ...rows.map(row => ({ ...row, name: "Manager" }))];
+  } });
+  platform.state.set = async (key, value) => { f.f.values.set(mapKey(key), structuredClone(value)); };
+  const sessions = platform.agents.sessions as any, getRequest = sessions.getRequest, getRun = sessions.getRun;
+  const requests = new Map<string, any>();
+  let reviewSends = 0;
+  sessions.getRequest = async (session: string, company: string, request: string) => session === reviewSession
+    ? requests.get(request) ?? null : getRequest(session, company, request);
+  sessions.getRun = async (session: string, company: string, run: string) => session === reviewSession
+    ? { runId: run, status: "running", cancellationRequested: false, termination: "not_applicable", error: null, errorCode: null,
+      output: { state: "not_ready", text: null } } : getRun(session, company, run);
+  sessions.sendMessage = async (session: string, company: string, options: any) => {
+    assert.equal(session, reviewSession); assert.equal(company, W);
+    assert.ok(options.executionPolicy.toolNames.includes("builder.request-final-review"));
+    assert.ok(!options.executionPolicy.toolNames.includes("builder.attest-final-packet"));
+    reviewSends++;
+    requests.set(options.requestId, { requestId: options.requestId, state: "submitted", runId: reviewRun });
+    return { runId: reviewRun };
+  };
+  const job = createBuilderPlatform().jobs!.find(job => job.jobKey === wakes[0].jobKey)!;
+  const event = { jobKey: job.jobKey, eventId: input.eventId, companyId: W, trigger: "event", runId: "ffffffff-ffff-4fff-8fff-ffffffffffff" } as any;
+  await job.handler(event, platform);
+  await job.handler(event, platform);
+  assert.equal(reviewSends, 1);
+  const requestTool = createBuilderPlatform().tools.find(tool => tool.name === "builder.request-final-review")!;
+  const result = (await requestTool.handler({ eventId: "registered-review-request", requestId: input.requestId,
+    expectedBaseRevisionId: input.eventId, attestationEventId: input.eventId }, ctx(reviewSession, reviewRun), platform) as any).data;
+  assert.equal(result.status, "published", JSON.stringify(result));
+  const view = (await mainTool().handler({}, ctx(), platform) as any).data;
+  assert.equal(view.approvalRequest.eventId, "registered-review-request");
+  assert.equal(view.approvalEligibility.status, "blocked");
+  assert.equal(view.decision, null);
+});
+
+test("Main publication rejects document races and cannot silently omit the Review wake", async t => {
+  for (const mode of ["changed-document", "unsupported-wake"] as const) await t.test(mode, async () => {
+    const { f } = await setup(), platform = f.f.platform, state = platform.state as RevisionState;
+    const docs = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides, preparation }, ctx(), platform);
+    if (docs.status !== "published") throw new Error("Missing guides");
+    const handoff = (await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null },
+      f.managerContext, platform) as any).data;
+    const snapshot = await createCurrentFinalEvidenceReader(W, platform)();
+    if (snapshot.status !== "available") throw new Error("Missing snapshot");
+    if (mode === "unsupported-wake") delete state.guardedCompareAndSetWithJobWakeV1;
+    else {
+      const original = state.guardedCompareAndSetWithJobWakeV1!;
+      state.guardedCompareAndSetWithJobWakeV1 = async (target, expected, value, wake) => {
+        const updated = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: docs.revision.revisionId,
+          documents: guides, preparation: { ...preparation, packageVersion: "2.0.0" } }, ctx(), platform);
+        assert.equal(updated.status, "published");
+        return original(target, expected, value, wake);
+      };
+    }
+    const tool = createBuilderPlatform().tools.find(tool => tool.name === "builder.attest-final-packet")!;
+    const result = (await tool.handler({ eventId: `main-guard-${mode}`, requestId: snapshot.value.packet.packetRevisionId,
+      expectedBaseRevisionId: handoff.eventId }, ctx(), platform) as any).data;
+    assert.equal(result.status, mode === "unsupported-wake" ? "unsupported" : "conflict", JSON.stringify(result));
+    const [head] = (await createFinalPacketStore(W, W, platform.state).current()).revisions;
+    assert.equal(head?.revision.eventId, handoff.eventId);
+    assert.equal(head?.revision.kind, "manager-packet");
+  });
 });

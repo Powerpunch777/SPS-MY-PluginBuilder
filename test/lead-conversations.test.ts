@@ -7,6 +7,8 @@ import type { BuilderLeadSessions } from "../src/domain/model.ts";
 import { LEAD_SESSION_EXECUTION_POLICY, policyForLeadChannel } from "../src/session-execution-policy.ts";
 import { readLeadUserSource } from "../src/lead-conversations.ts";
 import { dispatchIntegrationPacketToMain, integrationPacketMainRequestId } from "../src/delivery-evidence/integration-packet-dispatch.ts";
+import { dispatchFinalReview } from "../src/delivery-evidence/final-review-dispatch.ts";
+import type { FinalPacketJournalEvent } from "../src/delivery-evidence/final-packet.ts";
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
@@ -114,6 +116,24 @@ test("an uncertain packet notification is reconciled, never automatically resent
   assert.equal((await dispatchIntegrationPacketToMain(f.store, requestId, "packet-v2")).status, "unconfirmed");
   assert.equal((await dispatchIntegrationPacketToMain(f.store, requestId, "packet-v2")).status, "unconfirmed");
   assert.equal(f.sends.length, 1);
+});
+
+test("internal final review dispatch uses the existing restricted Review context once, never a user chat", async () => {
+  const f = fixture(), requestId = uuid(1801);
+  // The dispatch adapter consumes IDs only; registered publication tests supply the complete event.
+  const event = { kind: "main-attestation", eventId: "main-event", requestId: "packet-r1", attestation: {} } as FinalPacketJournalEvent;
+  await assert.rejects(f.store.send("integration-review", uuid(1802), "User chat"), /internal/u);
+  const first = await dispatchFinalReview(f.store, requestId, event);
+  assert.equal(first.status, "accepted");
+  assert.deepEqual(await dispatchFinalReview(f.store, requestId, event), first);
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.sends[0]?.sessionId, sessions().sessions["integration-review"]);
+  const policy = (f.sends[0] as unknown as { executionPolicy: { toolNames: string[] } }).executionPolicy;
+  assert.ok(policy.toolNames.includes("builder.request-final-review"));
+  assert.ok(!policy.toolNames.includes("builder.attest-final-packet"));
+  assert.equal((await f.store.page("integration-review")).turns[0]?.inputKind, "final-review-request");
+  assert.equal((await f.store.page("main")).totalTurns, 0);
+  await assert.rejects(readLeadUserSource(requestId, sessions(), f.platform));
 });
 
 test("persists exact Core failure diagnostics without resending or treating them as the user's source", async () => {

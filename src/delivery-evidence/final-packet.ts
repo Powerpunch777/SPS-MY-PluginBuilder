@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SpsActionContext, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
-import { createRevisionJournal, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
+import { createRevisionJournal, type RevisionJobWake, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
 import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB, integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
 import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
 
@@ -266,7 +266,9 @@ function eligible(snapshot: FinalEvidenceSnapshot, workspaceId: string, projectI
  * this module, and an unregistered reader remains UNKNOWN.
  */
 export function createFinalPacketStore(workspaceId: string, projectId: string, state: RevisionState,
-  readCurrentEvidence?: FinalEvidenceReader, commitApprovalAtomically?: FinalAtomicApprovalCommitter) {
+  readCurrentEvidence?: FinalEvidenceReader, commitApprovalAtomically?: FinalAtomicApprovalCommitter,
+  attestPublication?: (event: FinalPacketJournalEvent) => Readonly<{ guards: readonly RevisionPublicationGuard[]; wake: RevisionJobWake }>
+    | Promise<Readonly<{ guards: readonly RevisionPublicationGuard[]; wake: RevisionJobWake }>>) {
   const journal = createRevisionJournal<FinalPacketJournalEvent>(workspaceId, projectId, state, { prefix: "final-delivery",
     parse(value) {
       const event = parseEvent(value);
@@ -352,7 +354,11 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
           || file.sha256 !== first.packet.files[index]?.sha256 || file.size !== first.packet.files[index]?.size)) {
         return Object.freeze({ status: "blocked" as const, reason: "final-packet-or-required-gates-changed-before-attestation" });
       }
-      const result = await journal.publish({ expectedBaseRevisionId: expected, revision: event });
+      const publication = await attestPublication?.(event);
+      const result = publication
+        ? await journal.publishGuardedWithJobWakeV1({ expectedBaseRevisionId: expected, revision: event }, publication.guards, publication.wake)
+        : await journal.publish({ expectedBaseRevisionId: expected, revision: event });
+      if (result.status === "unsupported") return { status: "unsupported" as const, reason: "atomic-main-review-wake-unavailable" };
       return result.status === "published" ? Object.freeze({ status: "attested" as const, sequence: result.sequence, attestation: event })
         : Object.freeze({ status: "conflict" as const, actualRevisionId: result.actualBaseRevisionId });
     },

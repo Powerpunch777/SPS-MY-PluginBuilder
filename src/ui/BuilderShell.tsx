@@ -199,7 +199,8 @@ function conversationMessages(props: BuilderShellProps, channel: LeadChannel): B
   return [...page.turns].reverse().flatMap(turn => [
     { id: `${turn.requestId}:user`, channel, actorId: null, role: turn.inputKind && turn.inputKind !== "user" ? "system" as const : "user" as const,
       text: turn.inputKind === "analysis-request" ? "상담 분석 요청" : turn.inputKind === "ui-approval-request" ? "UI 승인 기록 검토 요청"
-        : turn.inputKind === "integration-packet-request" ? "통합 패킷 최종 점검 요청" : turn.text,
+        : turn.inputKind === "integration-packet-request" ? "통합 패킷 최종 점검 요청"
+          : turn.inputKind === "final-review-request" ? "최종 승인 요청 준비" : turn.text,
       createdAt: turn.createdAt, runId: turn.runId },
     ...(turn.answer === null ? [] : [{ id: `${turn.requestId}:assistant`, channel, actorId: null, role: "assistant" as const,
       text: turn.answer, createdAt: turn.createdAt, runId: turn.runId }]),

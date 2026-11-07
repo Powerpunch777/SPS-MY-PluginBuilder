@@ -24,9 +24,14 @@ export const progressTool = () => createBuilderPlatform().tools.find(item => ite
 
 /** Host/Core-facing receipts in the caller are deterministic DTO fixtures, not live AI or Git execution. */
 export async function preparedFixture(withValidation = false, withRegression = false, withUnmappedRequirement = false,
-  candidateRequests = false, deliveryInventoryPath?: string) {
+  candidateRequests = false, deliveryInventoryPath?: string, leadReviewSession?: string) {
   const setup = await setupVerifiedWorkstreamPlatform(withUnmappedRequirement);
   const f = setup.f;
+  if (leadReviewSession) {
+    const key = { scopeKind: "company" as const, scopeId: W, namespace: "sonpark.my-builder", stateKey: "lead-sessions.v1.1" };
+    const current = f.values.get(mapKey(key)) as any;
+    f.values.set(mapKey(key), { ...current, sessions: { ...current.sessions, "integration-review": leadReviewSession } });
+  }
   const verification = await setup.verify();
   assert.equal(verification.data.status, "published");
   const eventId = verification.data.eventId as string;
@@ -104,8 +109,8 @@ export async function preparedFixture(withValidation = false, withRegression = f
 }
 
 export async function validationFixture(withRegression = false, withUnmappedRequirement = false, candidateRequests = false,
-  delivery?: { inventoryPath: string; commitSha: string; treeSha: string }) {
-  const fixture = await preparedFixture(true, withRegression, withUnmappedRequirement, candidateRequests, delivery?.inventoryPath);
+  delivery?: { inventoryPath: string; commitSha: string; treeSha: string; leadReviewSession?: string }) {
+  const fixture = await preparedFixture(true, withRegression, withUnmappedRequirement, candidateRequests, delivery?.inventoryPath, delivery?.leadReviewSession);
   const candidateCommit = delivery?.commitSha ?? "b".repeat(40), candidateTree = delivery?.treeSha ?? "c".repeat(40);
   let integrated = false, enqueueCalls = 0, loseReply = false, candidateMoved = false;
   const runs = new Map<string, any>(), requests: any[] = [];

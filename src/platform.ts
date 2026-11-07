@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { defineSpsPlatformContract, SPS_PLATFORM_CAPABILITIES } from "@sonparkserver/plugin-sdk/platform";
-import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
+import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import type { BuilderSnapshot, BuilderLeadSessions } from "./domain/model.ts";
 import { createEmptyBuilderSnapshot, parseBuilderSnapshot } from "./domain/snapshot.ts";
 import { parseLeadAgentBinding, parseLeadAgentOptions } from "./domain/lead-agent.ts";
@@ -77,6 +77,8 @@ import { publishIntegrationPacket, readCurrentIntegrationPacket } from "./delive
 import { INTEGRATION_PACKET_MAIN_JOB } from "./delivery-evidence/integration-packet-evidence.ts";
 import { dispatchIntegrationPacketToMain, integrationPacketMainRequestId } from "./delivery-evidence/integration-packet-dispatch.ts";
 import { createCurrentFinalEvidenceReader } from "./delivery-evidence/current-final-evidence.ts";
+import { dispatchFinalReview, FINAL_REVIEW_EVENT, FINAL_REVIEW_JOB } from "./delivery-evidence/final-review-dispatch.ts";
+import type { RevisionPublicationGuard } from "./solution-revision-store.ts";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
 import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
@@ -821,7 +823,30 @@ async function finalReviewView(companyId: string, platform: SpsPlatformInvocatio
 }
 
 function currentFinalPacketStore(companyId: string, platform: SpsPlatformInvocationContext) {
-  return createFinalPacketStore(companyId, companyId, platform.state, createCurrentFinalEvidenceReader(companyId, platform));
+  const captured = new Map<string, RevisionPublicationGuard>();
+  const tracked = { ...platform, state: { ...platform.state, async get(key: SpsStateKey) {
+    if (key.scopeKind !== "company" || key.scopeId !== companyId) throw new Error("Final evidence escaped its Workspace.");
+    const value = await platform.state.get(key);
+    if (value !== null && !key.stateKey.includes("-revision.v1.") && !key.stateKey.startsWith("final-delivery-head.v1.")) {
+      const identity = JSON.stringify([key.namespace ?? "default", key.stateKey]), previous = captured.get(identity);
+      if (previous && JSON.stringify(previous.expectedValue) !== JSON.stringify(value)) throw new Error("Final evidence changed during read.");
+      captured.set(identity, { stateKey: key.stateKey, ...(key.namespace === undefined ? {} : { namespace: key.namespace }), expectedValue: value });
+    }
+    return value;
+  } } };
+  return createFinalPacketStore(companyId, companyId, platform.state, createCurrentFinalEvidenceReader(companyId, tracked), undefined,
+    async event => {
+      const selection = event.attestation?.mainLeadSelectionRevision;
+      if (selection === undefined) throw new Error("Main attestation scope is missing.");
+      const binding = await readLeadAgentBinding(companyId, tracked);
+      const sessions = await leadSessionsFor(companyId, binding, tracked);
+      if (binding.revision !== selection || binding.selectedAgentId !== event.attestation!.mainLeadAgentId
+        || sessions.sessions.main !== event.attestation!.mainLeadSessionId) throw new Error("Main authority changed before final review publication.");
+      const guards = [...captured.values()];
+      if (!guards.length || guards.length > 64 || Buffer.byteLength(JSON.stringify(guards)) > 200_000) throw new Error("Final review publication guard bound exceeded.");
+      return { guards, wake: { name: FINAL_REVIEW_EVENT, eventId: event.eventId, jobKey: FINAL_REVIEW_JOB,
+        payload: { workspaceId: companyId, packetRevisionId: event.requestId, attestationEventId: event.eventId } } };
+    });
 }
 
 async function notifyIntegrationPacket(job: { companyId?: string; eventId?: string; trigger: string }, platform: SpsPlatformInvocationContext) {
@@ -838,6 +863,20 @@ async function notifyIntegrationPacket(job: { companyId?: string; eventId?: stri
     if (current.status === "stale" || current.status === "available" && current.eventId !== eventId) return { status: "stale" as const };
     if (current.status !== "available") throw new Error("Current packet authority is unconfirmed; preserve the job.");
     return dispatchIntegrationPacketToMain(store, requestId, current.packetRevisionId);
+  });
+}
+
+async function notifyFinalReview(job: { companyId?: string; eventId?: string; trigger: string }, platform: SpsPlatformInvocationContext) {
+  if (job.trigger !== "event" || !job.companyId || !job.eventId) throw new Error("Final review requires an exact Workspace event.");
+  const companyId = job.companyId, eventId = job.eventId;
+  return withConversation(companyId, platform, async store => {
+    const current = (await createFinalPacketStore(companyId, companyId, platform.state).current()).revisions[0]?.revision;
+    if (!current || current.kind !== "main-attestation" || current.eventId !== eventId) return { status: "stale" as const };
+    const view = await finalReviewView(companyId, platform);
+    if (view.status !== "ready" || view.mainAttestation?.eventId !== eventId || view.snapshot.g7 !== "PASS") return { status: "stale" as const };
+    const binding = await readLeadAgentBinding(companyId, platform);
+    await assertLeadSelection(companyId, binding, platform);
+    return dispatchFinalReview(store, integrationPacketMainRequestId(companyId, binding.revision, `review:${eventId}`), current);
   });
 }
 
@@ -875,6 +914,9 @@ export function createBuilderPlatform() {
     } }, { jobKey: INTEGRATION_PACKET_MAIN_JOB, handler: async (job, platform) => {
       const result = await notifyIntegrationPacket(job, platform);
       if (result.status !== "accepted" && result.status !== "stale") throw new Error("Main packet notification admission is unconfirmed; preserve its request.");
+    } }, { jobKey: FINAL_REVIEW_JOB, handler: async (job, platform) => {
+      const result = await notifyFinalReview(job, platform);
+      if (result.status !== "accepted" && result.status !== "stale") throw new Error("Integration Review admission is unconfirmed; preserve its request.");
     } }],
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
