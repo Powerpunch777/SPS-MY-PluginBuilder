@@ -94,8 +94,10 @@ export async function readAcceptedTaskSourceForQa(input: Readonly<{ workspaceId:
     packetDigest, packets: input.packets, workerRecords: input.workerRecords, submissionCandidates: Object.freeze([]),
     dependencyPins: task.dependencyPins, assertCurrent: input.assertCurrent });
   const binding = submissionBinding(current, task, packetDigest, worker);
-  const state: RevisionState = { get: async key => { await input.assertCurrent(); const value = await input.state.get(key);
-    await input.assertCurrent(); return value; } };
+  // These are immutable receipt reads. Fence the group and the final result instead of
+  // recursively resolving the entire QA Worker binding around every journal lookup.
+  await input.assertCurrent();
+  const state: RevisionState = { get: key => input.state.get(key) };
   const claimed = await readTaskSourceClaim({ state, binding });
   if (claimed.status !== "submitted") return Object.freeze({ status: "unknown", reason: claimed.status === "ineligible"
     ? claimed.reason : "current-development-task-has-no-definitive-submission" });
