@@ -11,6 +11,7 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 const textHash = (value: string) => createHash("sha256").update(value).digest("hex");
 type Phase = "ci" | "e2e";
 type Host = SpsPlatformInvocationContext & { protectedTests?: {
+  delegatedBranchInputVersion?: 1;
   enqueueApprovedV1?: (input: unknown) => Promise<unknown>;
   getRunV1?: (workspaceId: string, runId: string, subjectKeySha256: string) => Promise<unknown>;
 }; localFolders?: { readWorkspaceSourceGitTipV1?: (sourceId: string, folderKey: string, branch: string) => Promise<unknown> } };
@@ -89,7 +90,7 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
   await check();
   const plan = await readCurrentIntegrationPlan(context.companyId, platform), selected = plan?.revision.validationPlans?.[phase];
   if (!plan || !selected) return { status: "unsupported", reason: "main-validation-plan-reference-unavailable", executionStarted: false };
-  if (typeof api?.enqueueApprovedV1 !== "function" || typeof api.getRunV1 !== "function"
+  if (api?.delegatedBranchInputVersion !== 1 || typeof api.enqueueApprovedV1 !== "function" || typeof api.getRunV1 !== "function"
     || typeof folders?.readWorkspaceSourceGitTipV1 !== "function") return { status: "unsupported", reason: "protected-validation-api-unavailable", executionStarted: false };
   const store = createIntegrationAttemptStore(scope, platform.state), current = await store.current();
   if (!current || current.revision.stage !== "git-observed" || !current.revision.git || current.revision.git.status === "conflict"
