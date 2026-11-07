@@ -254,8 +254,12 @@ export async function readIntegrationProgress(params: unknown, runContext: unkno
     const result = await (await import("../delivery-evidence/integration-candidate.ts")).readIntegrationCandidate(context.companyId, platform);
     await managerEvent({ workstreamId, eventId }, runContext, platform);
     if (result.status !== "observed") return result;
+    const unmapped = result.scopeTrace.unmappedRequirementIds;
     return { status: result.status, candidate: result.candidate, planRevisionId: result.plan.revisionId,
       boardRevisionId: result.boardRevisionId, workstreamCount: result.snapshots.length, taskCount: result.attempts.length,
+      approvedScope: { specificationRevisionId: result.scopeTrace.specificationRevisionId,
+        requirementCount: result.scopeTrace.requirements.length, unmappedRequirementCount: unmapped.length,
+        unmappedRequirementIds: unmapped.slice(0, 32) },
       ciRunId: result.ci.runId, e2eRunId: result.e2e.runId,
       ...(result.regression ? { regressionRunId: result.regression.runId } : {}), deliveryAuthority: result.deliveryAuthority };
   }

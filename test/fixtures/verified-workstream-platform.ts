@@ -34,7 +34,7 @@ const runDto = (runId: string, status: string) => ({ runId, status, cancellation
   termination: status === "running" ? "not_applicable" : "confirmed", errorCode: null, error: null });
 
 /** All Core/Host contracts here are deterministic fixture DTOs, not a real AI or AppContainer run. */
-export async function setupVerifiedWorkstreamPlatform() {
+export async function setupVerifiedWorkstreamPlatform(withUnmappedRequirement = false) {
   const f = await fixture(W);
   // The generic fixture seeds an unapproved baseline/workstream. Start those journals empty
   // so this test exercises the actual initial approval and publication path.
@@ -46,6 +46,8 @@ export async function setupVerifiedWorkstreamPlatform() {
   }
   const mainContext = { ...ctx(), projectId: W };
   const sourceId = `lead-turn:${mainContext.runId}`, sourceText = "User-approved test scope for the Builder verification fixture.";
+  const unmapped = { id: "REQ-UNMAPPED", description: "A second approved requirement has not been assigned yet.",
+    acceptanceCriteriaIds: ["AC-UNMAPPED"] };
   f.values.set(mapKey(key(`lead-chat.turn.v1.${mainContext.runId}`)), {
     workspaceId: W, selectionRevision: 1, agentId: A, sessionId: mainContext.sessionId, channel: "main", schemaVersion: 1,
     requestId: mainContext.runId, previousRequestId: null, sequence: 0, text: sourceText, createdAt: now,
@@ -54,7 +56,8 @@ export async function setupVerifiedWorkstreamPlatform() {
   } as never);
   const draft = { projectId: W, revisionId: "verify-design-draft-1", sourceIds: [sourceId],
     specification: { revisionId: "verify-spec-draft-1", productTier: "S" as const,
-      requirements: [{ id: "REQ-1", description: "The assigned feature remains correct.", acceptanceCriteriaIds: ["AC-1"] }],
+      requirements: [{ id: "REQ-1", description: "The assigned feature remains correct.", acceptanceCriteriaIds: ["AC-1"] },
+        ...(withUnmappedRequirement ? [unmapped] : [])],
       targets: ["desktop" as const], dataPolicyRef: "local-test-data" },
     graph: { graphRevisionId: "verify-graph-draft-1", entities: [{ id: "feature", kind: "feature", specRef: "REQ-1" }],
       relations: [], viewLayoutRef: "verify-layout" }, questions: [] };
@@ -71,11 +74,14 @@ export async function setupVerifiedWorkstreamPlatform() {
     coverageTargets: [{ targetKind: "requirement", targetId: "REQ-1", ruleIds: ["feature-behavior"] },
       { targetKind: "ac", targetId: "AC-1", ruleIds: ["feature-behavior"] }],
     scenarios: [{ id: "open-ready", state: "new", event: "open", nextState: "ready", exceptionId: null }],
-    itemDecisions: [{ requirementId: "REQ-1", status: "RESOLVED", reason: "Approval-backed fixture relationship.", sourceIds: [sourceId] }],
-    acceptanceCriteria: [{ requirementId: "REQ-1", acId: "AC-1", sourceId, quote: sourceText }] };
+    itemDecisions: [{ requirementId: "REQ-1", status: "RESOLVED", reason: "Approval-backed fixture relationship.", sourceIds: [sourceId] },
+      ...(withUnmappedRequirement ? [{ requirementId: unmapped.id, status: "RESOLVED", reason: "Approved but not assigned.", sourceIds: [sourceId] }] : [])],
+    acceptanceCriteria: [{ requirementId: "REQ-1", acId: "AC-1", sourceId, quote: sourceText },
+      ...(withUnmappedRequirement ? [{ requirementId: unmapped.id, acId: unmapped.acceptanceCriteriaIds[0], sourceId, quote: sourceText }] : [])] };
   const proposal = await proposeFirstDesignReview({ projectId: W, expectedDraftRevisionId: draft.revisionId,
     expectedReviewHeadRevisionId: null, pack, designModel,
-    sourcePins: [{ requirementId: "REQ-1", acId: null, sourceId }, { requirementId: "REQ-1", acId: "AC-1", sourceId }] },
+    sourcePins: [{ requirementId: "REQ-1", acId: null, sourceId }, { requirementId: "REQ-1", acId: "AC-1", sourceId },
+      ...(withUnmappedRequirement ? [{ requirementId: unmapped.id, acId: unmapped.acceptanceCriteriaIds[0], sourceId }] : [])] },
   mainContext, f.platform);
   assert.ok(proposal.revision);
   const actionContext = { ...f.platform, companyId: W, actor: { type: "user", companyId: W, userId: "fixture-user" } };

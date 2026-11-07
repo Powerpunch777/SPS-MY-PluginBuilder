@@ -5,8 +5,8 @@ import { W } from "./fixtures/cto-platform.ts";
 import { progressTool, validationFixture, validationTool } from "./fixtures/integration-manager-platform.ts";
 
 // Fixture Host responses exercise the existing journals and registered producer tools.
-async function setup(withRegression = false) {
-  const f = await validationFixture(withRegression);
+async function setup(withRegression = false, withUnmappedRequirement = false) {
+  const f = await validationFixture(withRegression, withUnmappedRequirement);
   const { localFolders: folders } = f.f.platform as unknown as { localFolders: {
     readWorkspaceSourceGitTipV1(...args: string[]): Promise<Record<string, unknown>>;
   } };
@@ -44,10 +44,17 @@ test("joins the current verified task and exact candidate Git and CI/E2E observa
   assert.equal(value.ci.runId, ci);
   assert.equal(value.e2e.runId, e2e);
   assert.equal(value.deliveryAuthority, "not-established");
+  assert.deepEqual(value.scopeTrace.unmappedRequirementIds, []);
+  assert.equal(value.scopeTrace.requirements[0]?.requirementId, "REQ-1");
+  assert.deepEqual(value.scopeTrace.requirements[0]?.acceptanceCriteriaIds, ["AC-1"]);
+  assert.deepEqual(value.scopeTrace.requirements[0]?.tasks.map(task => [task.taskId, task.verificationEventId, task.commitSha]),
+    [["task-dev", f.eventId, "d".repeat(40)]]);
   const input = { workstreamId: f.input.workstreamId, eventId: f.eventId, projection: "candidate" };
   const shown = await progressTool().handler(input, f.managerContext, f.f.platform);
   assert.deepEqual(shown.data, { status: "observed", candidate: value.candidate, planRevisionId: value.plan.revisionId,
     boardRevisionId: value.boardRevisionId, workstreamCount: 1, taskCount: 1, ciRunId: ci, e2eRunId: e2e,
+    approvedScope: { specificationRevisionId: value.scopeTrace.specificationRevisionId, requirementCount: 1,
+      unmappedRequirementCount: 0, unmappedRequirementIds: [] },
     deliveryAuthority: "not-established" });
   await assert.rejects(async () => await progressTool().handler(input, { ...f.managerContext, runId: f.managerContext.sessionId },
     f.f.platform), /receipt|run|Manager/iu);
@@ -100,4 +107,22 @@ test("unconfigured regression is unsupported without reserving a new Run", async
   const result = await validationTool().handler({ ...f.input, phase: "regression" }, f.managerContext, f.f.platform);
   assert.deepEqual(result.data, { status: "unsupported", reason: "main-validation-plan-reference-unavailable", executionStarted: false });
   assert.equal(f.enqueueCalls, 0);
+});
+
+test("a passing integrated candidate retains unmapped approved requirements and their ACs", async () => {
+  const { f, complete, read } = await setup(true, true);
+  await complete("ci");
+  await complete("e2e");
+  await complete("regression");
+  const value = await read();
+  assert.equal(value.status, "observed");
+  if (value.status !== "observed") return;
+  assert.deepEqual(value.scopeTrace.unmappedRequirementIds, ["REQ-UNMAPPED"]);
+  assert.deepEqual(value.scopeTrace.requirements.find(row => row.requirementId === "REQ-UNMAPPED"),
+    { requirementId: "REQ-UNMAPPED", acceptanceCriteriaIds: ["AC-UNMAPPED"], tasks: [] });
+  const progress = await progressTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId,
+    projection: "candidate" }, f.managerContext, f.f.platform);
+  assert.deepEqual((progress.data as Record<string, unknown>).approvedScope, { specificationRevisionId: value.scopeTrace.specificationRevisionId,
+    requirementCount: 2, unmappedRequirementCount: 1, unmappedRequirementIds: ["REQ-UNMAPPED"] });
+  assert.equal((progress.data as Record<string, unknown>).deliveryAuthority, "not-established");
 });

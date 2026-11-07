@@ -299,5 +299,5 @@ test("the retry does not follow an unconfirmed newer candidate head", async () =
   assert.equal(calls, 1);
   const head = await createIntegrationAttemptStore({ workspaceId: W, ...input }, fixture.f.platform.state).current();
   assert.equal(head?.sequence, 2);
-  assert.deepEqual(head?.revision.git, { status: "conflict", reason: "head_changed", actualHead: "9".repeat(40) });
+  assert.deepEqual({ ...head?.revision.git }, { status: "conflict", reason: "head_changed", actualHead: "9".repeat(40) });
 });

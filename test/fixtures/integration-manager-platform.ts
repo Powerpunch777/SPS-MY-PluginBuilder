@@ -23,8 +23,8 @@ export const validationTool = () => createBuilderPlatform().tools.find(item => i
 export const progressTool = () => createBuilderPlatform().tools.find(item => item.name === "builder.read-integration-progress")!;
 
 /** Host/Core-facing receipts in the caller are deterministic DTO fixtures, not live AI or Git execution. */
-export async function preparedFixture(withValidation = false, withRegression = false) {
-  const setup = await setupVerifiedWorkstreamPlatform();
+export async function preparedFixture(withValidation = false, withRegression = false, withUnmappedRequirement = false) {
+  const setup = await setupVerifiedWorkstreamPlatform(withUnmappedRequirement);
   const f = setup.f;
   const verification = await setup.verify();
   assert.equal(verification.data.status, "published");
@@ -99,8 +99,8 @@ export async function preparedFixture(withValidation = false, withRegression = f
     agentId: MANAGER, sessionId: MANAGER_SESSION, runId: MANAGER_RUN } };
 }
 
-export async function validationFixture(withRegression = false) {
-  const fixture = await preparedFixture(true, withRegression);
+export async function validationFixture(withRegression = false, withUnmappedRequirement = false) {
+  const fixture = await preparedFixture(true, withRegression, withUnmappedRequirement);
   let integrated = false, enqueueCalls = 0, loseReply = false, candidateMoved = false;
   const runs = new Map<string, any>(), requests: any[] = [];
   const folders = { async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {

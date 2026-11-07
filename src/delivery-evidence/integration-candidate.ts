@@ -5,6 +5,7 @@ import { createIntegrationAttemptStore, type IntegrationAttempt } from "../build
 import { readIntegrationValidationRuns } from "../builder-gates/integration-validation.ts";
 import { createWorkstreamVerificationPublication } from "../builder-gates/workstream-verification-publication.ts";
 import type { VerifiedWorkstreamSnapshot } from "../builder-gates/workstream-verification-consumer.ts";
+import { readDesignBaseline } from "../design-baseline-tools.ts";
 import { exactToolRecord } from "../lead-tool-authority.ts";
 import { taskPacketRecordDigest } from "../domain/task-packets.ts";
 import { createTaskPacketStore } from "../task-packet-tools.ts";
@@ -15,6 +16,9 @@ const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const TASK_PREFIX = "builder-v1:task-packet:";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 type TechnicalRun = Awaited<ReturnType<typeof readIntegrationValidationRuns>>[number];
+type TaskTrace = Readonly<{ workstreamId: string; verificationEventId: string; taskId: string; taskRevision: number;
+  taskSha256: string; scopeNodeIds: readonly string[]; qaReportRevisionId: string; qaReportSha256: string;
+  integrationAttemptRevisionId: string; commitSha: string; treeSha: string }>;
 
 function chainMatches(attempts: readonly IntegrationAttempt[], base: string, commit: string, tree: string) {
   const next = new Map<string, { commitSha: string; treeSha: string }>();
@@ -43,13 +47,20 @@ function chainMatches(attempts: readonly IntegrationAttempt[], base: string, com
 }
 
 /** Read existing records only. A matching technical candidate does not establish
- * complete approved-scope coverage, regression, G6/G7 or delivery authority. */
+ * G6/G7 or delivery authority. Scope trace records links, not functional coverage. */
 export async function readIntegrationCandidate(workspaceId: string, platform: SpsPlatformInvocationContext) {
   const unavailable = <Status extends "pending" | "stale" | "failed" | "unknown">(status: Status, reason: string) => ({ status, reason });
   try {
     const plan = (await readCurrentIntegrationPlan(workspaceId, platform))?.revision;
     const board = (await readWorkstreams(workspaceId, workspaceId, platform))?.revision;
     if (!plan || !board?.workstreams.length) return unavailable("pending", "integration-plan-or-workstream-board-unavailable");
+    const baseline = (await readDesignBaseline(workspaceId, workspaceId, platform))?.revision;
+    if (!baseline || baseline.revisionId !== plan.baselineRevisionId || hash(baseline) !== plan.baselineDigest) {
+      return unavailable("stale", "integration-approved-scope-changed");
+    }
+    const byRequirement = new Map(baseline.specification.requirements.map(requirement => [requirement.id, {
+      requirementId: requirement.id, acceptanceCriteriaIds: [...requirement.acceptanceCriteriaIds], tasks: [] as TaskTrace[],
+    }]));
     const folders = (platform as SpsPlatformInvocationContext & { localFolders?: {
       readWorkspaceSourceGitTipV1?: (sourceId: string, folderKey: string, branch: string) => Promise<unknown>;
     } }).localFolders;
@@ -94,8 +105,9 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
           || qaTasks.length !== 1) return unavailable("stale", "workstream-task-verification-pins-changed");
         const qaTaskId = qaTasks[0]!.packet.taskId;
         const report = (await createTaskQaReportStore({ ...scope, ctoId, qaTaskId }, platform.state).current())?.revision;
+        const reportSha256 = hash(report ?? null);
         if (report?.verdict !== "passed" || !snapshot.qaEvidence.some(qa => qa.report.sourceId === `builder-v1:task-qa-report:${qaTaskId}`
-          && qa.report.revisionId === report.revisionId && qa.report.sha256 === hash(report))) {
+          && qa.report.revisionId === report.revisionId && qa.report.sha256 === reportSha256)) {
           return unavailable("stale", "workstream-independent-qa-pins-changed");
         }
         const attempt = (await createIntegrationAttemptStore({ workspaceId, workstreamId: spec.id,
@@ -108,6 +120,15 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
           return unavailable("stale", "workstream-task-integration-pins-changed");
         }
         if (attempt.git?.status === "conflict") return unavailable("failed", "workstream-task-integration-conflict");
+        const trace: TaskTrace = { workstreamId: spec.id, verificationEventId: snapshot.eventId, taskId,
+          taskRevision: task.packet.revision, taskSha256: digest, scopeNodeIds: [...task.packet.scopeNodeIds],
+          qaReportRevisionId: report.revisionId, qaReportSha256: reportSha256, integrationAttemptRevisionId: attempt.revisionId,
+          commitSha: attempt.effect.incomingCommit, treeSha: attempt.effect.incomingTree };
+        for (const requirementId of task.packet.requirementIds) {
+          const requirement = byRequirement.get(requirementId);
+          if (!requirement) return unavailable("stale", "integration-task-outside-approved-scope");
+          requirement.tasks.push(trace);
+        }
         attempts.push(attempt);
       }
     }
@@ -146,7 +167,10 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
       || (await checkIntegrationPrerequisites(workspaceId, board.workstreams[0]!.spec.id, platform)).status !== "ready"
       || JSON.stringify(await tip(plan.baseBranch)) !== JSON.stringify(base)
       || JSON.stringify(await tip(plan.candidateBranch)) !== JSON.stringify(candidate)) return unavailable("stale", "integration-candidate-changed-during-read");
-    return { status: "observed" as const, candidate, plan, boardRevisionId: board.revisionId, snapshots, attempts,
+    const requirements = [...byRequirement.values()];
+    const scopeTrace = { baselineRevisionId: baseline.revisionId, specificationRevisionId: baseline.specification.revisionId,
+      requirements, unmappedRequirementIds: requirements.filter(requirement => !requirement.tasks.length).map(requirement => requirement.requirementId) };
+    return { status: "observed" as const, candidate, plan, boardRevisionId: board.revisionId, snapshots, attempts, scopeTrace,
       ci: required.ci, e2e: required.e2e, ...(required.regression ? { regression: required.regression } : {}),
       deliveryAuthority: "not-established" as const };
   } catch {
