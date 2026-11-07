@@ -12,7 +12,7 @@ import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_
   DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL,
   SUBMIT_TASK_SOURCE_TOOL, READ_TASK_SOURCE_SUBMISSIONS_TOOL, ACCEPT_TASK_SOURCE_SUBMISSION_TOOL,
   REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_HISTORY_TOOL,
-  PUBLISH_TASK_QA_REPORT_TOOL } from "./task-packet-tool-declarations.mjs";
+  PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL } from "./task-packet-tool-declarations.mjs";
 import { READ_CONSULTATION_ANALYSIS_TOOL } from "./tool-declarations.mjs";
 import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,
   RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL } from "./spec-assurance/tool-declarations.mjs";
@@ -41,7 +41,9 @@ export default defineSpsPluginManifest({
   ...surface,
   capabilities: [...surface.capabilities, "ui.workspaceShell.provide", "plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
     "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES, ...taskFolderCapabilities,
-    ...taskProtectedQaCapabilities],
+    ...taskProtectedQaCapabilities, "events.emit", "jobs.schedule"],
+  jobs: [{ jobKey: "builder.integrate-verified-workstream", displayName: "Integrate a verified Workstream", scope: "workspace",
+    description: "Event-driven consumption of current guarded Workstream verification. No periodic schedule or AI wake is implied." }],
   entrypoints: { ...surface.entrypoints, worker: "./dist/worker.js", workspaceWorker: "./dist/worker.js" },
   companyActivation: { defaultEnabled: false },
   ...(taskFolderCapabilities.includes("local.folders") ? { localFolders: [{
@@ -57,7 +59,7 @@ export default defineSpsPluginManifest({
     READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
     DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL, SUBMIT_TASK_SOURCE_TOOL,
     READ_TASK_SOURCE_SUBMISSIONS_TOOL, ACCEPT_TASK_SOURCE_SUBMISSION_TOOL,
-    REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_HISTORY_TOOL, PUBLISH_TASK_QA_REPORT_TOOL,
+    REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_HISTORY_TOOL, PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL,
     SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL,
     PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL,
     READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,

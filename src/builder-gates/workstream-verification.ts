@@ -5,6 +5,7 @@ import { workstreamInstructionDigest } from "../cto-delivery-store.ts";
 import type { SpecCoverageResult } from "../spec-coverage/evaluator.ts";
 import type { BaselineBodyRead } from "../project-documents/baseline-body-source.ts";
 import type { EvidencePin } from "./workstream-verification-consumer.ts";
+import { parseTaskQaReport, taskQaCriteria, type TaskQaReport } from "../task-qa-reports.ts";
 
 export type GateProofScope = Readonly<{ workspaceId: string; projectId: string; workstreamId: string; taskId: string }>;
 // These identifiers serialize Builder adapter payloads; they are not Core API
@@ -50,6 +51,22 @@ export type GateRuntimeProof = Readonly<{
   }>;
   report: EvidencePin;
 }>;
+// Builder authors the QA report; Core supplies only the protected execution
+// receipt. Neither is a fictional Core QA verdict or a build artifact.
+export type GateProtectedTaskQaProof = Readonly<{
+  provenance: Readonly<{ adapter: "builder.protected-task-qa-proof.v1"; operation: "readCurrent" }>;
+  scope: GateProofScope;
+  status: "passed";
+  taskRecordSha256: string;
+  qaRecord: TaskPacketRecord;
+  report: TaskQaReport;
+  authorRun: Readonly<{ runId: string; status: "succeeded"; cancellationRequested: false }>;
+  runPin: EvidencePin;
+  receiptPin: EvidencePin;
+  referencePin: EvidencePin;
+  reportPin: EvidencePin;
+}>;
+export type GateRuntimeEvidence = GateRuntimeProof | GateProtectedTaskQaProof;
 export type BaselineRef = Readonly<{ documentId: string; documentRevisionId: string; bodySha256: string }>;
 export type BaselineBodyReader = Readonly<{ read(documentRevisionId: string): Promise<BaselineBodyRead> }>;
 export type GateReader<T> = (scope: GateProofScope) => Promise<Readonly<{ status: "available"; value: T }> | Readonly<{ status: "unknown"; reason: string }>>;
@@ -186,6 +203,54 @@ function validRuntimeProof(value: GateRuntimeProof, scope: GateProofScope, task:
   } catch { return false; }
 }
 
+function protectedProof(value: GateRuntimeEvidence): value is GateProtectedTaskQaProof {
+  return value?.provenance?.adapter === "builder.protected-task-qa-proof.v1";
+}
+
+function validProtectedTaskQaProof(value: GateProtectedTaskQaProof, scope: GateProofScope, task: TaskPacketRecord,
+  taskDigest: string, workstream: WorkstreamRecord, inventory: GateSourceInventory): boolean {
+  try {
+    if (!exactFields(value, ["provenance", "scope", "status", "taskRecordSha256", "qaRecord", "report", "authorRun",
+      "runPin", "receiptPin", "referencePin", "reportPin"])
+      || !exactFields(value.provenance, ["adapter", "operation"]) || value.provenance.operation !== "readCurrent"
+      || !sameScope(value.scope, scope) || value.status !== "passed" || value.taskRecordSha256 !== taskDigest) return false;
+    const report = parseTaskQaReport(value.report), reference = report.reference, binding = reference.binding;
+    const qa = parseTaskPacketRecord(value.qaRecord, scope.projectId, task.packet.ctoId, scope.workstreamId);
+    const qaDigest = taskPacketRecordDigest(qa, scope.projectId, task.packet.ctoId, scope.workstreamId);
+    if (reference.scope.workspaceId !== scope.workspaceId || reference.scope.projectId !== scope.projectId
+      || reference.scope.ctoId !== task.packet.ctoId || reference.scope.workstreamId !== scope.workstreamId
+      || reference.scope.qaTaskId !== qa.packet.taskId || qa.packet.kind !== "qa"
+      || binding.implementationTaskId !== scope.taskId || binding.implementationRevision !== task.packet.revision
+      || binding.implementationDigest !== taskDigest || binding.qaRevision !== qa.packet.revision || binding.qaDigest !== qaDigest
+      || !qa.dependencyPins.some(pin => pin.taskId === scope.taskId && pin.revision === task.packet.revision && pin.recordSha256 === taskDigest)
+      || qa.source.specRevision !== workstream.spec.revision || qa.source.instructionSha256 !== workstreamInstructionDigest(workstream)
+      || !task.packet.sourceAccess || binding.sourceId !== task.packet.sourceAccess.sourceId
+      || binding.folderKey !== task.packet.sourceAccess.folderKey || binding.branch !== task.packet.sourceAccess.branch
+      || report.verdict !== "passed" || report.coreStatus !== "succeeded"
+      || report.author.agentId === task.author.agentId || report.author.sessionId === task.author.sessionId
+      || report.author.runId === task.author.runId || report.author.runId === binding.runId
+      || !exactFields(value.authorRun, ["runId", "status", "cancellationRequested"])
+      || value.authorRun.runId !== report.author.runId || value.authorRun.status !== "succeeded"
+      || value.authorRun.cancellationRequested !== false) return false;
+    const criteria = taskQaCriteria(qa.packet.acceptance, qa.packet.testPlan?.passCriteria ?? [], task.packet.acceptance);
+    if (report.checks.length !== criteria.length || criteria.some(criterion => !report.checks.some(check =>
+      check.criterionId === criterion.criterionId && check.text === criterion.text && check.verdict === "passed"))) return false;
+    const expected = [
+      [value.runPin, `core:protected-test-run:${binding.runId}`, binding.runId, null],
+      [value.receiptPin, `core:protected-test-receipt:${binding.runId}`, report.coreReceiptDigest, report.coreReceiptDigest],
+      [value.referencePin, `builder-v1:task-qa-run:${qa.packet.taskId}`, reference.revisionId, digest(reference)],
+      [value.reportPin, `builder-v1:task-qa-report:${qa.packet.taskId}`, report.revisionId, digest(report)],
+    ] as const;
+    if (expected.some(([pin, sourceId, revisionId, sha256]) => !validPin(pin) || pin.sourceId !== sourceId
+      || pin.revisionId !== revisionId || sha256 !== null && pin.sha256 !== sha256
+      || !sameAcceptedPin(pin, uniquePin(inventory.pins, sourceId)))) return false;
+    const taskPin = uniquePin(inventory.pins, `builder-v1:task-packet:${scope.taskId}`);
+    const qaPin = uniquePin(inventory.pins, `builder-v1:task-packet:${qa.packet.taskId}`);
+    const workstreamPin = uniquePin(inventory.pins, `builder-v1:workstream:${scope.workstreamId}`);
+    return taskPin?.sha256 === taskDigest && qaPin?.sha256 === qaDigest && workstreamPin?.sha256 === digest(workstream);
+  } catch { return false; }
+}
+
 /**
  * Gate producer over canonical Workstream/TaskPacket/D3 inputs. The public SDK
  * has no Builder-specific inventory or runtime-proof operation. Absent readers
@@ -195,7 +260,7 @@ function validRuntimeProof(value: GateRuntimeProof, scope: GateProofScope, task:
  */
 export function createWorkstreamVerificationProducer(readers: Readonly<{
   sourceInventory?: GateReader<GateSourceInventory>;
-  runtimeProof?: GateReader<GateRuntimeProof>;
+  runtimeProof?: GateReader<GateRuntimeEvidence>;
   baselineBodySource?: BaselineBodyReader;
 }>) {
   return Object.freeze({
@@ -268,10 +333,13 @@ export function createWorkstreamVerificationProducer(readers: Readonly<{
       if (runtimeRead.status !== "available") return unknown(runtimeRead.reason || "core-runtime-proof-unavailable");
       const inventory = inventoryRead.value, runtime = runtimeRead.value;
       if (!validInventory(inventory, input.scope)) return unknown("authenticated-current-source-inventory-invalid-or-incomplete");
-      if (!validRuntimeProof(runtime, input.scope, task, taskDigest, input.workstream, inventory)) {
+      if (!(protectedProof(runtime)
+        ? validProtectedTaskQaProof(runtime, input.scope, task, taskDigest, input.workstream, inventory)
+        : validRuntimeProof(runtime, input.scope, task, taskDigest, input.workstream, inventory))) {
         return unknown("core-runtime-proof-invalid-or-out-of-scope");
       }
-      if (!inventory.pins.some(pin => samePin(pin, runtime.report))) return unknown("runtime-report-not-in-current-source-inventory");
+      const reportPin = protectedProof(runtime) ? runtime.reportPin : runtime.report;
+      if (!inventory.pins.some(pin => samePin(pin, reportPin))) return unknown("runtime-report-not-in-current-source-inventory");
       const taskSource = inventory.pins.find(pin => pin.sourceId === `builder-v1:task-packet:${input.scope.taskId}`);
       if (!taskSource || taskSource.sha256 !== taskDigest) return unknown("task-packet-not-bound-to-current-source-inventory");
       const requiredKinds = ["baseline", "graph", "workstream", "task-packet"] as const;
@@ -290,7 +358,8 @@ export function createWorkstreamVerificationProducer(readers: Readonly<{
       const g4 = inventory.pins.filter(pin => requiredKinds.some(kind => pin.sourceId.startsWith(`builder-v1:${kind}:`)));
       const baselineBodyPin: EvidencePin = Object.freeze({ sourceId: baselineDocument.documentId,
         revisionId: baselineDocument.documentRevisionId, sha256: baselineDocument.bodySha256 });
-      const g6 = [runtime.execution.artifactPin, runtime.independentQa.receipt];
+      const g6 = protectedProof(runtime) ? [runtime.runPin, runtime.receiptPin, runtime.reportPin]
+        : [runtime.execution.artifactPin, runtime.independentQa.receipt];
       return Object.freeze({ status: "VERIFIED", reasons: Object.freeze([]), snapshot: Object.freeze({
         eventId: input.eventId,
         workspaceId: input.scope.workspaceId, projectId: input.scope.projectId, workstreamId: input.scope.workstreamId,
@@ -300,7 +369,7 @@ export function createWorkstreamVerificationProducer(readers: Readonly<{
         gateDecisions: Object.freeze([
           Object.freeze({ gateId: "G4" as const, verdict: "PASS" as const, evidenceRefs: Object.freeze([...g4, baselineBodyPin]) }),
           Object.freeze({ gateId: "G6" as const, verdict: "PASS" as const, evidenceRefs: Object.freeze(g6) }),
-        ]), qaEvidence: Object.freeze([Object.freeze({ result: "passed" as const, report: runtime.independentQa.receipt })]),
+        ]), qaEvidence: Object.freeze([Object.freeze({ result: "passed" as const, report: reportPin })]),
       }) });
       } catch { return unknown("workstream-verification-input-or-reader-malformed"); }
     },

@@ -15,3 +15,4 @@ export const REQUEST_PROTECTED_TASK_QA_TOOL: Tool<"builder.request-protected-tas
 export const READ_PROTECTED_TASK_QA_TOOL: Tool<"builder.read-protected-task-qa">;
 export const READ_PROTECTED_TASK_QA_HISTORY_TOOL: Tool<"builder.read-protected-task-qa-history">;
 export const PUBLISH_TASK_QA_REPORT_TOOL: Tool<"builder.publish-task-qa-report">;
+export const VERIFY_WORKSTREAM_TOOL: Tool<"builder.verify-workstream">;

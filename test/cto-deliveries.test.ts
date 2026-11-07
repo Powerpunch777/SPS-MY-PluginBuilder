@@ -121,6 +121,7 @@ test("accepts exact Task Worker and protected QA CTO profiles while preserving h
   const protectedQaNames = [...tenNames, "builder.dispatch-task-worker", "builder.read-task-source-submissions",
     "builder.accept-task-source-submission", "builder.read-protected-task-qa"].sort();
   const protectedQaHistoryNames = [...protectedQaNames, "builder.read-protected-task-qa-history"].sort();
+  const verificationNames = [...protectedQaHistoryNames, "builder.verify-workstream"].sort();
   const protectedQa = delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: protectedQaNames } });
   const protectedQaHistory = delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: protectedQaHistoryNames } });
   assert.deepEqual(parseCtoDelivery(legacyTwo, workspaceId, projectId, ctoId).executionPolicy.toolNames,
@@ -131,12 +132,16 @@ test("accepts exact Task Worker and protected QA CTO profiles while preserving h
   assert.deepEqual(parseCtoDelivery(ten, workspaceId, projectId, ctoId).executionPolicy.toolNames, tenNames);
   assert.deepEqual(parseCtoDelivery(protectedQa, workspaceId, projectId, ctoId).executionPolicy.toolNames, protectedQaNames);
   assert.deepEqual(parseCtoDelivery(protectedQaHistory, workspaceId, projectId, ctoId).executionPolicy.toolNames, protectedQaHistoryNames);
+  assert.deepEqual(parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: verificationNames } }),
+    workspaceId, projectId, ctoId).executionPolicy.toolNames, verificationNames);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1", toolNames: [...eightNames, "builder.extra"] } }), workspaceId, projectId, ctoId), /exact supported dense CTO policy profile/);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1",
     toolNames: tenNames.map(name => name === "builder.prepare-task-worker" ? "builder.extra" : name) } }),
   workspaceId, projectId, ctoId), /canonical sorted CTO planning profile/);
   assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1",
-    toolNames: [...protectedQaHistoryNames, "builder.extra"] } }), workspaceId, projectId, ctoId), /exact supported dense CTO policy profile/);
+    toolNames: [...protectedQaHistoryNames, "builder.extra"] } }), workspaceId, projectId, ctoId), /canonical sorted CTO planning profile/);
+  assert.throws(() => parseCtoDelivery(delivery({ executionPolicy: { mode: "plugin-tools-only-v1",
+    toolNames: [...verificationNames, "builder.extra"] } }), workspaceId, projectId, ctoId), /exact supported dense CTO policy profile/);
 });
 
 test("parses exact scoped planning-only task packets and freezes nested data", () => {

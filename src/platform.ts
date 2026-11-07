@@ -33,8 +33,11 @@ import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_
   REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_HISTORY_TOOL } from "./task-packet-tool-declarations.mjs";
 import { requestProtectedTaskQa, readProtectedTaskQa } from "./task-protected-qa.ts";
 import { readProtectedTaskQaHistory } from "./task-protected-qa-history.ts";
-import { PUBLISH_TASK_QA_REPORT_TOOL } from "./task-packet-tool-declarations.mjs";
+import { PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL } from "./task-packet-tool-declarations.mjs";
 import { publishTaskQaReport } from "./task-qa-reports.ts";
+import { verifyCurrentWorkstream } from "./builder-gates/current-workstream-verification.ts";
+import { WORKSTREAM_VERIFIED_JOB } from "./builder-gates/workstream-verification-publication.ts";
+import { consumeVerifiedWorkstreamJob } from "./builder-gates/integration-manager-job.ts";
 import { acceptCtoTaskSourceSubmission, readCtoTaskSourceSubmission } from "./task-source-acceptance.ts";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
@@ -821,10 +824,16 @@ async function firstDesignReviewView(companyId: string, platform: SpsPlatformInv
 
 export function createBuilderPlatform() {
   return defineSpsPlatformContract({
-    capabilities: ["plugin.state.read", "plugin.state.write", "agent.tools.register", "agents.read", "agent.sessions.create",
+    capabilities: ["plugin.state.read", "plugin.state.write", "events.emit", "jobs.schedule", "agent.tools.register", "agents.read", "agent.sessions.create",
       "agent.sessions.send", "agent.sessions.read", "agent.sessions.cancel", ...OWNED_AGENT_CAPABILITIES,
       ...taskFolderCapabilities as (typeof SPS_PLATFORM_CAPABILITIES)[number][],
       ...["sps.runs.dispatch", "sps.executions.read"].filter(capability => (SPS_PLATFORM_CAPABILITIES as readonly string[]).includes(capability)) as (typeof SPS_PLATFORM_CAPABILITIES)[number][]],
+    jobs: [{ jobKey: WORKSTREAM_VERIFIED_JOB, handler: async (job, platform) => {
+      const result = await consumeVerifiedWorkstreamJob(job, platform);
+      // A persisted pending reservation is not successful Git/CI execution.
+      // Surface the missing producer to Core's bounded job-error handling.
+      if (result.status !== "accepted") throw new Error(`Workstream integration not executed: ${result.reason}`);
+    } }],
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
     handler: (params, context, platform) => readLeadSolution(params, context, platform) },
@@ -1061,6 +1070,9 @@ export function createBuilderPlatform() {
         content: "Historical Task-to-Core-run references and technical status only; no QA verdict or completion is inferred.",
         data: await readProtectedTaskQaHistory(params, context, platform) as unknown as JsonValue,
       })) },
+    { name: VERIFY_WORKSTREAM_TOOL.name, declaration: { displayName: VERIFY_WORKSTREAM_TOOL.displayName,
+      description: VERIFY_WORKSTREAM_TOOL.description, parametersSchema: VERIFY_WORKSTREAM_TOOL.parametersSchema },
+      handler: (params, context, platform) => serialize(context.companyId, () => verifyCurrentWorkstream(params, context, platform)) },
     { name: PUBLISH_TASK_QA_REPORT_TOOL.name, declaration: { displayName: PUBLISH_TASK_QA_REPORT_TOOL.displayName,
       description: PUBLISH_TASK_QA_REPORT_TOOL.description, parametersSchema: PUBLISH_TASK_QA_REPORT_TOOL.parametersSchema },
       handler: (params, context, platform) => serialize(context.companyId, async () => ({

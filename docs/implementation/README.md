@@ -40,8 +40,19 @@
 - 보호 실행의 `succeeded`는 기술 실행 결과다. 등록된 QA 보고 경로는 개발 Task의 인수 조건,
   QA Task의 인수 조건과 테스트 계획 기준을 모두 평가하고, 정확한 Core 완료 receipt와
   독립 QA 작성자를 고정한다. 실패·미검사 항목은 합격으로 바꾸지 않는다. 현재 이 보고
-  경로의 독립 통합 QA는 진행 중이며, Workstream VERIFIED 발행과 Manager 자동 통합은
-  여전히 별도 미완료 의존성이다.
+  경로의 독립 fixture QA는 작성 권한·정확한 기준·Task/등록 변경 중 CAS 거부를 확인했다.
+  실제 Core 영수증을 받는 통합 QA와 실제 AI QA 수행은 별도 검증 대상이다.
+- `f587dcb`는 같은 실행 이력에서 QA 작성 판정, Core 영수증 일치 여부와 작성자 Run의
+  종료 상태를 각각 보여 준다. 조회는 과거 결과를 현재 합격으로 바꾸거나 AI를 깨우지 않는다.
+- 현재 CTO의 `builder.verify-workstream` 연결은 기존 Baseline·원문 검증·D3 Coverage,
+  전체 개발 Task와 정확한 QA 보고서/Run reference, Core 기술 영수증을 서버에서 읽는다.
+  Core가 작성한 QA 판정이나 빌드 Artifact를 가정하지 않는다. QA 작성자 Run이 정상
+  종료되지 않았거나 최신 보고서·소스가 달라지면 과거 합격으로 대체하지 않는다.
+  검증 발행은 기존 원자 CAS/이벤트 Job을 사용하며 역할·등록·각 journal head를 함께
+  고정한다. 해당 도구와 Workspace 이벤트 Job을 등록했으며 독립 양성 경로 QA는 진행 중이다.
+- 이벤트 소비는 현재 검증 기록을 다시 읽고 기존 인수 원장에 보존한다. 승인된 Git·CI
+  실행 생산자는 아직 연결되지 않았으며, 미실행을 정상 통합 완료로 반환하지 않고 Job
+  오류로 드러낸다. 자동 통합·E2E·Final Packet 및 사용자 최종 확정은 미완료다.
 - 제품 SDK pin은 변경하지 않았다. 후보 API의 존재, 실제 실행 연결, fixture 판정,
   설치된 앱/AI 검증을 구분하며 미지원 Host에서 대체 실행하거나 PASS를 만들지 않는다.
 

@@ -8,6 +8,12 @@ const ctoTaskPacketScope = { type: "object", additionalProperties: false,
   required: ["projectId", "ctoId", "workstreamId"],
   properties: { projectId: id, ctoId: id, workstreamId: id } };
 
+export const VERIFY_WORKSTREAM_TOOL = Object.freeze({
+  name: "builder.verify-workstream", displayName: "Verify this CTO's current Workstream",
+  description: "Only the assigned active CTO may request G4/G6 verification. The server reads current Baseline, coverage, Task source acceptance, completed protected execution and independent QA reports. No caller verdict or evidence is accepted. A successful current publication emits the existing integration job atomically; it is not integration completion or final delivery approval.",
+  parametersSchema: ctoTaskPacketScope,
+});
+
 const packetSchema = { type: "object", additionalProperties: false,
   description: "Planning-only packet stored for the exact current instruction. The server enforces a 48 KiB UTF-8 JSON limit.",
   required: ["projectId", "ctoId", "workstreamId", "taskId", "revision", "kind", "title", "goal", "scopeNodeIds", "requirementIds", "dependencies", "included", "excluded", "constraints", "acceptance", "evidenceRequired", "reuse", "testPlan"],

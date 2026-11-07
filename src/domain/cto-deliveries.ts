@@ -20,9 +20,10 @@ const TASK_DISPATCH_POLICY_TOOLS = [...TASK_WORKER_POLICY_TOOLS, "builder.dispat
 const TASK_HANDOFF_POLICY_TOOLS = [...TASK_DISPATCH_POLICY_TOOLS, "builder.read-task-source-submissions" as const, "builder.accept-task-source-submission" as const].sort();
 const TASK_PROTECTED_QA_POLICY_TOOLS = [...TASK_HANDOFF_POLICY_TOOLS, "builder.read-protected-task-qa" as const].sort();
 const TASK_PROTECTED_QA_HISTORY_POLICY_TOOLS = [...TASK_PROTECTED_QA_POLICY_TOOLS, "builder.read-protected-task-qa-history" as const].sort();
+const TASK_VERIFICATION_POLICY_TOOLS = [...TASK_PROTECTED_QA_HISTORY_POLICY_TOOLS, "builder.verify-workstream" as const].sort();
 const POLICY_PROFILES = [LEGACY_POLICY_TOOLS, MEMORY_POLICY_TOOLS, POLICY_TOOLS, TASK_PACKET_POLICY_TOOLS,
   TASK_WORKER_POLICY_TOOLS, TASK_DISPATCH_POLICY_TOOLS, TASK_HANDOFF_POLICY_TOOLS,
-  TASK_PROTECTED_QA_POLICY_TOOLS, TASK_PROTECTED_QA_HISTORY_POLICY_TOOLS] as const;
+  TASK_PROTECTED_QA_POLICY_TOOLS, TASK_PROTECTED_QA_HISTORY_POLICY_TOOLS, TASK_VERIFICATION_POLICY_TOOLS] as const;
 const PHASES = ["prepared", "dispatching", "uncertain", "superseded", "submitted", "succeeded", "failed", "cancelled", "interrupted", "timed_out"] as const;
 const EARLY_PHASES = new Set<string>(["prepared", "dispatching", "uncertain", "superseded"]);
 
@@ -43,7 +44,7 @@ export type CtoDelivery = Readonly<{
   }>;
   executionPolicy: Readonly<{
     mode: "plugin-tools-only-v1";
-    toolNames: readonly (typeof TASK_PROTECTED_QA_HISTORY_POLICY_TOOLS[number])[];
+    toolNames: readonly (typeof TASK_VERIFICATION_POLICY_TOOLS[number])[];
   }>;
   createdAt: string;
   phase: typeof PHASES[number];

@@ -12,6 +12,9 @@ import { createWorkstreamVerificationPublication, WORKSTREAM_VERIFIED_EVENT,
   WORKSTREAM_VERIFIED_JOB } from "../src/builder-gates/workstream-verification-publication.ts";
 import { consumeVerifiedWorkstream, type ManagerDispatchRequest } from "../src/builder-gates/workstream-verification-consumer.ts";
 import type { RevisionState, RevisionJobWake } from "../src/solution-revision-store.ts";
+import { recordTaskQaRunReference } from "../src/task-qa-run-references.ts";
+import { parseTaskQaReport, taskQaCriteria } from "../src/task-qa-reports.ts";
+import type { GateProtectedTaskQaProof } from "../src/builder-gates/workstream-verification.ts";
 
 const scope: GateProofScope = {
   workspaceId: "11111111-1111-4111-8111-111111111111", projectId: "project-1", workstreamId: "ws-1", taskId: "task-1",
@@ -119,6 +122,83 @@ const readers = {
   baselineBodySource: baselineBodyReader,
 };
 
+async function protectedProofFixture() {
+  // TEST_FIXTURE_ONLY: validates Gate composition, not a real Core run or AI QA.
+  const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+  const values = new Map<string, JsonValue>();
+  const state: RevisionState = { async get(key) { return values.get(key.stateKey) ?? null; },
+    async compareAndSet(key, expected, value) {
+      const current = values.get(key.stateKey) ?? null;
+      const swapped = expected.exists ? JSON.stringify(current) === JSON.stringify(expected.value) : current === null;
+      if (swapped) values.set(key.stateKey, structuredClone(value));
+      return { swapped };
+    } };
+  const source = { sourceId: "88888888-8888-4888-8888-888888888888", folderKey: "project-source", branch: "task/one",
+    expectedHead: "d".repeat(40), readPaths: ["src", "test"], writePaths: ["src"], qaWritePaths: [] as string[] };
+  const development = { ...structuredClone(taskRecord), packet: { ...structuredClone(taskRecord.packet), sourceAccess: source } };
+  const developmentDigest = taskPacketRecordDigest(development, scope.projectId, ctoId, scope.workstreamId);
+  const qaRecord = { ...structuredClone(taskRecord), packet: { ...structuredClone(taskRecord.packet), taskId: "qa-1",
+    kind: "qa" as const, dependencies: [scope.taskId], sourceAccess: { ...source, writePaths: [], qaWritePaths: ["test"] }, acceptance: ["Independently checked behavior"] },
+  dependencyPins: [{ taskId: scope.taskId, revision: 1, recordSha256: developmentDigest }] };
+  const qaDigest = taskPacketRecordDigest(qaRecord, scope.projectId, ctoId, scope.workstreamId);
+  const qaWorker = { agentId: "66666666-6666-4666-8666-666666666666", sessionId: "77777777-7777-4777-8777-777777777777" };
+  const coreRunId = "99999999-9999-4999-8999-999999999999", authorRunId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const subjectKey = "test-protected-qa-subject";
+  const recorded = await recordTaskQaRunReference(state, { ...scope, ctoId, implementation: development,
+    implementationDigest: developmentDigest, qa: qaRecord, qaDigest, qaWorker,
+    source: { sourceId: source.sourceId, folderKey: source.folderKey, branch: source.branch },
+    commitSha, treeSha: "c".repeat(40), acceptanceId: "4".repeat(64), submissionId: "5".repeat(64),
+    approvalId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", planSha256: "6".repeat(64), requestId: "test-request-1", subjectKey,
+    subjectKeySha256: createHash("sha256").update(subjectKey).digest("hex"), async assertCurrent() {} }, coreRunId);
+  if (!("reference" in recorded) || !recorded.reference) throw new Error("Missing fixture run reference.");
+  const reference = recorded.reference;
+  const body = { schemaVersion: 1 as const, reference, coreReceiptDigest: "7".repeat(64), coreStatus: "succeeded" as const,
+    author: { ...qaWorker, runId: authorRunId }, checks: taskQaCriteria(qaRecord.packet.acceptance,
+      qaRecord.packet.testPlan.passCriteria, development.packet.acceptance).map(criterion => ({ ...criterion,
+        verdict: "passed" as const, note: "Fixture independently assessed criterion." })),
+    summary: "Fixture QA report.", verdict: "passed" as const };
+  const report = parseTaskQaReport({ ...body, revisionId: `task-qa-report-v1:${hash(body)}` });
+  const proof: GateProtectedTaskQaProof = { provenance: { adapter: "builder.protected-task-qa-proof.v1", operation: "readCurrent" },
+    scope, status: "passed", taskRecordSha256: developmentDigest, qaRecord, report,
+    authorRun: { runId: authorRunId, status: "succeeded", cancellationRequested: false },
+    runPin: pin(`core:protected-test-run:${coreRunId}`, coreRunId, "8".repeat(64)),
+    receiptPin: pin(`core:protected-test-receipt:${coreRunId}`, report.coreReceiptDigest, report.coreReceiptDigest),
+    referencePin: pin("builder-v1:task-qa-run:qa-1", reference.revisionId, hash(reference)),
+    reportPin: pin("builder-v1:task-qa-report:qa-1", report.revisionId, hash(report)) };
+  const pins = [sourcePins[0]!, sourcePins[1]!, workstreamPin,
+    pin(`builder-v1:task-packet:${scope.taskId}`, "task-r1", developmentDigest),
+    pin("builder-v1:task-packet:qa-1", "qa-r1", qaDigest), proof.runPin, proof.receiptPin, proof.referencePin, proof.reportPin];
+  const current: GateSourceInventory = { ...inventory, pins,
+    heads: pins.map(item => ({ sourceId: item.sourceId, revisionId: item.revisionId, digest: item.sha256, sequence: 1 })) };
+  const verify = (candidate: GateProtectedTaskQaProof) => createWorkstreamVerificationProducer({
+    ...readers, sourceInventory: async () => ({ status: "available", value: current }),
+    runtimeProof: async () => ({ status: "available", value: candidate }),
+  }).verify({ ...request, taskRecord: development });
+  return { proof, verify };
+}
+
+test("protected execution and a completed independent Builder QA report establish G6 without fictional Core QA or artifact IDs", async () => {
+  const f = await protectedProofFixture();
+  const result = await f.verify(f.proof);
+  assert.equal(result.status, "VERIFIED", JSON.stringify(result));
+  assert.equal(result.snapshot!.qaEvidence[0]!.report.sourceId, "builder-v1:task-qa-report:qa-1");
+  assert.ok(result.snapshot!.gateDecisions.find(gate => gate.gateId === "G6")!.evidenceRefs
+    .some(ref => ref.sourceId.startsWith("core:protected-test-receipt:")));
+  assert.ok(result.snapshot!.sourcePins.every(ref => !ref.sourceId.startsWith("core:qa-receipt:")
+    && !ref.sourceId.startsWith("core:runtime-artifact:")));
+});
+
+test("protected Gate evidence rejects unfinished authors, wrong receipt, changed source and missing criteria", async () => {
+  const f = await protectedProofFixture();
+  const candidates = [
+    { ...f.proof, authorRun: { ...f.proof.authorRun, status: "running" } },
+    { ...f.proof, receiptPin: { ...f.proof.receiptPin, sha256: "0".repeat(64) } },
+    { ...f.proof, taskRecordSha256: "0".repeat(64) },
+    { ...f.proof, report: { ...f.proof.report, checks: f.proof.report.checks.slice(1) } },
+  ];
+  for (const candidate of candidates) assert.equal((await f.verify(candidate as GateProtectedTaskQaProof)).status, "UNKNOWN");
+});
+
 function publicationFixture() {
   const sourceAddress = { scopeKind: "company" as const, scopeId: scope.workspaceId, stateKey: "fixture-source-head" };
   const key = (item: SpsStateKey) => JSON.stringify([item.scopeKind, item.scopeId, item.namespace ?? "default", item.stateKey]);
@@ -177,6 +257,25 @@ test("a guarded verification journal publishes a minimal durable wake and reads 
   assert.equal(f.calls, 1);
   f.drift();
   assert.equal((await restarted.readCurrent(readScope)).status, "stale");
+});
+
+test("additional authority-only guards need no invented content pin and still revoke the published snapshot", async () => {
+  const f = publicationFixture();
+  const authorityKey = JSON.stringify(["company", scope.workspaceId, "default", "fixture-cto-authority"]);
+  const authorityValue = { agentRevision: 1 };
+  f.values.set(authorityKey, authorityValue);
+  const publisher = createWorkstreamVerificationPublication(f.state, async () => {
+    const source = await f.authority();
+    return { ...source, async bindGuards(verified) {
+      return [...await source.bindGuards(verified), { stateKey: "fixture-cto-authority", expectedValue: authorityValue, sourceIds: [] }];
+    } };
+  });
+  const result = await publisher.publish(scope);
+  assert.equal(result.status, "published");
+  if (!("eventId" in result) || !result.eventId) throw new Error("Missing published fixture verification.");
+  f.values.set(authorityKey, { agentRevision: 2 });
+  assert.equal((await publisher.readCurrent({ ...scope, eventId: result.eventId })).status, "stale");
+  assert.equal(f.wakes.length, 1);
 });
 
 test("publication does not wake when authority, runtime proof, complete guards, or the atomic API is missing", async () => {

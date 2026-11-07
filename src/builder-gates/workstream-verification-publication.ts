@@ -16,7 +16,7 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 type Producer = ReturnType<typeof createWorkstreamVerificationProducer>;
 type VerificationInput = Parameters<Producer["verify"]>[0];
 type Verified = NonNullable<Awaited<ReturnType<Producer["verify"]>>["snapshot"]>;
-type GuardBinding = RevisionPublicationGuard & Readonly<{ sourceIds: readonly string[] }>;
+export type GuardBinding = RevisionPublicationGuard & Readonly<{ sourceIds: readonly string[] }>;
 type WorkstreamScope = Omit<GateProofScope, "taskId">;
 type TaskPin = Readonly<{ taskId: string; taskRevision: number; taskRecordSha256: string }>;
 type Stored = Readonly<{
@@ -27,7 +27,7 @@ type Stored = Readonly<{
   guards: readonly GuardBinding[];
 }>;
 
-type AuthorityReader = (scope: WorkstreamScope) => Promise<
+export type AuthorityReader = (scope: WorkstreamScope) => Promise<
   | Readonly<{ status: "unavailable"; reason: string }>
   | Readonly<{
       status: "available";
@@ -71,10 +71,12 @@ function guardCoverage(guards: readonly GuardBinding[], snapshot: VerifiedWorkst
   for (const guard of guards) {
     if (!guard || !validId(guard.stateKey) || guard.namespace !== undefined && !validId(guard.namespace)
       || !Object.hasOwn(guard, "expectedValue") || guard.expectedValue === undefined || guard.expectedValue === null
-      || !Array.isArray(guard.sourceIds) || guard.sourceIds.length === 0) return false;
+      || !Array.isArray(guard.sourceIds)) return false;
     const key = (guard.namespace ?? "default") + "\0" + guard.stateKey;
     if (keys.has(key)) return false;
     keys.add(key);
+    // Role/session/registry guards protect authority rather than a content pin.
+    // Every content pin must still have exactly one binding across all guards.
     for (const sourceId of guard.sourceIds) if (!pins.delete(sourceId)) return false;
   }
   return pins.size === 0;
