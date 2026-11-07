@@ -1,0 +1,152 @@
+import { createHash } from "node:crypto";
+import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
+import { checkIntegrationPrerequisites, readCurrentIntegrationPlan } from "../builder-gates/integration-plan.ts";
+import { createIntegrationAttemptStore, type IntegrationAttempt } from "../builder-gates/integration-progress.ts";
+import { readIntegrationValidationRuns } from "../builder-gates/integration-validation.ts";
+import { createWorkstreamVerificationPublication } from "../builder-gates/workstream-verification-publication.ts";
+import type { VerifiedWorkstreamSnapshot } from "../builder-gates/workstream-verification-consumer.ts";
+import { exactToolRecord } from "../lead-tool-authority.ts";
+import { taskPacketRecordDigest } from "../domain/task-packets.ts";
+import { createTaskPacketStore } from "../task-packet-tools.ts";
+import { createTaskQaReportStore } from "../task-qa-reports.ts";
+import { readWorkstreams } from "../workstream-tools.ts";
+
+const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
+const TASK_PREFIX = "builder-v1:task-packet:";
+const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+type TechnicalRun = Awaited<ReturnType<typeof readIntegrationValidationRuns>>[number];
+
+function chainMatches(attempts: readonly IntegrationAttempt[], base: string, commit: string, tree: string) {
+  const next = new Map<string, { commitSha: string; treeSha: string }>();
+  const unchanged: string[] = [];
+  for (const { effect, git } of attempts) {
+    if (!git || git.status === "conflict") return false;
+    if (git.status === "unchanged") {
+      if (git.headSha !== effect.expectedHead) return false;
+      unchanged.push(git.headSha);
+    } else {
+      if (git.commitSha === effect.expectedHead || next.has(effect.expectedHead)) return false;
+      next.set(effect.expectedHead, git);
+    }
+  }
+  const seen = new Set<string>([base]);
+  let head = base, headTree: string | null = null;
+  while (next.has(head)) {
+    const after = next.get(head)!;
+    if (seen.has(after.commitSha)) return false;
+    head = after.commitSha;
+    headTree = after.treeSha;
+    seen.add(head);
+  }
+  return seen.size === next.size + 1 && head === commit && (headTree === null || headTree === tree)
+    && unchanged.every(value => seen.has(value));
+}
+
+/** Read existing records only. A matching technical candidate does not establish
+ * complete approved-scope coverage, regression, G6/G7 or delivery authority. */
+export async function readIntegrationCandidate(workspaceId: string, platform: SpsPlatformInvocationContext) {
+  const unavailable = <Status extends "pending" | "stale" | "failed" | "unknown">(status: Status, reason: string) => ({ status, reason });
+  try {
+    const plan = (await readCurrentIntegrationPlan(workspaceId, platform))?.revision;
+    const board = (await readWorkstreams(workspaceId, workspaceId, platform))?.revision;
+    if (!plan || !board?.workstreams.length) return unavailable("pending", "integration-plan-or-workstream-board-unavailable");
+    const folders = (platform as SpsPlatformInvocationContext & { localFolders?: {
+      readWorkspaceSourceGitTipV1?: (sourceId: string, folderKey: string, branch: string) => Promise<unknown>;
+    } }).localFolders;
+    if (typeof folders?.readWorkspaceSourceGitTipV1 !== "function") return unavailable("unknown", "integration-source-observation-unavailable");
+    const tip = async (branch: string) => {
+      const row = exactToolRecord(await folders.readWorkspaceSourceGitTipV1!(plan.sourceId, plan.folderKey, branch),
+        ["status"], ["reason", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
+      if (row.status === "denied" && row.reason === "branch_unavailable") return null;
+      if (row.status !== "current" || row.sourceId !== plan.sourceId || row.folderKey !== plan.folderKey || row.branch !== branch
+        || typeof row.commitSha !== "string" || typeof row.treeSha !== "string" || !OID.test(row.commitSha)
+        || !OID.test(row.treeSha) || row.commitSha.length !== row.treeSha.length
+        || typeof row.observedAt !== "string" || !Number.isFinite(Date.parse(row.observedAt))) throw new Error("Unconfirmed Git tip.");
+      return { sourceId: plan.sourceId, folderKey: plan.folderKey, branch, commitSha: row.commitSha, treeSha: row.treeSha };
+    };
+    const base = await tip(plan.baseBranch);
+    if (!base || base.commitSha !== plan.baseCommit || base.treeSha !== plan.baseTree) return unavailable("stale", "integration-plan-base-changed");
+    const currentCandidate = await tip(plan.candidateBranch);
+    if (!currentCandidate) return unavailable("pending", "integration-candidate-not-created");
+    const candidate = currentCandidate;
+    const publication = createWorkstreamVerificationPublication(platform.state);
+    const snapshots: VerifiedWorkstreamSnapshot[] = [];
+    const attempts: IntegrationAttempt[] = [];
+    for (const { spec } of board.workstreams) {
+      const prerequisite = await checkIntegrationPrerequisites(workspaceId, spec.id, platform);
+      if (prerequisite.status !== "ready") return unavailable(prerequisite.status === "waiting-dependencies" ? "pending" : "unknown", prerequisite.reason);
+      const scope = { workspaceId, projectId: workspaceId, workstreamId: spec.id };
+      const current = await publication.readLatestCurrent(scope);
+      if (current.status === "stale") return unavailable("stale", "workstream-verification-changed");
+      if (current.status !== "current") return unavailable(current.reason === "verified-head-unavailable" ? "pending" : "unknown", current.reason);
+      const snapshot = current.snapshot;
+      snapshots.push(snapshot);
+      const ctoId = spec.assignedCtoId;
+      const taskBoard = (await createTaskPacketStore(workspaceId, workspaceId, ctoId, spec.id, platform.state).current())?.revision;
+      const tasks = taskBoard?.packets.filter(row => row.packet.kind === "development") ?? [];
+      if (!tasks.length || tasks.length !== snapshot.qaEvidence.length) return unavailable("unknown", "workstream-task-report-inventory-incomplete");
+      for (const task of tasks) {
+        const taskId = task.packet.taskId;
+        const digest = taskPacketRecordDigest(task, workspaceId, ctoId, spec.id);
+        const qaTasks = taskBoard!.packets.filter(row => row.packet.kind === "qa" && row.dependencyPins.some(pin =>
+          pin.taskId === taskId && pin.revision === task.packet.revision && pin.recordSha256 === digest));
+        if (!snapshot.sourcePins.some(pin => pin.sourceId === `${TASK_PREFIX}${taskId}` && pin.sha256 === digest)
+          || qaTasks.length !== 1) return unavailable("stale", "workstream-task-verification-pins-changed");
+        const qaTaskId = qaTasks[0]!.packet.taskId;
+        const report = (await createTaskQaReportStore({ ...scope, ctoId, qaTaskId }, platform.state).current())?.revision;
+        if (report?.verdict !== "passed" || !snapshot.qaEvidence.some(qa => qa.report.sourceId === `builder-v1:task-qa-report:${qaTaskId}`
+          && qa.report.revisionId === report.revisionId && qa.report.sha256 === hash(report))) {
+          return unavailable("stale", "workstream-independent-qa-pins-changed");
+        }
+        const attempt = (await createIntegrationAttemptStore({ workspaceId, workstreamId: spec.id,
+          eventId: snapshot.eventId, taskId }, platform.state).current())?.revision;
+        if (!attempt || attempt.stage !== "git-observed") return unavailable("pending", "workstream-task-integration-not-observed");
+        if (attempt.planRevisionId !== plan.revisionId || attempt.effect.sourceId !== candidate.sourceId
+          || attempt.effect.folderKey !== candidate.folderKey || attempt.effect.branch !== candidate.branch
+          || attempt.reportRevisionId !== report.revisionId || attempt.effect.incomingCommit !== report.reference.binding.commitSha
+          || attempt.effect.incomingTree !== report.reference.binding.treeSha) {
+          return unavailable("stale", "workstream-task-integration-pins-changed");
+        }
+        if (attempt.git?.status === "conflict") return unavailable("failed", "workstream-task-integration-conflict");
+        attempts.push(attempt);
+      }
+    }
+    if (!chainMatches(attempts, base.commitSha, candidate.commitSha, candidate.treeSha)) return unavailable("stale", "integration-candidate-does-not-match-observed-effects");
+    if (!plan.validationPlans) return unavailable("pending", "integration-validation-plans-unavailable");
+    const plans = plan.validationPlans;
+    function currentReference(attempt: IntegrationAttempt, phase: "ci" | "e2e") {
+      const reference = attempt.validationRuns?.[phase], expected = plans[phase];
+      return reference && reference.commitSha === candidate.commitSha && reference.treeSha === candidate.treeSha
+        && reference.approvalTemplateId === expected.approvalTemplateId && reference.planSha256 === expected.planSha256 ? reference : null;
+    }
+    const eligible = attempts.map(attempt => ({ ...attempt, validationRuns: {
+      ci: currentReference(attempt, "ci"), e2e: currentReference(attempt, "e2e"),
+    } }));
+    const runs = await readIntegrationValidationRuns(eligible, platform);
+    const required = {} as Record<"ci" | "e2e", TechnicalRun>;
+    for (const phase of ["ci", "e2e"] as const) {
+      const matching = runs.filter(run => run.phase === phase);
+      if (matching.length !== 1) return unavailable(matching.length ? "unknown" : "pending", `integration-${phase}-run-not-unique-or-unavailable`);
+      const result = matching[0]!;
+      if (result.status !== "passed") return unavailable(result.status, `integration-${phase}-not-passed`);
+      required[phase] = result;
+    }
+    for (const snapshot of snapshots) {
+      const current = await publication.readLatestCurrent(snapshot);
+      if (current.status !== "current" || current.snapshot.eventId !== snapshot.eventId) return unavailable("stale", "workstream-verification-changed-during-read");
+    }
+    for (const attempt of attempts) {
+      const latest = await createIntegrationAttemptStore(attempt.scope, platform.state).current();
+      if (latest?.revision.revisionId !== attempt.revisionId) return unavailable("stale", "integration-attempt-changed-during-read");
+    }
+    if ((await readCurrentIntegrationPlan(workspaceId, platform))?.revision.revisionId !== plan.revisionId
+      || (await readWorkstreams(workspaceId, workspaceId, platform))?.revision.revisionId !== board.revisionId
+      || (await checkIntegrationPrerequisites(workspaceId, board.workstreams[0]!.spec.id, platform)).status !== "ready"
+      || JSON.stringify(await tip(plan.baseBranch)) !== JSON.stringify(base)
+      || JSON.stringify(await tip(plan.candidateBranch)) !== JSON.stringify(candidate)) return unavailable("stale", "integration-candidate-changed-during-read");
+    return { status: "observed" as const, candidate, plan, boardRevisionId: board.revisionId, snapshots, attempts,
+      ci: required.ci, e2e: required.e2e, deliveryAuthority: "not-established" as const };
+  } catch {
+    return unavailable("unknown", "integration-candidate-read-unconfirmed");
+  }
+}

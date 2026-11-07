@@ -27,8 +27,8 @@ export const INTEGRATE_VERIFIED_TASK_TOOL = Object.freeze({
 });
 export const READ_INTEGRATION_PROGRESS_TOOL = Object.freeze({
   name: "builder.read-integration-progress", displayName: "Read exact integration progress",
-  description: "The exact active Integration Manager reads its admitted event's immutable attempts and actual technical receipts. Unknown effects stay uncertain; this read never retries, starts a model or reports CI as passed without evidence.",
-  parametersSchema: eventScope,
+  description: "The exact active Integration Manager reads its admitted event's immutable attempts and actual technical receipts. Optional projection=candidate checks current Workstream verification, observed Task integration effects and CI/E2E on the same candidate Commit/Tree. This read never retries or starts execution. Candidate observation is not a complete Final Packet, G6/G7 or delivery approval.",
+  parametersSchema: { ...eventScope, properties: { ...eventScope.properties, projection: { type: "string", enum: ["candidate"] } } },
 });
 export const REQUEST_INTEGRATION_VALIDATION_TOOL = Object.freeze({
   name: "builder.request-integration-validation", displayName: "Request exact candidate CI or E2E",

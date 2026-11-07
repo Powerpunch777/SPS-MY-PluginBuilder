@@ -228,9 +228,18 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
 }
 
 export async function readIntegrationProgress(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
-  const row = exactToolRecord(params, ["workstreamId", "eventId"]), context = parseLeadToolContext(runContext);
+  const row = exactToolRecord(params, ["workstreamId", "eventId"], ["projection"]), context = parseLeadToolContext(runContext);
   const workstreamId = bounded(row.workstreamId), eventId = bounded(row.eventId);
+  if (row.projection !== undefined && row.projection !== "candidate") throw new TypeError("Unsupported integration progress projection.");
   const snapshot = await managerEvent({ workstreamId, eventId }, runContext, platform);
+  if (row.projection === "candidate") {
+    const result = await (await import("../delivery-evidence/integration-candidate.ts")).readIntegrationCandidate(context.companyId, platform);
+    await managerEvent({ workstreamId, eventId }, runContext, platform);
+    if (result.status !== "observed") return result;
+    return { status: result.status, candidate: result.candidate, planRevisionId: result.plan.revisionId,
+      boardRevisionId: result.boardRevisionId, workstreamCount: result.snapshots.length, taskCount: result.attempts.length,
+      ciRunId: result.ci.runId, e2eRunId: result.e2e.runId, deliveryAuthority: result.deliveryAuthority };
+  }
   const taskPins = snapshot.sourcePins.filter(pin => pin.sourceId.startsWith("builder-v1:task-packet:"));
   const attempts = [];
   for (const pin of taskPins) {
