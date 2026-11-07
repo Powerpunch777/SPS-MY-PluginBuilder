@@ -38,6 +38,11 @@ import { publishTaskQaReport } from "./task-qa-reports.ts";
 import { verifyCurrentWorkstream } from "./builder-gates/current-workstream-verification.ts";
 import { WORKSTREAM_VERIFIED_JOB } from "./builder-gates/workstream-verification-publication.ts";
 import { consumeVerifiedWorkstreamJob } from "./builder-gates/integration-manager-job.ts";
+import { readVerifiedWorkstreamForManager } from "./builder-gates/integration-manager-job.ts";
+import { publishIntegrationPlan } from "./builder-gates/integration-plan.ts";
+import { integrateVerifiedTask, readIntegrationProgress } from "./builder-gates/integration-progress.ts";
+import { PUBLISH_INTEGRATION_PLAN_TOOL, READ_VERIFIED_WORKSTREAM_TOOL, INTEGRATE_VERIFIED_TASK_TOOL,
+  READ_INTEGRATION_PROGRESS_TOOL } from "./builder-gates/tool-declarations.mjs";
 import { acceptCtoTaskSourceSubmission, readCtoTaskSourceSubmission } from "./task-source-acceptance.ts";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
@@ -832,7 +837,8 @@ export function createBuilderPlatform() {
       const result = await consumeVerifiedWorkstreamJob(job, platform);
       // A persisted pending reservation is not successful Git/CI execution.
       // Surface the missing producer to Core's bounded job-error handling.
-      if (result.status !== "accepted") throw new Error(`Workstream integration not executed: ${result.reason}`);
+      if ("waitingDependencies" in result && result.waitingDependencies === true || result.status === "stale") return;
+      if (result.status !== "accepted") throw new Error(`Workstream integration not admitted: ${result.reason}`);
     } }],
     tools: [{ name: READ_SOLUTION_TOOL.name, declaration: { displayName: READ_SOLUTION_TOOL.displayName,
       description: READ_SOLUTION_TOOL.description, parametersSchema: READ_SOLUTION_TOOL.parametersSchema },
@@ -1069,6 +1075,23 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => serialize(context.companyId, async () => ({
         content: "Historical Task-to-Core-run references and technical status only; no QA verdict or completion is inferred.",
         data: await readProtectedTaskQaHistory(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: PUBLISH_INTEGRATION_PLAN_TOOL.name, declaration: PUBLISH_INTEGRATION_PLAN_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Main-pinned integration workflow only; Host Git/Runner grants and current verification remain required.",
+        data: await publishIntegrationPlan(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: READ_VERIFIED_WORKSTREAM_TOOL.name, declaration: READ_VERIFIED_WORKSTREAM_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, () => readVerifiedWorkstreamForManager(params, context, platform)) },
+    { name: INTEGRATE_VERIFIED_TASK_TOOL.name, declaration: INTEGRATE_VERIFIED_TASK_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Candidate Git effect only. Required CI/E2E, Final Packet and user delivery approval remain separate.",
+        data: await integrateVerifiedTask(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: READ_INTEGRATION_PROGRESS_TOOL.name, declaration: READ_INTEGRATION_PROGRESS_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Stored candidate integration attempts only; reading never executes Git or AI.",
+        data: await readIntegrationProgress(params, context, platform) as unknown as JsonValue,
       })) },
     { name: VERIFY_WORKSTREAM_TOOL.name, declaration: { displayName: VERIFY_WORKSTREAM_TOOL.displayName,
       description: VERIFY_WORKSTREAM_TOOL.description, parametersSchema: VERIFY_WORKSTREAM_TOOL.parametersSchema },

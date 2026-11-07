@@ -115,7 +115,7 @@ function parseTurn(value: unknown, scope: Scope): LeadTurn {
 function parseStoredPolicy(value: unknown): SessionExecutionPolicy {
   const row = record(value, ["mode", "toolNames"]);
   if (row.mode !== "plugin-tools-only-v1" || !Array.isArray(row.toolNames) || Object.getPrototypeOf(row.toolNames) !== Array.prototype
-    || row.toolNames.length < 1 || row.toolNames.length > 32 || Reflect.ownKeys(row.toolNames).length !== row.toolNames.length + 1) throw error();
+    || row.toolNames.length < 1 || row.toolNames.length > 64 || Reflect.ownKeys(row.toolNames).length !== row.toolNames.length + 1) throw error();
   const names: string[] = [];
   for (let n = 0; n < row.toolNames.length; n++) {
     const field = Object.getOwnPropertyDescriptor(row.toolNames, String(n));

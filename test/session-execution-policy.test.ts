@@ -7,6 +7,8 @@ import {
   LEAD_PLANNING_TOOL_NAMES,
   LEAD_SESSION_EXECUTION_POLICY,
   policyForLeadChannel,
+  INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY,
+  SESSION_POLICY_TOOL_LIMIT,
 } from "../src/session-execution-policy.ts";
 import { LEAD_CHANNELS } from "../src/domain/lead-sessions.ts";
 import { CTO_INTAKE_EXECUTION_POLICY } from "../src/domain/cto-intake-deliveries.ts";
@@ -41,6 +43,8 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
     "builder.propose-ui-contract", "builder.request-final-review", "builder.record-reuse-candidate",
     "builder.read-task-source-file", "builder.write-task-source-file", "builder.delete-task-source-file", "builder.submit-task-source",
     "builder.request-protected-task-qa", "builder.publish-task-qa-report",
+    ...INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames,
+    ...(SESSION_POLICY_TOOL_LIMIT === 32 ? ["builder.publish-integration-plan"] : []),
     ...CTO_QUESTION_REPLY_EXECUTION_POLICY.toolNames]);
   assert.deepEqual([...LEAD_PLANNING_TOOL_NAMES].sort(),
     manifestNames.filter(name => !ctoToolNames.has(name) && !specializedOnly.has(name)).sort());
@@ -73,6 +77,11 @@ test("snapshots the declared Lead and private CTO planning tools without cross-r
   assert.deepEqual(CTO_WORKSTREAM_TOOL_NAMES, [...CTO_WORKSTREAM_TOOL_NAMES].sort());
   assert.deepEqual(LEAD_SESSION_EXECUTION_POLICY.toolNames, LEAD_PLANNING_TOOL_NAMES);
   assert.deepEqual(CTO_SESSION_EXECUTION_POLICY.toolNames, CTO_WORKSTREAM_TOOL_NAMES);
+  assert.deepEqual(INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames, [
+    "builder.integrate-verified-task", "builder.read-integration-progress", "builder.read-verified-workstream",
+  ]);
+  assert.ok(INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY.toolNames.every(name => !new Set<string>(LEAD_PLANNING_TOOL_NAMES).has(name)
+    && !new Set<string>(CTO_WORKSTREAM_TOOL_NAMES).has(name)));
   assert.equal(Object.isFrozen(LEAD_PLANNING_TOOL_NAMES), true);
   assert.equal(Object.isFrozen(CTO_WORKSTREAM_TOOL_NAMES), true);
   assert.equal(Object.isFrozen(LEAD_SESSION_EXECUTION_POLICY), true);
@@ -92,7 +101,7 @@ test("Lead channel policies preserve shared reads and keep formal writes Main-on
       "builder.read-technology-decisions", "builder.read-workstreams"]) assert.ok(allowed.has(read), `${channel}: ${read}`);
     assert.deepEqual(policies[channel]!.toolNames, [...policies[channel]!.toolNames].sort());
     assert.equal(Object.isFrozen(policies[channel]!.toolNames), true);
-    assert.ok(policies[channel]!.toolNames.length <= 32, `${channel} must fit the pinned Host session policy limit`);
+    assert.ok(policies[channel]!.toolNames.length <= SESSION_POLICY_TOOL_LIMIT, `${channel} must fit the resolved SDK session policy limit`);
     assert.equal(allowed.has("builder.read-change-impact"), channel === "main" || channel === "integration-review");
     assert.equal(allowed.has("builder.read-reuse-candidates"), channel === "main" || channel === "background");
     assert.equal(allowed.has("builder.record-reuse-candidate"), channel === "background");

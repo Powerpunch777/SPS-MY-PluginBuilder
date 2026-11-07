@@ -26,6 +26,13 @@ import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_
   REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL } from "./task-packet-tool-declarations.mjs";
 import { READ_PROTECTED_TASK_QA_HISTORY_TOOL } from "./task-packet-tool-declarations.mjs";
 import { PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL } from "./task-packet-tool-declarations.mjs";
+import { PUBLISH_INTEGRATION_PLAN_TOOL, READ_VERIFIED_WORKSTREAM_TOOL, INTEGRATE_VERIFIED_TASK_TOOL,
+  READ_INTEGRATION_PROGRESS_TOOL } from "./builder-gates/tool-declarations.mjs";
+import * as PlatformSdk from "@sonparkserver/plugin-sdk/platform";
+// Old SDKs retain their exact existing Main policy and must not silently send
+// a larger policy than their Worker/Host contract accepts.
+export const SESSION_POLICY_TOOL_LIMIT = (PlatformSdk as unknown as { SPS_SESSION_EXECUTION_POLICY_MAX_TOOLS?: number })
+  .SPS_SESSION_EXECUTION_POLICY_MAX_TOOLS === 64 ? 64 : 32;
 import type { LeadChannel } from "./domain/model.ts";
 import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,
   RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL } from "./spec-assurance/tool-declarations.mjs";
@@ -66,6 +73,7 @@ export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
   DISPATCH_CTO_WORKSTREAM_TOOL.name,
   READ_CTO_WORKSTREAM_DELIVERY_TOOL.name,
   CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.name,
+  ...(SESSION_POLICY_TOOL_LIMIT > 32 ? [PUBLISH_INTEGRATION_PLAN_TOOL.name] : []),
 ].sort());
 
 export const CTO_WORKSTREAM_TOOL_NAMES = Object.freeze([
@@ -100,6 +108,12 @@ export type SessionExecutionPolicy = Readonly<{
   mode: "plugin-tools-only-v1";
   toolNames: readonly string[];
 }>;
+
+export const INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
+  mode: "plugin-tools-only-v1", toolNames: Object.freeze([
+    READ_VERIFIED_WORKSTREAM_TOOL.name, INTEGRATE_VERIFIED_TASK_TOOL.name, READ_INTEGRATION_PROGRESS_TOOL.name,
+  ].sort()),
+});
 
 const names = (...toolNames: string[]) => Object.freeze([...new Set(toolNames)].sort());
 const LEAD_READ_TOOL_NAMES = names(

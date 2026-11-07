@@ -189,5 +189,12 @@ export function createWorkstreamVerificationPublication(state: RevisionState, re
         : unknown("verification-evidence-read-failed");
     }
   }
-  return Object.freeze({ publish, readCurrent });
+  async function readLatestCurrent(scope: WorkstreamScope): ReturnType<VerifiedSnapshotReader> {
+    try {
+      const current = await journal(scope.workspaceId, scope.projectId, scope.workstreamId, state).current();
+      if (!current) return { status: "unknown", reason: "verified-head-unavailable" };
+      return readCurrent({ ...scope, eventId: current.revision.eventId });
+    } catch { return { status: "unknown", reason: "verified-head-or-guard-read-failed" }; }
+  }
+  return Object.freeze({ publish, readCurrent, readLatestCurrent });
 }
