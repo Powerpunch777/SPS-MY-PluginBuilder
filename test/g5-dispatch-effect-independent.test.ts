@@ -45,13 +45,21 @@ async function makeCurrentG5Fixture() {
   const ui = createUiContractStore(W, W, state);
   const uiRun = { ...ctx(sessions["ui-design"]!), companyId: W };
   const publishBaseline = async (revisionId: string, expected: string | null) => {
+    const sourceRequestId = randomUUID();
+    const sourceText = `Approved G5 fixture baseline source: ${revisionId}`;
+    f.values.set(JSON.stringify(key(`lead-chat.turn.v1.${sourceRequestId}`)), {
+      workspaceId: W, selectionRevision: 1, agentId: LEAD, sessionId: MAIN, channel: "main", schemaVersion: 1,
+      requestId: sourceRequestId, previousRequestId: null, sequence: 0, text: sourceText, createdAt: now,
+      state: "submitted", runId: R, answer: null, outputState: "not_ready", cancellationRequested: false,
+      termination: "not_applicable", inputKind: "user",
+    });
     const specification = { projectId: W, revisionId: `spec-${revisionId}`, productTier: "M",
       requirements: [{ id: "REQ-1", description: revisionId, acceptanceCriteriaIds: ["AC-1"] }], targets: ["sps-plugin"],
-      dataPolicyRef: "fixture-policy", approvalEvidenceRef: `lead-turn:${R}` };
+      dataPolicyRef: "fixture-policy", approvalEvidenceRef: `lead-turn:${sourceRequestId}` };
     return baselineStore.publish({ expectedBaseRevisionId: expected, revision: {
       projectId: W, revisionId, sourceDraftRevisionId: `draft-${revisionId}`, draftDigest: sha(revisionId), createdAt: now,
       author: { agentId: LEAD, sessionId: MAIN, runId: R, selectionRevision: 1 },
-      userDecision: { sourceId: `lead-turn:${R}`, sourceSha256: sha(revisionId), interpretation: revisionId }, specification,
+      userDecision: { sourceId: `lead-turn:${sourceRequestId}`, sourceSha256: sha(sourceText), interpretation: revisionId }, specification,
       graph: { approvedSpecRevisionId: specification.revisionId, graphRevisionId: `graph-${revisionId}`,
         entities: [], relations: [], viewLayoutRef: "fixture-layout" } } });
   };
