@@ -27,7 +27,7 @@ import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_
 import { READ_PROTECTED_TASK_QA_HISTORY_TOOL } from "./task-packet-tool-declarations.mjs";
 import { PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL } from "./task-packet-tool-declarations.mjs";
 import { PUBLISH_INTEGRATION_PLAN_TOOL, READ_VERIFIED_WORKSTREAM_TOOL, INTEGRATE_VERIFIED_TASK_TOOL,
-  READ_INTEGRATION_PROGRESS_TOOL } from "./builder-gates/tool-declarations.mjs";
+  READ_INTEGRATION_PROGRESS_TOOL, REQUEST_INTEGRATION_VALIDATION_TOOL } from "./builder-gates/tool-declarations.mjs";
 import * as PlatformSdk from "@sonparkserver/plugin-sdk/platform";
 // Old SDKs retain their exact existing Main policy and must not silently send
 // a larger policy than their Worker/Host contract accepts.
@@ -112,6 +112,7 @@ export type SessionExecutionPolicy = Readonly<{
 export const INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
   mode: "plugin-tools-only-v1", toolNames: Object.freeze([
     READ_VERIFIED_WORKSTREAM_TOOL.name, INTEGRATE_VERIFIED_TASK_TOOL.name, READ_INTEGRATION_PROGRESS_TOOL.name,
+    REQUEST_INTEGRATION_VALIDATION_TOOL.name,
   ].sort()),
 });
 

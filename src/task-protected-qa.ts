@@ -79,7 +79,7 @@ function hostApiUnsupported(error: unknown) {
   return /unsupported|not supported|does not support|unknown (?:host )?(?:operation|method)|method not found|not implemented/iu.test(message);
 }
 
-function parseProtectedRun(value: unknown): ProtectedRun {
+export function parseProtectedRun(value: unknown): ProtectedRun {
   const row = exactToolRecord(value, ["schemaVersion", "kind", "id", "status", "termination", "pins", "receipt", "timestamps", "qaVerdict"]);
   const pins = exactToolRecord(row.pins, ["approvalId", "sourceId", "planSha256", "profileSha256", "commitSha", "treeSha",
     "manifestSha256", "inputTreeSha256", "nodeSha256", "subjectKeySha256", "timeoutMs"]);

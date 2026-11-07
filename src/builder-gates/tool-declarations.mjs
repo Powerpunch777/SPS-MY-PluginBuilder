@@ -30,3 +30,9 @@ export const READ_INTEGRATION_PROGRESS_TOOL = Object.freeze({
   description: "The exact active Integration Manager reads its admitted event's immutable attempts and actual technical receipts. Unknown effects stay uncertain; this read never retries, starts a model or reports CI as passed without evidence.",
   parametersSchema: eventScope,
 });
+export const REQUEST_INTEGRATION_VALIDATION_TOOL = Object.freeze({
+  name: "builder.request-integration-validation", displayName: "Request exact candidate CI or E2E",
+  description: "The exact admitted Integration Manager requests only the Main-pinned Host-approved CI or E2E plan for its current observed candidate Commit/Tree. Core rechecks the separate technical template and execution permissions. Retries reconcile the same persisted request; finite technical success is not QA approval, G6/G7 completion or delivery approval.",
+  parametersSchema: { ...eventScope, required: [...eventScope.required, "taskId", "phase"],
+    properties: { ...eventScope.properties, taskId: id, phase: { type: "string", enum: ["ci", "e2e"] } } },
+});

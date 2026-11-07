@@ -1,0 +1,136 @@
+import { createHash } from "node:crypto";
+import type { SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
+import { exactToolRecord, parseLeadToolContext } from "../lead-tool-authority.ts";
+import { parseProtectedRun } from "../task-protected-qa.ts";
+import { checkIntegrationPrerequisites, readCurrentIntegrationPlan } from "./integration-plan.ts";
+import { readVerifiedWorkstreamForManager } from "./integration-manager-job.ts";
+import { createIntegrationAttemptStore, withIntegrationValidationReferences,
+  type IntegrationAttempt, type IntegrationValidationReference } from "./integration-progress.ts";
+
+const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const textHash = (value: string) => createHash("sha256").update(value).digest("hex");
+type Phase = "ci" | "e2e";
+type Host = SpsPlatformInvocationContext & { protectedTests?: {
+  enqueueApprovedV1?: (input: unknown) => Promise<unknown>;
+  getRunV1?: (workspaceId: string, runId: string, subjectKeySha256: string) => Promise<unknown>;
+}; localFolders?: { readWorkspaceSourceGitTipV1?: (sourceId: string, folderKey: string, branch: string) => Promise<unknown> } };
+
+function bounded(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/u.test(value)) throw new TypeError("An exact integration validation scope is required.");
+  return value;
+}
+
+function matchesRun(raw: unknown, attempt: IntegrationAttempt, reference: IntegrationValidationReference) {
+  const run = parseProtectedRun(raw);
+  if (reference.runId !== null && run.id !== reference.runId || reference.approvalId !== null && run.pins.approvalId !== reference.approvalId
+    || run.pins.sourceId !== attempt.effect.sourceId || run.pins.commitSha !== reference.commitSha
+    || run.pins.treeSha !== reference.treeSha || run.pins.planSha256 !== reference.planSha256
+    || run.pins.subjectKeySha256 !== reference.subjectKeySha256) throw new Error("Core validation run does not match the exact candidate reference.");
+  return run;
+}
+
+function technicalOutcome(run: ReturnType<typeof parseProtectedRun>): "pending" | "passed" | "failed" | "unknown" {
+  if (["queued", "claimed", "running", "cancelling"].includes(run.status)) return "pending";
+  if (run.termination !== "confirmed" || run.receipt === null) return "unknown";
+  const receipt = exactToolRecord(run.receipt, ["digest", "status", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes",
+    "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
+    "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"]);
+  if (typeof receipt.digest !== "string" || !/^[a-f0-9]{64}$/u.test(receipt.digest)
+    || receipt.appContainerVerified !== true || receipt.capabilitiesCount !== 0 || receipt.childTerminationConfirmed !== true
+    || receipt.jobEmpty !== true || receipt.profileCleanupSucceeded !== true || receipt.sandboxCleanupSucceeded !== true
+    || receipt.fixtureMustBeRetained !== false) return "unknown";
+  return run.status === "succeeded" && receipt.status === "completed" && receipt.processExitCode === 0
+    && receipt.timedOut === false && receipt.cancelled === false && receipt.outputLimit === false ? "passed" : "failed";
+}
+
+/** Observation never enqueues. A passed finite technical recipe is not authored
+ * QA, complete G6/G7 coverage, a Final Packet, or user delivery approval. */
+export async function readIntegrationValidationRuns(attempts: readonly IntegrationAttempt[], platform: SpsPlatformInvocationContext) {
+  const api = (platform as Host).protectedTests, folders = (platform as Host).localFolders;
+  const results = [];
+  for (const attempt of attempts) {
+    for (const phase of ["ci", "e2e"] as const) {
+      const reference = attempt.validationRuns?.[phase];
+      if (!reference) continue;
+      let status: "pending" | "passed" | "failed" | "unknown" | "stale" = "unknown";
+      if (reference.runId && typeof api?.getRunV1 === "function") {
+        try {
+          const raw = await api.getRunV1(attempt.scope.workspaceId, reference.runId, reference.subjectKeySha256);
+          if (raw !== null) {
+            status = technicalOutcome(matchesRun(raw, attempt, reference));
+            if (typeof folders?.readWorkspaceSourceGitTipV1 !== "function") status = "unknown";
+            else {
+              const tip = exactToolRecord(await folders.readWorkspaceSourceGitTipV1(attempt.effect.sourceId, attempt.effect.folderKey, attempt.effect.branch),
+                ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
+              if (tip.status !== "current" || tip.sourceId !== attempt.effect.sourceId || tip.folderKey !== attempt.effect.folderKey
+                || tip.branch !== attempt.effect.branch || tip.commitSha !== reference.commitSha || tip.treeSha !== reference.treeSha) status = "stale";
+            }
+          }
+        } catch { /* Missing or changed Core authority is not a test pass. */ }
+      }
+      results.push({ taskId: attempt.scope.taskId, phase, runId: reference.runId, commitSha: reference.commitSha,
+        treeSha: reference.treeSha, status, qaVerdict: "not-established" as const });
+    }
+  }
+  return results;
+}
+
+export async function requestIntegrationValidation(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const input = exactToolRecord(params, ["workstreamId", "eventId", "taskId", "phase"]);
+  const context = parseLeadToolContext(runContext), workstreamId = bounded(input.workstreamId), eventId = bounded(input.eventId), taskId = bounded(input.taskId);
+  if (input.phase !== "ci" && input.phase !== "e2e") throw new TypeError("Integration validation phase must be ci or e2e.");
+  const phase: Phase = input.phase, scope = { workspaceId: context.companyId, workstreamId, eventId, taskId };
+  const api = (platform as Host).protectedTests, folders = (platform as Host).localFolders;
+  const check = async () => {
+    await readVerifiedWorkstreamForManager({ workstreamId, eventId }, runContext, platform);
+    const ready = await checkIntegrationPrerequisites(context.companyId, workstreamId, platform);
+    if (ready.status !== "ready") throw new Error("Integration validation authority or dependencies are not current.");
+  };
+  await check();
+  const plan = await readCurrentIntegrationPlan(context.companyId, platform), selected = plan?.revision.validationPlans?.[phase];
+  if (!plan || !selected) return { status: "unsupported", reason: "main-validation-plan-reference-unavailable", executionStarted: false };
+  if (typeof api?.enqueueApprovedV1 !== "function" || typeof api.getRunV1 !== "function"
+    || typeof folders?.readWorkspaceSourceGitTipV1 !== "function") return { status: "unsupported", reason: "protected-validation-api-unavailable", executionStarted: false };
+  const store = createIntegrationAttemptStore(scope, platform.state), current = await store.current();
+  if (!current || current.revision.stage !== "git-observed" || !current.revision.git || current.revision.git.status === "conflict"
+    || current.revision.planRevisionId !== plan.revision.revisionId) throw new Error("The exact observed integration candidate and current plan are required.");
+  let attempt = current.revision;
+  const git = current.revision.git!;
+  const tip = exactToolRecord(await folders.readWorkspaceSourceGitTipV1(attempt.effect.sourceId, attempt.effect.folderKey, attempt.effect.branch),
+    ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
+  const expectedCommit = git.status === "unchanged" ? git.headSha : (git as { commitSha: string }).commitSha;
+  const expectedTree = git.status === "integrated" || git.status === "replayed" ? git.treeSha : tip.treeSha;
+  if (tip.status !== "current" || tip.sourceId !== attempt.effect.sourceId || tip.folderKey !== attempt.effect.folderKey
+    || tip.branch !== attempt.effect.branch || tip.branch !== plan.revision.candidateBranch || tip.commitSha !== expectedCommit
+    || tip.treeSha !== expectedTree || typeof tip.commitSha !== "string" || typeof tip.treeSha !== "string"
+    || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(tip.treeSha)) return { status: "stale", reason: "integration-candidate-tip-changed", executionStarted: false };
+  const key = hash(["builder-integration-validation-v1", scope, plan.revision.revisionId, phase,
+    attempt.effect.sourceId, attempt.effect.branch, tip.commitSha, tip.treeSha, selected]);
+  const subjectKey = `builder-integration-${phase}-v1:${key}`;
+  const reservation: IntegrationValidationReference = Object.freeze({ requestId: subjectKey, subjectKey,
+    subjectKeySha256: textHash(subjectKey), approvalTemplateId: selected.approvalTemplateId, planSha256: selected.planSha256,
+    commitSha: tip.commitSha, treeSha: tip.treeSha, runId: null, approvalId: null });
+  const prior = attempt.validationRuns?.[phase];
+  if (prior && hash({ ...prior, runId: null, approvalId: null }) !== hash(reservation)) return { status: "stale", reason: "validation-reservation-pins-changed", executionStarted: false };
+  if (prior?.runId) return { status: "existing", reference: prior, technicalValidation: await readIntegrationValidationRuns([attempt], platform), executionStarted: false };
+  if (!prior) {
+    const reserved = withIntegrationValidationReferences(attempt, { ci: attempt.validationRuns?.ci ?? null, e2e: attempt.validationRuns?.e2e ?? null, [phase]: reservation });
+    const saved = await store.publish({ expectedBaseRevisionId: attempt.revisionId, revision: reserved });
+    if (saved.status !== "published") return { status: "conflict", reason: "validation-reservation-cas-conflict", executionStarted: false };
+    attempt = reserved;
+  }
+  await check();
+  if ((await readCurrentIntegrationPlan(context.companyId, platform))?.revision.revisionId !== plan.revision.revisionId
+    || (await store.current())?.revision.revisionId !== attempt.revisionId) return { status: "stale", reason: "validation-authority-changed-before-enqueue", executionStarted: false };
+  let run;
+  try {
+    run = matchesRun(await api.enqueueApprovedV1({ companyId: context.companyId, sourceId: attempt.effect.sourceId,
+      approvalId: selected.approvalTemplateId, requestId: reservation.requestId, subjectKey: reservation.subjectKey,
+      branch: attempt.effect.branch, commitSha: reservation.commitSha, treeSha: reservation.treeSha, planSha256: reservation.planSha256 }), attempt, reservation);
+  } catch { return { status: "unknown", reason: "validation-enqueue-outcome-unknown-reconcile-same-request", requestId: reservation.requestId, executionStarted: null }; }
+  const reference = Object.freeze({ ...reservation, runId: run.id, approvalId: run.pins.approvalId });
+  await check();
+  const observed = withIntegrationValidationReferences(attempt, { ...attempt.validationRuns!, [phase]: reference });
+  const saved = await store.publish({ expectedBaseRevisionId: attempt.revisionId, revision: observed });
+  return { status: saved.status, reference, technicalValidation: technicalOutcome(run), qaVerdict: "not-established", executionStarted: true };
+}

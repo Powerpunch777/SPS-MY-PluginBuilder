@@ -41,8 +41,9 @@ import { consumeVerifiedWorkstreamJob } from "./builder-gates/integration-manage
 import { readVerifiedWorkstreamForManager } from "./builder-gates/integration-manager-job.ts";
 import { publishIntegrationPlan } from "./builder-gates/integration-plan.ts";
 import { integrateVerifiedTask, readIntegrationProgress } from "./builder-gates/integration-progress.ts";
+import { requestIntegrationValidation } from "./builder-gates/integration-validation.ts";
 import { PUBLISH_INTEGRATION_PLAN_TOOL, READ_VERIFIED_WORKSTREAM_TOOL, INTEGRATE_VERIFIED_TASK_TOOL,
-  READ_INTEGRATION_PROGRESS_TOOL } from "./builder-gates/tool-declarations.mjs";
+  READ_INTEGRATION_PROGRESS_TOOL, REQUEST_INTEGRATION_VALIDATION_TOOL } from "./builder-gates/tool-declarations.mjs";
 import { acceptCtoTaskSourceSubmission, readCtoTaskSourceSubmission } from "./task-source-acceptance.ts";
 import { readCtoTaskPackets, publishCtoTaskPacket } from "./task-packet-tools.ts";
 import { prepareTaskWorker, readTaskWorkers, dispatchPreparedTaskWorker, readTaskWorkerFile,
@@ -1092,6 +1093,11 @@ export function createBuilderPlatform() {
       handler: (params, context, platform) => serialize(context.companyId, async () => ({
         content: "Stored candidate integration attempts only; reading never executes Git or AI.",
         data: await readIntegrationProgress(params, context, platform) as unknown as JsonValue,
+      })) },
+    { name: REQUEST_INTEGRATION_VALIDATION_TOOL.name, declaration: REQUEST_INTEGRATION_VALIDATION_TOOL,
+      handler: (params, context, platform) => serialize(context.companyId, async () => ({
+        content: "Exact protected candidate test request only. Technical execution, authored QA, complete G6/G7 and user delivery approval remain distinct.",
+        data: await requestIntegrationValidation(params, context, platform) as unknown as JsonValue,
       })) },
     { name: VERIFY_WORKSTREAM_TOOL.name, declaration: { displayName: VERIFY_WORKSTREAM_TOOL.displayName,
       description: VERIFY_WORKSTREAM_TOOL.description, parametersSchema: VERIFY_WORKSTREAM_TOOL.parametersSchema },

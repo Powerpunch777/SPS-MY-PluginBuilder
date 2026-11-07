@@ -18,7 +18,24 @@ const bounded = (value: unknown): string => {
   if (typeof value !== "string" || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/u.test(value)) throw new TypeError("A bounded integration scope is required.");
   return value;
 };
-type Scope = Readonly<{ workspaceId: string; workstreamId: string; eventId: string; taskId: string }>;
+export type IntegrationAttemptScope = Readonly<{ workspaceId: string; workstreamId: string; eventId: string; taskId: string }>;
+type Scope = IntegrationAttemptScope;
+export type IntegrationValidationReference = Readonly<{ requestId: string; subjectKey: string; subjectKeySha256: string;
+  approvalTemplateId: string; planSha256: string; commitSha: string; treeSha: string; runId: string | null; approvalId: string | null }>;
+export type IntegrationValidationReferences = Readonly<{ ci: IntegrationValidationReference | null; e2e: IntegrationValidationReference | null }>;
+
+function validationReference(value: unknown): IntegrationValidationReference | null {
+  if (value === null) return null;
+  const row = exactToolRecord(value, ["requestId", "subjectKey", "subjectKeySha256", "approvalTemplateId", "planSha256", "commitSha", "treeSha", "runId", "approvalId"]);
+  if ([row.requestId, row.subjectKey].some(item => typeof item !== "string" || !/^[A-Za-z0-9._:-]{8,160}$/u.test(item))
+    || [row.subjectKeySha256, row.planSha256].some(item => typeof item !== "string" || !/^[a-f0-9]{64}$/u.test(item))
+    || typeof row.approvalTemplateId !== "string" || !UUID.test(row.approvalTemplateId)
+    || [row.commitSha, row.treeSha].some(item => typeof item !== "string" || !OID.test(item))
+    || (row.runId === null) !== (row.approvalId === null)
+    || [row.runId, row.approvalId].some(item => item !== null && (typeof item !== "string" || !UUID.test(item)))
+    || row.subjectKeySha256 !== textHash(row.subjectKey as string)) throw new TypeError("Invalid integration validation reference.");
+  return Object.freeze(row as unknown as IntegrationValidationReference);
+}
 type EffectInput = Readonly<{ sourceId: string; folderKey: string; branch: string; expectedHead: string;
   incomingCommit: string; incomingTree: string; initializeIfMissing?: true }>;
 type GitResult = Readonly<{ status: "integrated" | "replayed"; commitSha: string; treeSha: string; changedPaths: readonly string[] }>
@@ -26,10 +43,11 @@ type GitResult = Readonly<{ status: "integrated" | "replayed"; commitSha: string
   | Readonly<{ status: "conflict"; reason: "branch_changed" | "head_changed" | "merge_conflict"; actualHead: string | null }>;
 export type IntegrationAttempt = Readonly<{ schemaVersion: 1; revisionId: string; scope: Scope; planRevisionId: string;
   reportRevisionId: string; stage: "reserved" | "git-observed"; effect: EffectInput; git: GitResult | null;
-  validation: "not-executed"; author: Readonly<{ agentId: string; sessionId: string; runId: string }> }>;
+  validation: "not-executed"; validationRuns?: IntegrationValidationReferences;
+  author: Readonly<{ agentId: string; sessionId: string; runId: string }> }>;
 
 function parseAttempt(value: unknown): IntegrationAttempt {
-  const row = exactToolRecord(value, ["schemaVersion", "revisionId", "scope", "planRevisionId", "reportRevisionId", "stage", "effect", "git", "validation", "author"]);
+  const row = exactToolRecord(value, ["schemaVersion", "revisionId", "scope", "planRevisionId", "reportRevisionId", "stage", "effect", "git", "validation", "author"], ["validationRuns"]);
   const scope = exactToolRecord(row.scope, ["workspaceId", "workstreamId", "eventId", "taskId"]);
   const effect = exactToolRecord(row.effect, ["sourceId", "folderKey", "branch", "expectedHead", "incomingCommit", "incomingTree"], ["initializeIfMissing"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId"]);
@@ -59,9 +77,13 @@ function parseAttempt(value: unknown): IntegrationAttempt {
       git = observed as unknown as GitResult;
     }
   }
+  const refs = Object.hasOwn(row, "validationRuns") ? exactToolRecord(row.validationRuns, ["ci", "e2e"]) : null;
+  if (refs && (row.stage !== "git-observed" || git?.status === "conflict")) throw new TypeError("Only observed non-conflicting Git effects can have validation references.");
   const content = { schemaVersion: 1 as const, scope: scope as unknown as Scope, planRevisionId: bounded(row.planRevisionId),
     reportRevisionId: bounded(row.reportRevisionId), stage: row.stage as IntegrationAttempt["stage"], effect: effect as unknown as EffectInput,
-    git, validation: "not-executed" as const, author: author as unknown as IntegrationAttempt["author"] };
+    git, validation: "not-executed" as const,
+    ...(refs ? { validationRuns: Object.freeze({ ci: validationReference(refs.ci), e2e: validationReference(refs.e2e) }) } : {}),
+    author: author as unknown as IntegrationAttempt["author"] };
   const revisionId = `integration-attempt-v1:${hash(content)}`;
   if (row.revisionId !== revisionId) throw new TypeError("Integration attempt digest mismatch.");
   return Object.freeze({ ...content, revisionId });
@@ -77,6 +99,12 @@ export function createIntegrationAttemptStore(scope: Scope, state: RevisionState
     revisionId: value => value.revisionId });
 }
 const stored = (content: Omit<IntegrationAttempt, "revisionId">) => parseAttempt({ ...content, revisionId: `integration-attempt-v1:${hash(content)}` });
+
+export function withIntegrationValidationReferences(attempt: IntegrationAttempt, validationRuns: IntegrationValidationReferences) {
+  return stored({ schemaVersion: attempt.schemaVersion, scope: attempt.scope, planRevisionId: attempt.planRevisionId,
+    reportRevisionId: attempt.reportRevisionId, stage: attempt.stage, effect: attempt.effect, git: attempt.git,
+    validation: attempt.validation, validationRuns: { ci: validationRuns.ci, e2e: validationRuns.e2e }, author: attempt.author });
+}
 
 async function managerEvent(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const result = await readVerifiedWorkstreamForManager(params, runContext, platform);
@@ -211,7 +239,8 @@ export async function readIntegrationProgress(params: unknown, runContext: unkno
     if (current) attempts.push(current.revision);
   }
   await managerEvent({ workstreamId, eventId }, runContext, platform);
-  return { status: "read", attempts,
+  const technicalValidation = await (await import("./integration-validation.ts")).readIntegrationValidationRuns(attempts, platform);
+  return { status: "read", attempts, technicalValidation,
     integrationStatus: attempts.some(attempt => attempt.git?.status === "conflict") ? "INTEGRATION_HOLD"
       : attempts.length ? "INTEGRATING" : "READY",
     validation: "not-executed", executionStarted: false };

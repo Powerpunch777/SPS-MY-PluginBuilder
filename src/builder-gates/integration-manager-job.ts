@@ -18,6 +18,7 @@ const MAX_WORKSTREAMS = 128;
 const MAX_MANAGER_TOOL_RESPONSE_BYTES = 40 * 1024;
 const MANAGER_EXECUTION_TOOLS = Object.freeze([
   "builder.integrate-verified-task", "builder.read-integration-progress", INTEGRATION_MANAGER_VERIFIED_READ_TOOL,
+  "builder.request-integration-validation",
 ].sort());
 const REQUEST_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
 type Host = SpsPlatformInvocationContext & {
@@ -71,6 +72,7 @@ function managerPrompt(request: ManagerDispatchRequest, plan: CurrentIntegration
   const prompt = `Integrate only the current approved plan against this exact current verified Workstream evidence.\n${JSON.stringify(payload)}\n`
     + "Use builder.read-verified-workstream and builder.read-integration-progress before acting. "
     + "Record integration work only through builder.integrate-verified-task under the approved plan. "
+    + "After all ready Tasks are integrated, request the current candidate's CI and E2E through builder.request-integration-validation when Main has pinned their Host template references. Read actual results through builder.read-integration-progress. "
     + "This dispatch is admission only; it is not integration completion, CI success, or final delivery approval.";
   if (Buffer.byteLength(prompt, "utf8") > MAX_MANAGER_TOOL_RESPONSE_BYTES) throw new Error("manager-integration-request-exceeds-bounded-prompt");
   return prompt;
