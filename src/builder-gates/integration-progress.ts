@@ -248,8 +248,15 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
 export async function readIntegrationProgress(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const row = exactToolRecord(params, ["workstreamId", "eventId"], ["projection"]), context = parseLeadToolContext(runContext);
   const workstreamId = bounded(row.workstreamId), eventId = bounded(row.eventId);
-  if (row.projection !== undefined && row.projection !== "candidate") throw new TypeError("Unsupported integration progress projection.");
+  if (row.projection !== undefined && row.projection !== "candidate" && row.projection !== "delivery-inventory") {
+    throw new TypeError("Unsupported integration progress projection.");
+  }
   const snapshot = await managerEvent({ workstreamId, eventId }, runContext, platform);
+  if (row.projection === "delivery-inventory") {
+    const result = await (await import("../delivery-evidence/delivery-inventory.ts")).readDeliveryInventory(context.companyId, platform);
+    await managerEvent({ workstreamId, eventId }, runContext, platform);
+    return result;
+  }
   if (row.projection === "candidate") {
     const result = await (await import("../delivery-evidence/integration-candidate.ts")).readIntegrationCandidate(context.companyId, platform);
     await managerEvent({ workstreamId, eventId }, runContext, platform);

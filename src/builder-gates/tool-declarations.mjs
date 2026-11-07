@@ -3,11 +3,12 @@ const uuid = { type: "string", format: "uuid" };
 const branch = { type: "string", minLength: 1, maxLength: 240 };
 export const PUBLISH_INTEGRATION_PLAN_TOOL = Object.freeze({
   name: "builder.publish-integration-plan", displayName: "Publish the current integration plan",
-  description: "Main records the candidate Source/branch and exact current Baseline/UI scope. Optional validationPlans pin Host-approved CI and E2E templates and a separate regression template when required, each with its test-plan hash. These are workflow references, not proof of approval or execution. No Git, CLI or Runner authority is granted and no run starts.",
+  description: "Main records the candidate Source/branch and exact current Baseline/UI scope. Optional validationPlans pin Host-approved test plans. deliveryInventoryPath names the exact relative JSON file to read from the integrated candidate for the proposed delivery inventory. This is a workflow reference, not approval or execution permission.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["expectedBaseRevisionId", "sourceId", "folderKey", "baseBranch", "baseCommit", "candidateBranch"],
     properties: { expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 }, sourceId: uuid, folderKey: id,
       baseBranch: branch, baseCommit: { type: "string", pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" }, candidateBranch: branch,
+      deliveryInventoryPath: { type: "string", minLength: 1, maxLength: 1024 },
       validationPlans: { type: "object", additionalProperties: false, required: ["ci", "e2e"], properties:
         Object.fromEntries(["ci", "e2e", "regression"].map(stage => [stage, { type: "object", additionalProperties: false,
           required: ["approvalTemplateId", "planSha256"], properties: { approvalTemplateId: uuid,
@@ -27,8 +28,8 @@ export const INTEGRATE_VERIFIED_TASK_TOOL = Object.freeze({
 });
 export const READ_INTEGRATION_PROGRESS_TOOL = Object.freeze({
   name: "builder.read-integration-progress", displayName: "Read exact integration progress",
-  description: "The exact active Integration Manager reads its admitted event's immutable attempts and actual technical receipts. Optional projection=candidate checks current Workstream verification, observed Task integration effects and CI/E2E plus any configured regression on the same candidate Commit/Tree. Missing regression is not a pass. This read never retries or starts execution, and does not establish G6/G7 or delivery approval.",
-  parametersSchema: { ...eventScope, properties: { ...eventScope.properties, projection: { type: "string", enum: ["candidate"] } } },
+  description: "The exact active Integration Manager reads its admitted event's immutable attempts and actual technical receipts. projection=candidate checks current Workstreams, Git effects and configured CI/E2E/regression on one candidate. projection=delivery-inventory checks the Main-pinned manifest and exact selected Git/CI Artifact files without returning bytes. Missing evidence is not a pass. Neither read starts execution or approves delivery.",
+  parametersSchema: { ...eventScope, properties: { ...eventScope.properties, projection: { type: "string", enum: ["candidate", "delivery-inventory"] } } },
 });
 export const REQUEST_INTEGRATION_VALIDATION_TOOL = Object.freeze({
   name: "builder.request-integration-validation", displayName: "Request exact candidate validation",

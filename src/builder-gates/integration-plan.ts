@@ -7,6 +7,7 @@ import { readWorkstreams } from "../workstream-tools.ts";
 import { parseUiRevision, type UiRevision } from "../ui-contracts/domain.ts";
 import { createUiContractStore } from "../ui-contracts/store.ts";
 import { createWorkstreamVerificationPublication } from "./workstream-verification-publication.ts";
+import { parseDeliverySourcePath } from "../delivery-evidence/source-snapshot.ts";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
@@ -26,6 +27,7 @@ export type IntegrationPlan = Readonly<{
   sourceId: string; folderKey: string; baseBranch: string; baseCommit: string; baseTree: string; candidateBranch: string;
   validationPlans?: IntegrationValidationPlans;
   validationRequestScope?: "candidate-v2";
+  deliveryInventoryPath?: string;
   author: Readonly<{ agentId: string; sessionId: string; runId: string; selectionRevision: number }>;
 }>;
 
@@ -51,7 +53,7 @@ function id(value: unknown): string {
 export function parseIntegrationPlan(value: unknown): IntegrationPlan {
   const row = exactToolRecord(value, ["schemaVersion", "revisionId", "workspaceId", "baselineRevisionId", "baselineDigest",
     "uiRevisionId", "uiDigest", "sourceId", "folderKey", "baseBranch", "baseCommit", "baseTree", "candidateBranch", "author"],
-    ["validationPlans", "validationRequestScope"]);
+    ["validationPlans", "validationRequestScope", "deliveryInventoryPath"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId", "selectionRevision"]);
   if (row.schemaVersion !== 1 || [row.workspaceId, row.sourceId, author.agentId, author.sessionId, author.runId]
     .some(value => typeof value !== "string" || !UUID.test(value))
@@ -68,6 +70,7 @@ export function parseIntegrationPlan(value: unknown): IntegrationPlan {
     baseTree: row.baseTree as string, candidateBranch: row.candidateBranch as string,
     ...(Object.hasOwn(row, "validationPlans") ? { validationPlans: validationPlans(row.validationPlans) } : {}),
     ...(row.validationRequestScope === "candidate-v2" ? { validationRequestScope: "candidate-v2" as const } : {}),
+    ...(Object.hasOwn(row, "deliveryInventoryPath") ? { deliveryInventoryPath: parseDeliverySourcePath(row.deliveryInventoryPath) } : {}),
     author: { agentId: author.agentId as string, sessionId: author.sessionId as string, runId: author.runId as string,
       selectionRevision: author.selectionRevision as number } };
   const revisionId = `integration-plan-v1:${digest(content)}`;
@@ -118,8 +121,10 @@ export async function checkIntegrationPrerequisites(workspaceId: string, workstr
 /** Main approves workflow scope; the Host's separate Git and execution grants
  * remain necessary for every technical effect. No AI run starts here. */
 export async function publishIntegrationPlan(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
-  const input = exactToolRecord(params, ["expectedBaseRevisionId", "sourceId", "folderKey", "baseBranch", "baseCommit", "candidateBranch"], ["validationPlans"]);
+  const input = exactToolRecord(params, ["expectedBaseRevisionId", "sourceId", "folderKey", "baseBranch", "baseCommit", "candidateBranch"],
+    ["validationPlans", "deliveryInventoryPath"]);
   const selectedValidation = Object.hasOwn(input, "validationPlans") ? validationPlans(input.validationPlans) : undefined;
+  const deliveryInventoryPath = Object.hasOwn(input, "deliveryInventoryPath") ? parseDeliverySourcePath(input.deliveryInventoryPath) : undefined;
   const context = parseLeadToolContext(runContext), authority = await resolveLeadToolAuthority(context, platform);
   requireLeadFormalPublicationAuthority(authority);
   if (context.projectId !== undefined && context.projectId !== context.companyId) throw new Error("Integration plan requires this Workspace project.");
@@ -145,6 +150,7 @@ export async function publishIntegrationPlan(params: unknown, runContext: unknow
     baselineDigest: digest(baseline.revision), uiRevisionId: ui.revision.revisionId, uiDigest: digest(ui.revision), sourceId, folderKey,
     baseBranch, baseCommit: tip.commitSha, baseTree: tip.treeSha, candidateBranch,
     ...(selectedValidation ? { validationPlans: selectedValidation, validationRequestScope: "candidate-v2" as const } : {}),
+    ...(deliveryInventoryPath ? { deliveryInventoryPath } : {}),
     author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId, selectionRevision: authority.selectionRevision } };
   const plan = parseIntegrationPlan({ ...content, revisionId: `integration-plan-v1:${digest(content)}` });
   const store = createIntegrationPlanStore(context.companyId, platform.state);

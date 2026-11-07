@@ -123,6 +123,17 @@ test("Main binds the optional regression plan to the immutable workflow revision
     regression: { ...validationPlans.regression, planSha256: "d".repeat(64) } } }), /digest/);
 });
 
+test("Main pins the inventory manifest location, but not its future contents or approval", async () => {
+  const f = await setup();
+  await assert.rejects(() => publishIntegrationPlan({ ...f.input, deliveryInventoryPath: "../other.json" }, ctx(), f.platform), /delivery source path/);
+  const result = await publishIntegrationPlan({ ...f.input, deliveryInventoryPath: "delivery/inventory.json" }, ctx(), f.platform);
+  assert.equal(result.status, "published");
+  const saved = (await createIntegrationPlanStore(W, f.state).current())!.revision;
+  assert.equal(saved.deliveryInventoryPath, "delivery/inventory.json");
+  assert.throws(() => parseIntegrationPlan({ ...saved, deliveryInventoryPath: "delivery/different.json" }), /digest/);
+  assert.equal(f.sent.length, 0);
+});
+
 test("legacy integration plans retain their exact serialized identity without validation configuration", async () => {
   const f = await setup();
   await publishIntegrationPlan(f.input, ctx(), f.platform);

@@ -23,7 +23,8 @@ export const validationTool = () => createBuilderPlatform().tools.find(item => i
 export const progressTool = () => createBuilderPlatform().tools.find(item => item.name === "builder.read-integration-progress")!;
 
 /** Host/Core-facing receipts in the caller are deterministic DTO fixtures, not live AI or Git execution. */
-export async function preparedFixture(withValidation = false, withRegression = false, withUnmappedRequirement = false, candidateRequests = false) {
+export async function preparedFixture(withValidation = false, withRegression = false, withUnmappedRequirement = false,
+  candidateRequests = false, deliveryInventoryPath?: string) {
   const setup = await setupVerifiedWorkstreamPlatform(withUnmappedRequirement);
   const f = setup.f;
   const verification = await setup.verify();
@@ -54,6 +55,7 @@ export async function preparedFixture(withValidation = false, withRegression = f
       e2e: { approvalTemplateId: "13131313-1313-4313-8313-131313131313", planSha256: "b".repeat(64) },
       ...(withRegression ? { regression: { approvalTemplateId: "19191919-1919-4919-8919-191919191919", planSha256: "c".repeat(64) } } : {}),
     } } : {}), ...(withValidation && candidateRequests ? { validationRequestScope: "candidate-v2" as const } : {}),
+    ...(deliveryInventoryPath ? { deliveryInventoryPath } : {}),
     author: { agentId: "22222222-2222-4222-8222-222222222222",
       sessionId: "33333333-3333-4333-8333-333333333333", runId: "55555555-5555-4555-8555-555555555555", selectionRevision: 1 } };
   const plan = parseIntegrationPlan({ ...planContent, revisionId: `integration-plan-v1:${hash(planContent)}` });
@@ -101,18 +103,20 @@ export async function preparedFixture(withValidation = false, withRegression = f
     agentId: MANAGER, sessionId: MANAGER_SESSION, runId: MANAGER_RUN } };
 }
 
-export async function validationFixture(withRegression = false, withUnmappedRequirement = false, candidateRequests = false) {
-  const fixture = await preparedFixture(true, withRegression, withUnmappedRequirement, candidateRequests);
+export async function validationFixture(withRegression = false, withUnmappedRequirement = false, candidateRequests = false,
+  delivery?: { inventoryPath: string; commitSha: string; treeSha: string }) {
+  const fixture = await preparedFixture(true, withRegression, withUnmappedRequirement, candidateRequests, delivery?.inventoryPath);
+  const candidateCommit = delivery?.commitSha ?? "b".repeat(40), candidateTree = delivery?.treeSha ?? "c".repeat(40);
   let integrated = false, enqueueCalls = 0, loseReply = false, candidateMoved = false;
   const runs = new Map<string, any>(), requests: any[] = [];
   const folders = { async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
     if (branch !== fixture.plan.baseBranch && !integrated) return { status: "denied", reason: "branch_unavailable" };
     return { status: "current", sourceId, folderKey, branch,
-      commitSha: branch === fixture.plan.baseBranch ? BASE_COMMIT : candidateMoved ? "9".repeat(40) : "b".repeat(40),
-      treeSha: branch === fixture.plan.baseBranch ? BASE_TREE : "c".repeat(40), observedAt: "fixture" };
+      commitSha: branch === fixture.plan.baseBranch ? BASE_COMMIT : candidateMoved ? "9".repeat(40) : candidateCommit,
+      treeSha: branch === fixture.plan.baseBranch ? BASE_TREE : candidateTree, observedAt: now };
   }, async integrateWorkspaceSourceCommitV1() {
     integrated = true;
-    return { status: "observed", git: { status: "integrated", commitSha: "b".repeat(40), treeSha: "c".repeat(40), changedPaths: ["src/feature.ts"] } };
+    return { status: "observed", git: { status: "integrated", commitSha: candidateCommit, treeSha: candidateTree, changedPaths: ["src/feature.ts"] } };
   } };
   const api = { delegatedBranchInputVersion: 1, async enqueueApprovedV1(input: any) {
     enqueueCalls++; requests.push(structuredClone(input));

@@ -18,7 +18,7 @@ type Reader = Readonly<{ localFolders?: {
   readWorkspaceSourceGitTipV1?: (sourceId: string, folderKey: string, branch: string) => Promise<unknown>;
 } }>;
 
-function path(value: unknown): string {
+export function parseDeliverySourcePath(value: unknown): string {
   if (typeof value !== "string" || !value || Buffer.byteLength(value) > 1024 || value.split("/").length > 64
     || /[\\\p{Cc}\p{Cf}<>:"|?*]/u.test(value) || value.split("/").some(part => !part || part === "." || part === ".."
       || /[. ]$/u.test(part) || /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?:\.|$)/iu.test(part))) {
@@ -68,7 +68,7 @@ export async function readDeliverySourceSnapshot(expected: Source, requestedPath
       || typeof source.folderKey !== "string" || !/^[a-z0-9][a-z0-9._:-]{0,127}$/u.test(source.folderKey)
       || typeof source.branch !== "string" || !/^(?![/.])(?!.*(?:\.\.|\.lock(?:\/|$)|\/\.|\/\/|@\{))[A-Za-z0-9._/-]{1,240}(?<![./])$/u.test(source.branch)
       || !OID.test(source.commitSha) || !OID.test(source.treeSha) || source.commitSha.length !== source.treeSha.length) throw new TypeError("Invalid current delivery source.");
-    const selected = dense(requestedPaths, 512).map(path).sort(order);
+    const selected = dense(requestedPaths, 512).map(parseDeliverySourcePath).sort(order);
     if (!selected.length || new Set(selected.map(value => value.toLocaleLowerCase("en-US"))).size !== selected.length) throw new TypeError("Unique delivery source files are required.");
     const fileBytes: Array<{ path: string; bytes: Uint8Array; sha256: string }> = [];
     let inventory: readonly Entry[] = [], manifestSha256: string | null = null, commitObjectBytes: Buffer | null = null, total = 0;
@@ -92,7 +92,7 @@ export async function readDeliverySourceSnapshot(expected: Source, requestedPath
       const pathsSeen = new Set<string>();
       const entries = dense(row.entries, 1536).map(value => {
         const entry = exactToolRecord(value, ["path", "type", "mode", "objectId", "byteLength"]);
-        const relative = path(entry.path), folded = relative.toLocaleLowerCase("en-US");
+        const relative = parseDeliverySourcePath(entry.path), folded = relative.toLocaleLowerCase("en-US");
         if (pathsSeen.has(folded) || typeof entry.objectId !== "string" || !OID.test(entry.objectId) || entry.objectId.length !== source.commitSha.length
           || entry.type === "tree" && (entry.mode !== "040000" || entry.byteLength !== null)
           || entry.type === "blob" && (!["100644", "100755"].includes(String(entry.mode)) || !Number.isSafeInteger(entry.byteLength) || (entry.byteLength as number) < 0)
@@ -109,7 +109,7 @@ export async function readDeliverySourceSnapshot(expected: Source, requestedPath
       if (files.length !== paths.length) throw new TypeError("Delivery source file inventory is incomplete.");
       for (const value of files) {
         const file = exactToolRecord(value, ["path", "mode", "objectId", "byteLength", "sha256", "contentBase64"]);
-        const relative = path(file.path), entry = entries.find(item => item.path === relative);
+        const relative = parseDeliverySourcePath(file.path), entry = entries.find(item => item.path === relative);
         if (!wanted.delete(relative) || !entry || entry.type !== "blob" || entry.mode !== file.mode || entry.objectId !== file.objectId
           || entry.byteLength !== file.byteLength) throw new TypeError("Delivery source file is outside the exact requested tree.");
         const contents = bytes(file, 1024 * 1024);
