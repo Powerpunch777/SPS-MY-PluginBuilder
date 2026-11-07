@@ -74,6 +74,7 @@ import { parseUiApproval, parseUiRevision, revisionDigest, type UiApproval, type
 import { uiReviewApprovalPrompt, uiReviewRequestId } from "./ui-contracts/review-dispatch.ts";
 import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
 import { createFinalPacketStore } from "./delivery-evidence/final-packet.ts";
+import { createFinalPacketAtomicApprovalCommitter } from "./delivery-evidence/final-packet-atomic-approval.ts";
 import { readFinalReview } from "./delivery-evidence/final-review.ts";
 import { publishIntegrationPacket, readCurrentIntegrationPacket } from "./delivery-evidence/integration-packet.ts";
 import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB } from "./delivery-evidence/integration-packet-evidence.ts";
@@ -97,6 +98,47 @@ const MAX_INITIAL_SNAPSHOT_BYTES = 192 * 1024;
 const queues = new Map<string, Promise<unknown>>();
 const taskFolderCapabilities = ["sps.workspaceSources.read", "local.folders", "sps.workspaceSources.gitWrite"]
   .filter(capability => SPS_PLATFORM_CAPABILITIES.includes(capability as (typeof SPS_PLATFORM_CAPABILITIES)[number]));
+const UNKNOWN_FINAL_APPROVAL_HOST_SUPPORT = Object.freeze({ state: "unknown", contractVersion: null, operations: Object.freeze([]) });
+function finalApprovalHostReport(platform: SpsPlatformInvocationContext): unknown {
+  try {
+    const report = (platform as SpsPlatformInvocationContext & { readonly hostSupport?: unknown }).hostSupport;
+    if (!report || typeof report !== "object" || Array.isArray(report)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(report))) return UNKNOWN_FINAL_APPROVAL_HOST_SUPPORT;
+    const keys = Reflect.ownKeys(report);
+    if (keys.length !== 3 || !keys.includes("state") || !keys.includes("contractVersion") || !keys.includes("operations")) {
+      return UNKNOWN_FINAL_APPROVAL_HOST_SUPPORT;
+    }
+    const field = (key: string) => {
+      const descriptor = Object.getOwnPropertyDescriptor(report, key);
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError();
+      return descriptor.value as unknown;
+    };
+    const state = field("state"), contractVersion = field("contractVersion"), operations = field("operations");
+    if (state !== "reported" || contractVersion !== "1.0" || !Array.isArray(operations)
+      || Object.getPrototypeOf(operations) !== Array.prototype || operations.length > 128
+      || Reflect.ownKeys(operations).length !== operations.length + 1) return UNKNOWN_FINAL_APPROVAL_HOST_SUPPORT;
+    const seen = new Set<string>();
+    const copy: string[] = [];
+    for (let index = 0; index < operations.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(operations, String(index));
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value") || typeof descriptor.value !== "string"
+        || descriptor.value.length > 80 || !/^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/u.test(descriptor.value)
+        || seen.has(descriptor.value)) return UNKNOWN_FINAL_APPROVAL_HOST_SUPPORT;
+      seen.add(descriptor.value);
+      copy.push(descriptor.value);
+    }
+    return Object.freeze({ state, contractVersion, operations: Object.freeze(copy) });
+  } catch { return UNKNOWN_FINAL_APPROVAL_HOST_SUPPORT; }
+}
+
+function finalApprovalAtomicHostAvailable(platform: SpsPlatformInvocationContext): boolean {
+  const support = finalApprovalHostReport(platform) as { operations?: readonly string[] };
+  if (!support.operations?.includes("state.guardedGitRefCompareAndSetV1")) return false;
+  try {
+    return typeof (platform.state as typeof platform.state & { guardedGitRefCompareAndSetV1?: unknown })
+      .guardedGitRefCompareAndSetV1 === "function";
+  } catch { return false; }
+}
 
 function workspaceId(value: unknown): string {
   if (typeof value !== "string" || !UUID.test(value)) throw new TypeError("A trusted SPS Workspace is required.");
@@ -836,7 +878,9 @@ function currentFinalPacketStore(companyId: string, platform: SpsPlatformInvocat
     }
     return value;
   } } };
-  return createFinalPacketStore(companyId, companyId, platform.state, createCurrentFinalEvidenceReader(companyId, tracked), undefined,
+  return createFinalPacketStore(companyId, companyId, platform.state, createCurrentFinalEvidenceReader(companyId, tracked),
+    createFinalPacketAtomicApprovalCommitter(companyId, companyId, platform,
+      finalApprovalAtomicHostAvailable(platform) ? finalApprovalHostReport(platform) : UNKNOWN_FINAL_APPROVAL_HOST_SUPPORT),
     async event => {
       const selection = event.attestation?.mainLeadSelectionRevision;
       if (selection === undefined) throw new Error("Main attestation scope is missing.");
@@ -1415,7 +1459,9 @@ export function createBuilderPlatform() {
       return serialize(companyId, async () => await firstDesignReviewView(companyId, platform) as unknown as JsonValue);
     } }, { key: "builder.final-review", handler: async (params, platform) => {
       const companyId = workspaceId(params.companyId);
-      return serialize(companyId, async () => await finalReviewView(companyId, platform) as unknown as JsonValue);
+      return serialize(companyId, async () => ({ ...await finalReviewView(companyId, platform),
+        approvalActionAvailability: { status: finalApprovalAtomicHostAvailable(platform) ? "host-supported" as const : "unsupported" as const },
+      }) as unknown as JsonValue);
     } }, { key: "builder.ui-contracts", handler: async (params, platform) =>
       await readUiContractView(workspaceId(params.companyId), platform) as unknown as JsonValue },
     { key: "builder.workstreams", handler: async (params, platform) => {
@@ -1527,6 +1573,9 @@ export function createBuilderPlatform() {
     } }, { key: "builder.final-review-decision", handler: async (params, context) => {
       const input = exactToolRecord(userActionInput(params, context), ["eventId", "requestId", "expectedBaseRevisionId", "action"], ["reason"]);
       const companyId = workspaceId(context.companyId);
+      if (input.action === "approve" && !finalApprovalAtomicHostAvailable(context)) {
+        throw new Error("Atomic final approval is unsupported by the reported Host and current SDK state surface.");
+      }
       return serialize(companyId, async () => {
         const store = currentFinalPacketStore(companyId, context);
         return await store.respond(input, context, async () => {
