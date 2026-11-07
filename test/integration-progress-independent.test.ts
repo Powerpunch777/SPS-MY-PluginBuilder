@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRevisionJournal, type RevisionState } from "../src/solution-revision-store.ts";
-import { createDesignBaselineStore } from "../src/design-baseline-tools.ts";
-import { parseUiRevision } from "../src/ui-contracts/domain.ts";
+import type { RevisionState } from "../src/solution-revision-store.ts";
 import { createIntegrationPlanStore, parseIntegrationPlan } from "../src/builder-gates/integration-plan.ts";
 import { parseTaskQaReport } from "../src/task-qa-reports.ts";
 import { integrationManagerSessionStateKey, integrationManagerSessionTaskKey, integrationManagerStateKey } from "../src/domain/integration-manager.ts";
@@ -17,38 +15,6 @@ test("verified event dispatches one restricted Manager request and stores admiss
   assert.ok(fixture.job.receipt?.runId === MANAGER_RUN);
   assert.equal(fixture.job.reason, "manager-acceptance-receipt-confirmed-not-completion");
 });
-
-async function validationFixture() {
-  const fixture = await preparedFixture(true);
-  let integrated = false, enqueueCalls = 0, loseReply = false, candidateMoved = false;
-  const runs = new Map<string, any>(), requests: any[] = [];
-  const folders = { async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
-    if (branch !== fixture.plan.baseBranch && !integrated) return { status: "denied", reason: "branch_unavailable" };
-    return { status: "current", sourceId, folderKey, branch,
-      commitSha: branch === fixture.plan.baseBranch ? BASE_COMMIT : candidateMoved ? "9".repeat(40) : "b".repeat(40),
-      treeSha: branch === fixture.plan.baseBranch ? BASE_TREE : "c".repeat(40), observedAt: "fixture" };
-  }, async integrateWorkspaceSourceCommitV1() {
-    integrated = true;
-    return { status: "observed", git: { status: "integrated", commitSha: "b".repeat(40), treeSha: "c".repeat(40), changedPaths: ["src/feature.ts"] } };
-  } };
-  const api = { delegatedBranchInputVersion: 1, async enqueueApprovedV1(input: any) {
-    enqueueCalls++; requests.push(structuredClone(input));
-    if (loseReply) { loseReply = false; throw new Error("fixture lost admission reply"); }
-    const id = input.planSha256 === "a".repeat(64) ? "14141414-1414-4414-8414-141414141414" : "15151515-1515-4515-8515-151515151515";
-    const run = { schemaVersion: 1, kind: "protected-node-test-v1", id, status: "queued", termination: "not_applicable",
-      pins: { approvalId: "16161616-1616-4616-8616-161616161616", sourceId: input.sourceId, planSha256: input.planSha256,
-        profileSha256: "1".repeat(64), commitSha: input.commitSha, treeSha: input.treeSha, manifestSha256: "2".repeat(64),
-        inputTreeSha256: "3".repeat(64), nodeSha256: "4".repeat(64), subjectKeySha256: textHash(input.subjectKey), timeoutMs: 1000 },
-      receipt: null, timestamps: { createdAt: "fixture", claimedAt: null, startedAt: null, finishedAt: null }, qaVerdict: "not-established" };
-    runs.set(id, run); return run;
-  }, async getRunV1(_workspaceId: string, runId: string) { return runs.get(runId) ?? null; } };
-  Object.assign(fixture.f.platform, { localFolders: folders, protectedTests: api });
-  const input = { workstreamId: "ws-1", eventId: fixture.eventId, taskId: "task-dev" };
-  const result = await integrationTool()!.handler(input, fixture.managerContext, fixture.f.platform) as any;
-  assert.equal(result.data.status, "published", JSON.stringify(result));
-  return { ...fixture, input, runs, requests, get enqueueCalls() { return enqueueCalls; }, loseNextReply() { loseReply = true; },
-    moveCandidate() { candidateMoved = true; } };
-}
 
 test("registered Manager CI request pins the observed candidate and preserves Core child approval separately from the Host template", async () => {
   const f = await validationFixture();
