@@ -66,7 +66,7 @@ test("cancelled or incomplete technical completion never satisfies a required E2
   assert.deepEqual(await read(), { status: "failed", reason: "integration-e2e-not-passed" });
 });
 
-test("publishing another Workstream invalidates the old verification guard instead of omitting it", async () => {
+test("another unverified Workstream remains required without staling the unchanged original", async () => {
   const { f, read } = await setup();
   const boardStore = createWorkstreamStore(W, W, f.f.state as never);
   const board = (await readWorkstreams(W, W, f.f.platform))!.revision;
@@ -75,7 +75,8 @@ test("publishing another Workstream invalidates the old verification guard inste
   const published = await boardStore.publish({ expectedBaseRevisionId: board.revisionId,
     revision: { projectId: W, revisionId: "candidate-independent-two-workstreams", workstreams: [...board.workstreams, second] } });
   assert.equal(published.status, "published");
-  assert.deepEqual(await read(), { status: "stale", reason: "workstream-verification-changed" });
+  assert.deepEqual(await read(), { status: "pending", reason: "verified-head-unavailable" },
+    "the aggregate waits for the new Workstream instead of omitting it or invalidating unrelated evidence");
 });
 
 test("publishing another development Task invalidates the prior snapshot before the aggregate can pass", async () => {
