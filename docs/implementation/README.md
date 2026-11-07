@@ -285,6 +285,23 @@
   계획이 없는 상태에서 차단됐으며 Manager/Git은 실행하지 않았다. 고정 SDK의 이전
   시도는 원자 상태 API 미지원으로 먼저 차단됐다. 두 실패/성공 범위와 합성 QA 선행
   자료를 구분하며 제품 SDK pin은 바꾸지 않았다.
+- `fe845c4`는 공개 CTO 도구를 늘리지 않고 서버 내부 G5 effect reader를 Task Worker
+  dispatch에 연결한다. 현재 승인 Baseline/UI·정확한 영향 쌍/digest·현재 Task와 Workstream
+  수락 범위를 전후로 확인한다. 불완전 영향에서 특정되지 않은 Task를 임의 실행하지 않으며,
+  수락 receipt를 실행 권한·QA 합격으로 바꾸지 않는다. 기존 QA 이력은 그대로 둔다.
+- `b74849a`는 Main 점검 head와 기존 Integration Review 알림 Job을 같은 guarded CAS에
+  묶는다. 서버가 재확인한 현재 Lead/세션과 문서·Task 등 원본 head만 허용하며, 바뀐
+  가이드나 미지원 atomic wake에서는 기록/알림을 나누어 발행하지 않는다. 새 Agent 없이
+  기존 여섯 번째 세션을 제한된 도구 정책으로 호출한다. 내부 요청은 사용자 대화나
+  설계 결정 원문이 아니며, Review는 승인 요청만 게시할 수 있다. 같은 Core 요청 영수증은
+  한 번만 인수하고 불확실한 전송을 새 요청으로 재시도하지 않는다.
+  등록된 Main/Review 경로와 기존 대화 집중 54개, 문서 경합/미지원 검사 18개가 통과했다.
+  최초 집중 실패는 검증 후 세션 binding을 바꿔 기존 이벤트를 stale로 만든 fixture 순서
+  오류였다. 기존 보호를 해제하지 않고 검증 전에 세션을 준비하도록 수정했으며 실패를
+  보존했다. 실제 스케줄러의 Review 모델 실행·사용자 원자 확정은 별도 인수 대상이다.
+- `b74849a`의 정확한 별도 사본과 물리 고정 SDK에서 타입 검사·빌드·전체 자동 테스트
+  1093개가 통과했다. 이는 G5와 최종 Review 연결의 회귀 검사이며 설치본이나 실제
+  모델·장치 인수 완료를 의미하지 않는다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
