@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
 
 export type IntegrationReviewPin = Readonly<{ sourceId: string; revisionId: string; sha256: string }>;
 export type IntegrationReviewPacket = Readonly<{
@@ -9,7 +10,7 @@ export type IntegrationReviewPacket = Readonly<{
   uiRevision: IntegrationReviewPin;
   manifest: IntegrationReviewPin;
   integration: Readonly<{ branch: string; commitSha: string; build: IntegrationReviewPin;
-    ciEvidence: readonly IntegrationReviewPin[]; e2eEvidence: readonly IntegrationReviewPin[] }>;
+    ciEvidence: readonly IntegrationReviewPin[]; e2eEvidence: readonly IntegrationReviewPin[]; regressionEvidence?: readonly IntegrationReviewPin[] }>;
   files: readonly Readonly<{ path: string; classification: string; size: number; sha256: string }>[];
   documents: readonly Readonly<{ kind: "installation-guide" | "user-guide" | "other"; pin: IntegrationReviewPin }>[];
   qaEvidence: readonly IntegrationReviewPin[];
@@ -17,6 +18,7 @@ export type IntegrationReviewPacket = Readonly<{
   g7Evidence: readonly IntegrationReviewPin[];
   limits: readonly string[];
   changeHistory: readonly IntegrationReviewPin[];
+  preparation?: DeliveryPreparation;
 }>;
 export type IntegrationReviewAttestation = Readonly<{
   packet: IntegrationReviewPacket;
@@ -60,7 +62,7 @@ export type IntegrationReviewJournalEvent = Readonly<{
 }>;
 export type IntegrationReviewHistoryEntry = Readonly<{
   eventId: string;
-  kind: IntegrationReviewJournalEvent["kind"];
+  kind: IntegrationReviewJournalEvent["kind"] | "manager-packet";
   requestId: string;
   decision: IntegrationReviewDecision | null;
 }>;
@@ -145,15 +147,19 @@ function validPins(value: unknown, allowEmpty = false): value is readonly Integr
 }
 function validPacket(value: unknown): boolean {
   const row = exact(value, ["packetId", "packetRevisionId", "packetSha256", "baseline", "uiRevision", "manifest", "integration",
-    "files", "documents", "qaEvidence", "g6Evidence", "g7Evidence", "limits", "changeHistory"]);
+    "files", "documents", "qaEvidence", "g6Evidence", "g7Evidence", "limits", "changeHistory"], ["preparation"]);
   if (!row || !isText(row.packetId) || !isText(row.packetRevisionId) || !isDigest(row.packetSha256)
     || !validPin(row.baseline) || !validPin(row.uiRevision) || !validPin(row.manifest)
     || !Array.isArray(row.files) || !row.files.length || !Array.isArray(row.documents)
     || !Array.isArray(row.limits) || !row.limits.every(isText) || !validPins(row.qaEvidence)
     || !validPins(row.g6Evidence) || !validPins(row.g7Evidence) || !validPins(row.changeHistory, true)) return false;
-  const integration = exact(row.integration, ["branch", "commitSha", "build", "ciEvidence", "e2eEvidence"]);
+  if (Object.hasOwn(row, "preparation")) {
+    try { parseDeliveryPreparation(row.preparation); } catch { return false; }
+  }
+  const integration = exact(row.integration, ["branch", "commitSha", "build", "ciEvidence", "e2eEvidence"], ["regressionEvidence"]);
   if (!integration || !isText(integration.branch) || !isText(integration.commitSha) || !validPin(integration.build)
-    || !validPins(integration.ciEvidence) || !validPins(integration.e2eEvidence)) return false;
+    || !validPins(integration.ciEvidence) || !validPins(integration.e2eEvidence)
+    || Object.hasOwn(integration, "regressionEvidence") && !validPins(integration.regressionEvidence)) return false;
   const filePaths = new Set<string>();
   if (!row.files.every(fileValue => {
     const file = exact(fileValue, ["path", "classification", "size", "sha256"]);
@@ -226,7 +232,7 @@ function validReceipt(value: unknown): value is IntegrationReviewRunReceipt {
 }
 function validHistoryEntry(value: unknown): value is IntegrationReviewHistoryEntry {
   const row = exact(value, ["eventId", "kind", "requestId", "decision"]);
-  if (!row || !isText(row.eventId) || !["main-attestation", "approval-request", "user-decision"].includes(String(row.kind))
+  if (!row || !isText(row.eventId) || !["manager-packet", "main-attestation", "approval-request", "user-decision"].includes(String(row.kind))
     || !isText(row.requestId)) return false;
   if (row.decision === null) return true;
   const decision = exact(row.decision, ["action", "userId", "reason", "decidedAt", "sourceSnapshotSha256"]);
@@ -270,7 +276,7 @@ export function parseIntegrationReviewDTO(value: unknown): IntegrationReviewDTO 
 }
 
 const STYLE = `
-.sps-integration-review{--ir-bg:#202020;--ir-panel:#262626;--ir-border:#414141;--ir-text:#ededed;--ir-muted:#b6b6b6;--ir-faint:#929292;--ir-ok:#a9d6b5;--ir-warn:#e2cc8c;--ir-bad:#e6a2a2;color:var(--ir-text);font:13px/1.55 -apple-system,BlinkMacSystemFont,Pretendard,"Noto Sans KR","Malgun Gothic",sans-serif;letter-spacing:0;min-width:0}
+.sps-integration-review{--ir-bg:#202020;--ir-panel:#262626;--ir-border:#414141;--ir-text:#ededed;--ir-muted:#b6b6b6;--ir-faint:#929292;--ir-ok:#a9d6b5;--ir-warn:#e2cc8c;--ir-bad:#e6a2a2;background:var(--ir-bg);padding:16px;color:var(--ir-text);font:13px/1.55 -apple-system,BlinkMacSystemFont,Pretendard,"Noto Sans KR","Malgun Gothic",sans-serif;letter-spacing:0;min-width:0;max-width:100%}
 .sps-integration-review *{box-sizing:border-box;letter-spacing:0}
 .sps-integration-review button,.sps-integration-review input{font:inherit;color:inherit}
 .sps-integration-review button:focus-visible,.sps-integration-review input:focus-visible{outline:2px solid #ededed;outline-offset:2px}
@@ -288,7 +294,7 @@ const STYLE = `
 .sps-ir-item small{margin-top:3px;color:var(--ir-muted);font-size:11px}
 .sps-ir-mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
 .sps-ir-table-wrap{overflow-x:auto;border:1px solid var(--ir-border);border-radius:6px}
-.sps-ir-table{width:100%;border-collapse:collapse;text-align:left}
+.sps-ir-table{width:100%;min-width:680px;border-collapse:collapse;text-align:left;color:var(--ir-text)}
 .sps-ir-table th,.sps-ir-table td{padding:8px 9px;border-bottom:1px solid var(--ir-border);vertical-align:top;overflow-wrap:anywhere}
 .sps-ir-table th{color:var(--ir-muted);font-size:11px;font-weight:700}
 .sps-ir-table tr:last-child td{border-bottom:0}
@@ -420,6 +426,7 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
           </div>
           <div className="sps-ir-grid" style={{ marginTop: 8 }}>
             {[ ["CI evidence", ready!.snapshot.packet.integration.ciEvidence], ["E2E evidence", ready!.snapshot.packet.integration.e2eEvidence],
+              ...(ready!.snapshot.packet.integration.regressionEvidence ? [["회귀 검증", ready!.snapshot.packet.integration.regressionEvidence]] : []),
               ["QA evidence", ready!.snapshot.packet.qaEvidence], ["G6 evidence", ready!.snapshot.packet.g6Evidence],
               ["G7 evidence", ready!.snapshot.packet.g7Evidence] ].map(([label, pins]) => <div className="sps-ir-item" key={label as string}>
                 <strong>{label as string}</strong><ul className="sps-ir-list">{(pins as readonly IntegrationReviewPin[]).map(pin => <li key={`${pin.sourceId}:${pin.revisionId}`}>
@@ -453,16 +460,27 @@ export function IntegrationReviewPanel({ view, error, onApprove, onRequestChange
         <section className="sps-ir-section" aria-label="알려진 제한">
           <h3>알려진 제한</h3><ul className="sps-ir-list">{ready!.snapshot.packet.limits.map((limit, index) => <li key={`${index}:${limit}`}>{limit}</li>)}</ul>
         </section>
+        {ready!.snapshot.packet.preparation && <section className="sps-ir-section" aria-label="지원 환경과 의존성">
+          <h3>지원 환경·의존성</h3><p>패키지 버전 {ready!.snapshot.packet.preparation.packageVersion}</p>
+          {ready!.snapshot.packet.preparation.targets.map(target => <article className="sps-ir-item" key={target.target}>
+            <strong>{target.target}</strong><ul className="sps-ir-list">{target.environments.map(value => <li key={value}>{value}</li>)}</ul>
+            <small>의존성: {target.dependencies.length ? target.dependencies.join(", ") : "선언된 추가 의존성 없음"}</small>
+            <small className="sps-ir-mono">진입 파일: {target.entryPaths.join(", ")}</small>
+            {target.supplementaryPaths.length > 0 && <small className="sps-ir-mono">부속 자료: {target.supplementaryPaths.join(", ")}</small>}
+          </article>)}
+        </section>}
         <section className="sps-ir-section" aria-label="변경 이력">
           <h3>변경 이력</h3>{ready!.snapshot.packet.changeHistory.length
             ? <ul className="sps-ir-list">{ready!.snapshot.packet.changeHistory.map(pin => <li key={`${pin.sourceId}:${pin.revisionId}`}>
               {pinLabel(pin)} · <span className="sps-ir-mono">{digestLabel(pin.sha256)}</span></li>)}</ul>
             : <p className="sps-ir-status">패킷에 별도 변경 이력이 고정되어 있지 않습니다.</p>}
+          {ready!.snapshot.packet.preparation && <ul className="sps-ir-list">{ready!.snapshot.packet.preparation.changeNotes.map(note => <li key={note}>{note}</li>)}</ul>}
         </section>
         <section className="sps-ir-section" aria-label="검토 요청과 결정">
           <h3>검토 요청 · 결정 이력</h3>{ready!.history.length
             ? <ol className="sps-ir-list">{[...ready!.history].reverse().map(event => <li key={event.eventId}>
-              {event.kind === "approval-request" ? "승인 요청" : `사용자 ${event.decision?.action ?? "결정"}`} · {event.requestId} · {event.eventId}
+              {event.kind === "manager-packet" ? "Manager 패킷" : event.kind === "main-attestation" ? "Main 점검"
+                : event.kind === "approval-request" ? "승인 요청" : `사용자 ${event.decision?.action ?? "결정"}`} · {event.requestId} · {event.eventId}
               {event.decision ? ` · ${event.decision.userId} · ${event.decision.decidedAt}` : ""}
               {event.decision?.reason ? ` · ${event.decision.reason}` : ""}
             </li>)}</ol>

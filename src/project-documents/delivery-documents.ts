@@ -5,6 +5,7 @@ import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuth
 import { readCurrentIntegrationPlan } from "../builder-gates/integration-plan.ts";
 import { parseUiRevision, revisionDigest } from "../ui-contracts/domain.ts";
 import { createRevisionJournal, type RevisionState } from "../solution-revision-store.ts";
+import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
 
 const SHA = /^[a-f0-9]{64}$/u;
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
@@ -37,6 +38,7 @@ export type PublishedDeliveryDocuments = Readonly<{
   integrationPlan: DeliverySourcePin;
   source: Readonly<{ sourceId: string; folderKey: string; branch: string; commitSha: string; treeSha: string; sha256: string }>;
   documents: readonly Readonly<DeliveryDocumentDraft & { bodySha256: string }>[];
+  preparation?: DeliveryPreparation;
   completeness: Readonly<{ status: "unknown"; reason: string }>;
 }>;
 
@@ -118,7 +120,7 @@ function parsePin(value: unknown, label: string): DeliverySourcePin {
 
 function parsePublished(value: unknown, workspaceId: string, projectId: string): PublishedDeliveryDocuments {
   const row = record(value, ["schemaVersion", "workspaceId", "projectId", "revisionId", "createdAt", "status", "approvalStatus",
-    "author", "baseline", "ui", "integrationPlan", "source", "documents", "completeness"]);
+    "author", "baseline", "ui", "integrationPlan", "source", "documents", "completeness"], ["preparation"]);
   const author = record(row.author, ["agentId", "sessionId", "runId", "selectionRevision"]);
   const baselineRow = record(row.baseline, ["sourceId", "revisionId", "sha256", "sequence"]);
   const sourceRow = record(row.source, ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "sha256"]);
@@ -161,7 +163,8 @@ function parsePublished(value: unknown, workspaceId: string, projectId: string):
   const source = Object.freeze({ ...sourceContent, sha256: sourceRow.sha256 as string });
   const authorValue = Object.freeze({ agentId: author.agentId as string, sessionId: author.sessionId as string,
     runId: author.runId as string, selectionRevision: author.selectionRevision as number });
-  const pinsAndDocs = { baseline, ui, integrationPlan, source, documents: docs };
+  const pinsAndDocs = { baseline, ui, integrationPlan, source, documents: docs,
+    ...(Object.hasOwn(row, "preparation") ? { preparation: parseDeliveryPreparation(row.preparation) } : {}) };
   const expectedId = `delivery-documents-v1:${hash(json(pinsAndDocs))}`;
   if (row.revisionId !== expectedId) throw new TypeError("Delivery document revision identity mismatch.");
   return freeze({ schemaVersion: 1, workspaceId, projectId, revisionId: expectedId, createdAt, status: "draft",
@@ -255,7 +258,7 @@ function journal(workspaceId: string, projectId: string, state: RevisionState) {
 }
 
 export async function proposeDeliveryDocuments(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
-  const input = exactToolRecord(params, ["projectId", "expectedBaseRevisionId", "documents"]);
+  const input = exactToolRecord(params, ["projectId", "expectedBaseRevisionId", "documents"], ["preparation"]);
   const context = parseLeadToolContext(runContext);
   const projectId = input.projectId;
   if (typeof projectId !== "string" || projectId !== context.companyId
@@ -263,13 +266,23 @@ export async function proposeDeliveryDocuments(params: unknown, runContext: unkn
   const authority = await resolveLeadToolAuthority(context, platform);
   requireLeadFormalPublicationAuthority(authority);
   const documents = parseDrafts(input.documents);
+  const preparation = Object.hasOwn(input, "preparation") ? parseDeliveryPreparation(input.preparation) : undefined;
   const resolution = await resolveCurrentPins(context.companyId, projectId, platform);
   if (resolution.status === "unsupported") return Object.freeze({ status: "unsupported" as const, reason: resolution.reason });
   if (resolution.status === "unknown") return Object.freeze({ status: "unknown" as const, reason: resolution.reason });
   if (resolution.status === "stale") return Object.freeze({ status: "conflict" as const, reason: resolution.reason });
+  if (preparation) {
+    const baseline = await readDesignBaseline(context.companyId, projectId, platform);
+    const targets = baseline?.revision.specification.targets;
+    if (baseline?.revision.revisionId !== resolution.pins.baseline.revisionId || !targets
+      || targets.length !== preparation.targets.length || targets.some(target => !preparation.targets.some(item => item.target === target))) {
+      throw new Error("Delivery preparation must declare exactly the current approved targets.");
+    }
+  }
   const documentRows = Object.freeze(documents.map(document => Object.freeze({ ...document, bodySha256: hash(document.body) })));
   const identity = { baseline: resolution.pins.baseline, ui: resolution.pins.ui,
-    integrationPlan: resolution.pins.integrationPlan, source: resolution.pins.source, documents: documentRows };
+    integrationPlan: resolution.pins.integrationPlan, source: resolution.pins.source, documents: documentRows,
+    ...(preparation ? { preparation } : {}) };
   const revisionId = `delivery-documents-v1:${hash(json(identity))}`;
   const store = journal(context.companyId, projectId, platform.state as RevisionState);
   const expectedBaseRevisionId = input.expectedBaseRevisionId === null ? null : input.expectedBaseRevisionId;

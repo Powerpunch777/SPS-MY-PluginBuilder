@@ -3,6 +3,7 @@ import type { SpsActionContext, SpsPlatformInvocationContext } from "@sonparkser
 import { exactToolRecord, parseLeadToolContext, requireLeadFormalPublicationAuthority, resolveLeadToolAuthority } from "../lead-tool-authority.ts";
 import { createRevisionJournal, type RevisionPublicationGuard, type RevisionState } from "../solution-revision-store.ts";
 import { INTEGRATION_PACKET_EVENT, INTEGRATION_PACKET_MAIN_JOB, integrationPacketDigest, type IntegrationPacketEvidence } from "./integration-packet-evidence.ts";
+import { parseDeliveryPreparation, type DeliveryPreparation } from "../domain/delivery-preparation.ts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const ID = /^[^\u0000-\u001f\u007f]{1,200}$/u;
@@ -27,7 +28,7 @@ export type FinalPacket = Readonly<{
   uiRevision: FinalPacketPin;
   manifest: FinalPacketPin;
   integration: Readonly<{ branch: string; commitSha: string; build: FinalPacketPin;
-    ciEvidence: readonly FinalPacketPin[]; e2eEvidence: readonly FinalPacketPin[] }>;
+    ciEvidence: readonly FinalPacketPin[]; e2eEvidence: readonly FinalPacketPin[]; regressionEvidence?: readonly FinalPacketPin[] }>;
   files: readonly FinalPacketFile[];
   documents: readonly FinalPacketDocument[];
   qaEvidence: readonly FinalPacketPin[];
@@ -35,6 +36,7 @@ export type FinalPacket = Readonly<{
   g7Evidence: readonly FinalPacketPin[];
   limits: readonly string[];
   changeHistory: readonly FinalPacketPin[];
+  preparation?: DeliveryPreparation;
 }>;
 export type FinalEvidenceSnapshot = Readonly<{
   provenance: Readonly<{ adapter: "builder.final-packet-current-evidence.v1"; operation: "readCurrent" }>;
@@ -103,8 +105,8 @@ function pins(value: unknown, label: string, allowEmpty = false): readonly Final
   return Object.freeze(result);
 }
 function packet(value: unknown): FinalPacket {
-  const row = record(value, ["packetId", "packetRevisionId", "packetSha256", "baseline", "uiRevision", "manifest", "integration",
-    "files", "documents", "qaEvidence", "g6Evidence", "g7Evidence", "limits", "changeHistory"]);
+  const row = exactToolRecord(value, ["packetId", "packetRevisionId", "packetSha256", "baseline", "uiRevision", "manifest", "integration",
+    "files", "documents", "qaEvidence", "g6Evidence", "g7Evidence", "limits", "changeHistory"], ["preparation"]);
   if (!Array.isArray(row.files) || !row.files.length || !Array.isArray(row.documents) || !Array.isArray(row.limits)
     || !Array.isArray(row.changeHistory)) throw new TypeError("Final Packet contents are incomplete.");
   const files = row.files.map(item => {
@@ -123,25 +125,32 @@ function packet(value: unknown): FinalPacket {
   if (!documents.some(doc => doc.kind === "installation-guide") || !documents.some(doc => doc.kind === "user-guide")) {
     throw new TypeError("Installation and user guides must both be pinned.");
   }
-  const integration = record(row.integration, ["branch", "commitSha", "build", "ciEvidence", "e2eEvidence"]);
+  const integration = exactToolRecord(row.integration, ["branch", "commitSha", "build", "ciEvidence", "e2eEvidence"], ["regressionEvidence"]);
   const integrationInfo = Object.freeze({ branch: id(integration.branch, "integration branch"),
     commitSha: id(integration.commitSha, "integration commit"), build: pin(integration.build),
-    ciEvidence: pins(integration.ciEvidence, "CI evidence"), e2eEvidence: pins(integration.e2eEvidence, "E2E evidence") });
+    ciEvidence: pins(integration.ciEvidence, "CI evidence"), e2eEvidence: pins(integration.e2eEvidence, "E2E evidence"),
+    ...(Object.hasOwn(integration, "regressionEvidence") ? { regressionEvidence: pins(integration.regressionEvidence, "regression evidence") } : {}) });
   const limits = row.limits.map(item => id(item, "known limit"));
   if (new Set(limits).size !== limits.length) throw new TypeError("Known limits must be unique.");
   const parsed = { packetId: id(row.packetId, "packetId"), packetRevisionId: id(row.packetRevisionId, "packetRevisionId"),
     packetSha256: digest(row.packetSha256, "packet sha256"), baseline: pin(row.baseline), uiRevision: pin(row.uiRevision),
     manifest: pin(row.manifest), integration: integrationInfo, files: Object.freeze(files), documents: Object.freeze(documents),
     qaEvidence: pins(row.qaEvidence, "QA evidence"), g6Evidence: pins(row.g6Evidence, "G6 evidence"),
-    g7Evidence: pins(row.g7Evidence, "G7 evidence"), limits: Object.freeze(limits), changeHistory: pins(row.changeHistory, "change history", true) };
+    g7Evidence: pins(row.g7Evidence, "G7 evidence"), limits: Object.freeze(limits), changeHistory: pins(row.changeHistory, "change history", true),
+    ...(Object.hasOwn(row, "preparation") ? { preparation: parseDeliveryPreparation(row.preparation) } : {}) };
   const { packetSha256, ...content } = parsed;
   if (packetSha256 !== hash(json(content))) throw new TypeError("Final Packet content hash does not match its exact contents.");
   return Object.freeze(parsed);
 }
 
-function currentPinsDigest(value: FinalPacket): string {
+export function sealFinalPacket(content: Omit<FinalPacket, "packetSha256">): FinalPacket {
+  return packet({ ...content, packetSha256: hash(json(content)) });
+}
+
+export function finalPacketPinsDigest(value: FinalPacket): string {
   const all: FinalPacketPin[] = [value.baseline, value.uiRevision, value.manifest, value.integration.build,
     ...value.integration.ciEvidence, ...value.integration.e2eEvidence, ...value.documents.map(document => document.pin),
+    ...(value.integration.regressionEvidence ?? []),
     ...value.qaEvidence, ...value.g6Evidence, ...value.g7Evidence, ...value.changeHistory,
     ...value.files.map(file => ({ sourceId: `file:${file.path}`, revisionId: value.packetRevisionId, sha256: file.sha256 }))];
   all.sort((a, b) => a.sourceId.localeCompare(b.sourceId) || a.revisionId.localeCompare(b.revisionId) || a.sha256.localeCompare(b.sha256));
@@ -247,7 +256,7 @@ function eligible(snapshot: FinalEvidenceSnapshot, workspaceId: string, projectI
       && snapshot.integrationCodeAuthority === "verified" && snapshot.hostRuntimeAuthority === "verified"
       && snapshot.g6 === "PASS" && snapshot.g7 === "PASS" && snapshot.qa === "PASS"
       && SHA256.test(snapshot.currentPinsSha256) && parsedPacket.packetRevisionId.length > 0
-      && currentPinsDigest(parsedPacket) === snapshot.currentPinsSha256 && verifyPacketBytes(snapshot, parsedPacket);
+      && finalPacketPinsDigest(parsedPacket) === snapshot.currentPinsSha256 && verifyPacketBytes(snapshot, parsedPacket);
   } catch { return false; }
 }
 
@@ -310,7 +319,7 @@ export function createFinalPacketStore(workspaceId: string, projectId: string, s
       if (!current || current.workspaceId !== workspaceId || current.projectId !== projectId) return null;
       const { packet: content, integrationCodeAuthority, hostRuntimeAuthority, g6, g7, qa, currentPinsSha256 } = current;
       const parsed = packet(content);
-      if (currentPinsDigest(parsed) !== currentPinsSha256 || !verifyPacketBytes(current, parsed)) return null;
+      if (finalPacketPinsDigest(parsed) !== currentPinsSha256 || !verifyPacketBytes(current, parsed)) return null;
       return { snapshot: { workspaceId, projectId, packet: parsed, integrationCodeAuthority, hostRuntimeAuthority,
         g6, g7, qa, currentPinsSha256 }, snapshotSha256: hash(json(current)),
         eligible: eligible(current, workspaceId, projectId) && Boolean(commitApprovalAtomically) };

@@ -76,6 +76,7 @@ import { readFinalReview } from "./delivery-evidence/final-review.ts";
 import { publishIntegrationPacket, readCurrentIntegrationPacket } from "./delivery-evidence/integration-packet.ts";
 import { INTEGRATION_PACKET_MAIN_JOB } from "./delivery-evidence/integration-packet-evidence.ts";
 import { dispatchIntegrationPacketToMain, integrationPacketMainRequestId } from "./delivery-evidence/integration-packet-dispatch.ts";
+import { createCurrentFinalEvidenceReader } from "./delivery-evidence/current-final-evidence.ts";
 import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
 import { approveFirstDesignReview, proposeFirstDesignReview, readFirstDesignReviewBundle } from "./spec-assurance/review-first-design.ts";
 import { readG5ChangeImpactCandidates, readUserG5ChangeImpact } from "./g5-change-impact-tools.ts";
@@ -814,9 +815,13 @@ async function notifyUiApproval(companyId: string, approval: UiApproval,
 async function finalReviewView(companyId: string, platform: SpsPlatformInvocationContext) {
   const binding = await readLeadAgentBinding(companyId, platform);
   const sessions = await leadSessionsFor(companyId, binding, platform);
-  const view = await readFinalReview(createFinalPacketStore(companyId, companyId, platform.state), sessions, platform);
+  const view = await readFinalReview(currentFinalPacketStore(companyId, platform), sessions, platform);
   await assertLeadSelection(companyId, binding, platform);
   return view;
+}
+
+function currentFinalPacketStore(companyId: string, platform: SpsPlatformInvocationContext) {
+  return createFinalPacketStore(companyId, companyId, platform.state, createCurrentFinalEvidenceReader(companyId, platform));
 }
 
 async function notifyIntegrationPacket(job: { companyId?: string; eventId?: string; trigger: string }, platform: SpsPlatformInvocationContext) {
@@ -940,10 +945,10 @@ export function createBuilderPlatform() {
       }) },
     { name: ATTEST_FINAL_PACKET_TOOL.name, declaration: ATTEST_FINAL_PACKET_TOOL,
       handler: (params, context, platform) => serialize(context.companyId, async () => ({ content: "Main readiness check only; never a user approval.",
-        data: await createFinalPacketStore(context.companyId, context.companyId, platform.state).attestFinalPacket(params, context, platform) as unknown as JsonValue })) },
+        data: await currentFinalPacketStore(context.companyId, platform).attestFinalPacket(params, context, platform) as unknown as JsonValue })) },
     { name: REQUEST_FINAL_REVIEW_TOOL.name, declaration: REQUEST_FINAL_REVIEW_TOOL,
       handler: (params, context, platform) => serialize(context.companyId, async () => ({ content: "Integration Review request only; never a user approval.",
-        data: await createFinalPacketStore(context.companyId, context.companyId, platform.state).publishApprovalRequest(params, context, platform) as unknown as JsonValue })) },
+        data: await currentFinalPacketStore(context.companyId, platform).publishApprovalRequest(params, context, platform) as unknown as JsonValue })) },
     { name: PROPOSE_DESIGN_TOOL.name, declaration: { displayName: PROPOSE_DESIGN_TOOL.displayName,
       description: PROPOSE_DESIGN_TOOL.description, parametersSchema: PROPOSE_DESIGN_TOOL.parametersSchema },
     handler: (params, context, platform) => proposeLeadDesign(params, context, platform) },
@@ -1314,7 +1319,7 @@ export function createBuilderPlatform() {
       const input = exactToolRecord(userActionInput(params, context), ["eventId", "requestId", "expectedBaseRevisionId", "action"], ["reason"]);
       const companyId = workspaceId(context.companyId);
       return serialize(companyId, async () => {
-        const store = createFinalPacketStore(companyId, companyId, context.state);
+        const store = currentFinalPacketStore(companyId, context);
         return await store.respond(input, context, async () => {
           const view = await finalReviewView(companyId, context);
           if (view.status !== "ready" || !view.mainReceipt || !view.integrationReviewReceipt || view.decision

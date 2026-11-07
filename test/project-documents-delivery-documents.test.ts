@@ -85,6 +85,29 @@ test("Main saves immutable guide drafts pinned to current Baseline, formal UI, p
   if (replay.status === "published") assert.equal(replay.replayed, true);
 });
 
+test("delivery preparation is optional, hash-bound to the existing document revision and not a QA verdict", async () => {
+  const f = await setup();
+  const old = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: f.documents }, ctx(), f.platform);
+  if (old.status !== "published") throw new Error("Missing original draft.");
+  const preparation = { packageVersion: "1.0.0", targets: [{ target: "desktop", environments: ["Windows x64"], dependencies: [],
+    entryPaths: ["dist/app.exe"], supplementaryPaths: ["docs/install.md"] }],
+    limitationStatement: "No known additional limitations.", limitations: [], changeNotes: ["Initial package."] };
+  const result = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: old.revision.revisionId,
+    documents: f.documents, preparation }, ctx(), f.platform);
+  assert.equal(result.status, "published");
+  if (result.status !== "published") return;
+  assert.notEqual(result.revision.revisionId, old.revision.revisionId);
+  assert.deepEqual(result.revision.preparation, preparation);
+  assert.equal(result.revision.approvalStatus, "unapproved");
+  assert.equal(result.revision.completeness.status, "unknown");
+  assert.equal((await readCurrentDeliveryDocuments(W, f.platform)).document?.revisionId, result.revision.revisionId);
+  const replay = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: f.documents }, ctx(), f.platform);
+  assert.equal(replay.status, "published");
+  if (replay.status === "published") assert.equal(replay.revision.revisionId, old.revision.revisionId);
+  await assert.rejects(proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: result.revision.revisionId, documents: f.documents,
+    preparation: { ...preparation, targets: [{ ...preparation.targets[0], target: "web-api" }] } }, ctx(), f.platform), /approved targets/u);
+});
+
 test("registered Main tool and document data path expose the same unapproved revision without AI", async () => {
   const f = await setup();
   const contract = createBuilderPlatform();

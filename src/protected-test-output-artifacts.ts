@@ -45,9 +45,9 @@ function successfulReceipt(run: ReturnType<typeof parseProtectedRun>) {
 
 /** Re-read Core authority around an exact scoped Artifact-byte check. A matching
  * file is output provenance only, never an authored QA verdict or delivery approval. */
-export async function readProtectedOutputArtifacts(reference: ProtectedOutputReference,
-  platform: SpsPlatformInvocationContext): Promise<ProtectedOutputRead> {
-  const result = (status: "unsupported" | "not-ready" | "not-produced" | "unknown"): ProtectedOutputRead =>
+async function readProtectedOutputEvidence(reference: ProtectedOutputReference,
+  platform: SpsPlatformInvocationContext) {
+  const result = (status: "unsupported" | "not-ready" | "not-produced" | "unknown"): Exclude<ProtectedOutputRead, { status: "matched" }> =>
     ({ status, qaVerdict: "not-established" });
   const host = platform as unknown as Reader;
   if (typeof host.protectedTests?.getRunV1 !== "function" || typeof host.artifacts?.list !== "function") return result("unsupported");
@@ -70,7 +70,8 @@ export async function readProtectedOutputArtifacts(reference: ProtectedOutputRef
     const rows = await host.artifacts.list({ subjectKey: ref.subjectKey, runId: ref.runId, limit: 17 });
     if (!Array.isArray(rows) || Object.getPrototypeOf(rows) !== Array.prototype || rows.length !== manifest.length
       || Reflect.ownKeys(rows).length !== rows.length + 1) return result("unknown");
-    const files: OutputFile[] = [], ids = new Set<string>(), paths = new Set<string>();
+    const files: OutputFile[] = [], fileBytes: Array<Readonly<{ path: string; bytes: Uint8Array }>> = [],
+      ids = new Set<string>(), paths = new Set<string>();
     for (let index = 0; index < rows.length; index++) {
       const entry = Object.getOwnPropertyDescriptor(rows, String(index));
       if (!entry?.enumerable || !Object.hasOwn(entry, "value")) return result("unknown");
@@ -92,12 +93,29 @@ export async function readProtectedOutputArtifacts(reference: ProtectedOutputRef
       if (bytes.toString("base64") !== data.contentBase64 || bytes.length !== expected.byteLength || sha(bytes) !== expected.sha256) return result("unknown");
       ids.add(row.id); paths.add(data.path);
       files.push(Object.freeze({ artifactId: row.id, ...expected }));
+      fileBytes.push(Object.freeze({ path: data.path, bytes }));
     }
     const latest = boundRun(await host.protectedTests.getRunV1(ref.workspaceId, ref.runId, sha(ref.subjectKey)), ref);
     if (latest.status !== "succeeded" || latest.termination !== "confirmed"
       || JSON.stringify([latest.status, latest.termination, exactToolRecord(latest.pins, Object.keys(pins)), successfulReceipt(latest)]) !== completionSnapshot) return result("unknown");
-    return Object.freeze({ status: "matched", manifestSha256: receipt.outputManifestSha256 as string,
+    return Object.freeze({ status: "matched" as const, manifestSha256: receipt.outputManifestSha256 as string,
       totalBytes: receipt.outputBytes as number, files: Object.freeze(files.sort((a, b) => a.path.localeCompare(b.path))),
-      qaVerdict: "not-established" });
+      fileBytes: Object.freeze(fileBytes), qaVerdict: "not-established" as const });
   } catch { return result("unknown"); }
+}
+
+/** Metadata-only observation for tools/UI. Raw bytes stay in server-bound callers. */
+export async function readProtectedOutputArtifacts(reference: ProtectedOutputReference,
+  platform: SpsPlatformInvocationContext): Promise<ProtectedOutputRead> {
+  const result = await readProtectedOutputEvidence(reference, platform);
+  if (result.status !== "matched") return result;
+  const { fileBytes: _bytes, ...metadata } = result;
+  return metadata;
+}
+
+export async function readProtectedOutputArtifactBytes(reference: ProtectedOutputReference,
+  platform: SpsPlatformInvocationContext) {
+  const result = await readProtectedOutputEvidence(reference, platform);
+  return result.status === "matched" ? { status: "available" as const, files: result.files, fileBytes: result.fileBytes,
+    manifestSha256: result.manifestSha256 } : { status: "unknown" as const };
 }

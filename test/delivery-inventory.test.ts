@@ -8,6 +8,7 @@ import { createBuilderPlatform } from "../src/platform.ts";
 import { createFinalPacketStore } from "../src/delivery-evidence/final-packet.ts";
 import { proposeDeliveryDocuments } from "../src/project-documents/delivery-documents.ts";
 import type { RevisionState } from "../src/solution-revision-store.ts";
+import { createCurrentFinalEvidenceReader } from "../src/delivery-evidence/current-final-evidence.ts";
 
 const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const objectId = (type: string, bytes: Buffer) =>
@@ -106,6 +107,10 @@ const guides = [
   { kind: "installation-guide", path: "docs/install.md", classification: "guide", scope: "desktop", body: "# Installation\n\nUse the approved installer." },
   { kind: "user-guide", path: "docs/use.md", classification: "guide", scope: "desktop", body: "# Usage\n\nOpen the application." },
 ];
+const preparation = { packageVersion: "1.0.0", targets: [{ target: "desktop", environments: ["Windows 11 x64"],
+  dependencies: ["Declared fixture runtime"], entryPaths: ["bundle.bin"], supplementaryPaths: ["docs/install.md", "docs/use.md"] }],
+  limitationStatement: "This test uses synthetic QA and runtime receipts.", limitations: [],
+  changeNotes: ["Initial fixture package; not a real application acceptance."] };
 const packetTool = () => createBuilderPlatform().tools.find(tool => tool.name === "builder.publish-integration-packet")!;
 const mainTool = () => createBuilderPlatform().tools.find(tool => tool.name === "builder.read-final-review")!;
 
@@ -228,4 +233,64 @@ test("Host without atomic packet plus wake support cannot create a silent handof
     f.managerContext, f.f.platform) as any;
   assert.equal(result.data.status, "unsupported");
   assert.equal(await createFinalPacketStore(W, W, f.f.platform.state).headRevisionId(), null);
+});
+
+test("registered Main attests only a byte-checked current package and user approval stays unavailable without a writer", async () => {
+  const { f } = await setup(), platform = f.f.platform;
+  const documents = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides, preparation }, ctx(), platform);
+  assert.equal(documents.status, "published", JSON.stringify(documents));
+  const handoff = (await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null },
+    f.managerContext, platform) as any).data;
+  assert.equal(handoff.status, "published");
+  const reader = createCurrentFinalEvidenceReader(W, platform);
+  const snapshot = await reader();
+  assert.equal(snapshot.status, "available", JSON.stringify(snapshot));
+  if (snapshot.status !== "available") throw new Error("Missing current snapshot");
+  assert.deepEqual(snapshot.value.packet.preparation, preparation);
+  assert.equal(snapshot.value.packet.integration.regressionEvidence?.length, 1);
+  assert.equal(snapshot.value.fileBytes.length, 4);
+  assert.ok(snapshot.value.fileBytes.some(file => file.path === "bundle.bin" && Buffer.from(file.bytes).toString() === "ci bundle bytes"));
+  const ui = await mainTool().handler({}, ctx(), platform) as any;
+  const view = ui.data;
+  assert.equal(view.status, "ready", JSON.stringify(ui.data));
+  if (view.status !== "ready") throw new Error("Missing final view");
+  assert.equal(view.approvalEligibility.status, "blocked");
+  assert.equal(view.history[0]?.kind, "manager-packet");
+  assert.doesNotMatch(JSON.stringify(ui.data), /contentBase64|commitObjectBytes|fileBytes/u);
+  const attest = createBuilderPlatform().tools.find(tool => tool.name === "builder.attest-final-packet")!;
+  const result = (await attest.handler({ eventId: "main-fixture-attestation", requestId: snapshot.value.packet.packetRevisionId,
+    expectedBaseRevisionId: handoff.eventId }, ctx(), platform) as any).data;
+  assert.equal(result.status, "attested", JSON.stringify(result));
+  assert.equal((await createFinalPacketStore(W, W, platform.state).current()).revisions[0]?.revision.kind, "main-attestation");
+  f.moveCandidate();
+  assert.equal((await reader()).status, "unknown");
+});
+
+test("missing preparation and unproven entry paths never become a current final evidence snapshot", async () => {
+  for (const declared of [undefined, { ...preparation, targets: [{ ...preparation.targets[0]!, entryPaths: ["not-produced.exe"] }] }]) {
+    const { f } = await setup(), platform = f.f.platform;
+    const docs = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides,
+      ...(declared ? { preparation: declared } : {}) }, ctx(), platform);
+    assert.equal(docs.status, "published");
+    const result = (await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null },
+      f.managerContext, platform) as any).data;
+    assert.equal(result.status, "published");
+    assert.equal((await createCurrentFinalEvidenceReader(W, platform)()).status, "unknown");
+  }
+});
+
+test("current final reader rejects altered Artifact bytes instead of retaining an older successful snapshot", async () => {
+  const { f } = await setup(), platform = f.f.platform;
+  const docs = await proposeDeliveryDocuments({ projectId: W, expectedBaseRevisionId: null, documents: guides, preparation }, ctx(), platform);
+  assert.equal(docs.status, "published");
+  const packet = (await packetTool().handler({ workstreamId: f.input.workstreamId, eventId: f.eventId, expectedBaseRevisionId: null },
+    f.managerContext, platform) as any).data;
+  assert.equal(packet.status, "published");
+  const reader = createCurrentFinalEvidenceReader(W, platform);
+  assert.equal((await reader()).status, "available");
+  const artifacts = (platform as any).artifacts, original = artifacts.list;
+  artifacts.list = async (input: any) => (await original(input)).map((row: any) => ({ ...row,
+    data: { ...row.data, contentBase64: Buffer.from("changed artifact bytes").toString("base64") } }));
+  assert.equal((await reader()).status, "unknown");
+  assert.equal((await mainTool().handler({}, ctx(), platform) as any).data.status, "unknown");
 });

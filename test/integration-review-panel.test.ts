@@ -96,6 +96,28 @@ test("renders exact pins, files, guides, gates, limits and history as escaped re
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
+test("preparation and Manager history display without becoming user approval", async () => {
+  const { Panel, parseDTO, temporary } = await loadPanel();
+  try {
+    const base = fixture("blocked"), prepared = { ...base, mainAttestation: null, approvalRequest: null,
+      snapshot: { ...base.snapshot, packet: { ...base.snapshot.packet,
+        integration: { ...base.snapshot.packet.integration, regressionEvidence: [{ sourceId: "regression", revisionId: "r1", sha256: sha }] },
+        preparation: { packageVersion: "1.0.0", targets: [{ target: "desktop", environments: ["Windows 11 x64"],
+          dependencies: ["Runtime 22"], entryPaths: ["dist/plugin.mjs"], supplementaryPaths: [] }],
+        limitationStatement: "Synthetic fixture.", limitations: [], changeNotes: ["Exact revision notes."] } } },
+      history: [{ eventId: "manager-packet-1", kind: "manager-packet", requestId: "packet-r1", decision: null }] };
+    const parsed = parseDTO(prepared);
+    assert.equal(parsed.status, "ready");
+    const html = renderToStaticMarkup(createElement(Panel, { view: parsed }));
+    assert.match(html, /Windows 11 x64/u);
+    assert.match(html, /Runtime 22/u);
+    assert.match(html, /Manager 패킷/u);
+    assert.match(html, /회귀 검증/u);
+    assert.match(html, /Exact revision notes/u);
+    assert.match(html, /type="button" disabled="">최종 검토 승인/u);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
 test("only exact current Packet document pins render their body and reading does not alter approval", async () => {
   const { Panel, parseDTO, temporary } = await loadPanel();
   try {
@@ -195,7 +217,12 @@ test("browser keeps approve, request-changes and hold as distinct callbacks", as
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.setContent("<div id='root'></div>");
     await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
-    await page.evaluate(view => (window as unknown as { mountReview: (value: unknown) => void }).mountReview(view), fixture());
+    const base = fixture(), browserView = { ...base, snapshot: { ...base.snapshot, packet: { ...base.snapshot.packet,
+      preparation: { packageVersion: "1.0.0", targets: [{ target: "desktop" as const, environments: ["Windows 11 x64"],
+        dependencies: ["Runtime 22"], entryPaths: ["dist/plugin.mjs"], supplementaryPaths: ["docs/install.md"] }],
+      limitationStatement: "Synthetic fixture only.", limitations: [], changeNotes: ["Verified fixture revision."] } } } };
+    await page.evaluate(view => (window as unknown as { mountReview: (value: unknown) => void }).mountReview(view), browserView);
+    assert.match(await page.getByRole("region", { name: "지원 환경과 의존성" }).innerText(), /Windows 11 x64/u);
     await page.getByRole("button", { name: "최종 검토 승인" }).click();
     await page.getByLabel("수정 요청 또는 보류 사유").fill("설치 안내를 갱신하세요");
     await page.getByRole("button", { name: "수정 요청" }).click();
@@ -205,8 +232,13 @@ test("browser keeps approve, request-changes and hold as distinct callbacks", as
       { action: "approve" }, { action: "request-changes", reason: "설치 안내를 갱신하세요" }, { action: "hold", reason: "외부 확인 대기" },
     ]);
     assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
+    assert.equal(await page.locator(".sps-integration-review").evaluate(element => getComputedStyle(element).backgroundColor), "rgb(32, 32, 32)");
+    assert.equal(await page.locator(".sps-ir-table td").first().evaluate(element => getComputedStyle(element).color), "rgb(237, 237, 237)");
+    assert.ok(await page.locator(".sps-ir-table-wrap").evaluate(element => element.scrollWidth > element.clientWidth));
+    if (process.env.SPS_BUILDER_SCREENSHOTS_DIR) await page.screenshot({ path: path.join(process.env.SPS_BUILDER_SCREENSHOTS_DIR, "final-preparation-mobile.png"), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 900 });
     assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth), true);
+    if (process.env.SPS_BUILDER_SCREENSHOTS_DIR) await page.screenshot({ path: path.join(process.env.SPS_BUILDER_SCREENSHOTS_DIR, "final-preparation-desktop.png"), fullPage: true });
     assert.match(await page.locator("body").innerText(), /실제 고객 전달·배포와 별개/u);
   } finally {
     await browser?.close();
