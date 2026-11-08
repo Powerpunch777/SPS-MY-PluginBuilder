@@ -130,7 +130,7 @@ const protectedTaskQaPlan = { approvalId: { type: "string", format: "uuid" },
   planSha256: { type: "string", pattern: "^[a-f0-9]{64}$" } };
 export const REQUEST_PROTECTED_TASK_QA_TOOL = Object.freeze({
   name: "builder.request-protected-task-qa", displayName: "Request protected QA for this exact Task",
-  description: "Only the exact active QA Worker for its current prepared QA Task and active dispatch Run may request protected execution after the current development dependency has durable CTO acceptance and exact current Host Git proofs. Core validates the supplied approved protected plan ID and hash. Request identity is derived from the Task and acceptance; retry only the same Core idempotency request. This queues technical execution, not QA PASS, completion, or VERIFIED.",
+  description: "Only the exact active QA Worker for its current prepared QA Task and active dispatch Run may request protected execution after the current development dependency has durable CTO acceptance and exact current Host Git proofs. Core validates the supplied approved protected plan ID and hash. Request identity is derived from the Task and acceptance; retry only the same Core idempotency request. This queues technical execution, not QA PASS, completion, or VERIFIED. When the Task run reference is confirmed, end the current AI turn normally without polling so the Node can execute the test; the real terminal event will continue the pending QA. Do not invent a completion/DONE message or a replacement request.",
   parametersSchema: { type: "object", additionalProperties: false, required: ["approvalId", "planSha256"], properties: protectedTaskQaPlan },
 });
 export const READ_PROTECTED_TASK_QA_TOOL = Object.freeze({

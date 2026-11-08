@@ -10,6 +10,7 @@ import { readTaskSourceClaim, type TaskSourceSubmissionBinding } from "./task-so
 import type { RevisionState } from "./solution-revision-store.ts";
 import { readWorkstreams } from "./workstream-tools.ts";
 import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
+import { createTaskQaRunReferenceStore, type TaskQaRunReference } from "./task-qa-run-references.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const MAX_RUNS = 128;
@@ -25,6 +26,192 @@ export type ExecutionMetrics = Readonly<{ status: "ready"; workspaceId: string; 
     commitAcceptanceCount: number; totalCommitAcceptanceMs: number | null }>;
   unmeasured: Readonly<{ taskCompletionMs: null; permissionWaitMs: null; integrationWaitMs: null;
     reworkCount: null; manualInterventionCount: null }>; completionAuthority: "not-established" }>;
+
+function unmeasuredQaContinuation(input: Readonly<{ ctoId: string; workstreamId: string; taskId: string; packetRevision: number;
+  requestId: string; reason: string; runId?: string | null; runStatus?: string }>): WorkerExecutionMetric {
+  return { ctoId: input.ctoId, workstreamId: input.workstreamId, taskId: input.taskId, role: "qa",
+    packetRevision: input.packetRevision, requestId: input.requestId, runId: input.runId ?? null,
+    runStatus: input.runStatus ?? "unknown", normalEnded: false, timing: null, queueMs: null, executionMs: null,
+    reason: input.reason, commitAcceptanceMs: null };
+}
+
+function ownData(value: unknown, name: string): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  return descriptor?.enumerable && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+}
+
+async function currentQaContinuationMetric(input: Readonly<{ workspaceId: string; ctoId: string; workstreamId: string;
+  packet: TaskPacketRecord; packets: readonly TaskPacketRecord[]; worker: TaskWorkerRecord; requestId: string;
+  originalRunId: string | null; platform: SpsPlatformInvocationContext; seenRuns: Set<string> }>): Promise<WorkerExecutionMetric | null> {
+  if (input.worker.role !== "qa") return null;
+  const fallback = (reason: string, runStatus = "unknown", runId: string | null = null) => unmeasuredQaContinuation({
+    ctoId: input.ctoId, workstreamId: input.workstreamId, taskId: input.worker.taskId,
+    packetRevision: input.worker.packetRevision, requestId: input.requestId, reason, runStatus, runId,
+  });
+  const scope = { workspaceId: input.workspaceId, projectId: input.workspaceId, ctoId: input.ctoId,
+    workstreamId: input.workstreamId, qaTaskId: input.worker.taskId };
+  let reference: TaskQaRunReference | undefined;
+  try { reference = (await createTaskQaRunReferenceStore(scope, input.platform.state as typeof input.platform.state & RevisionState).current())?.revision; }
+  catch { return fallback("qa-continuation-current-reference-unavailable", "unsupported"); }
+  if (!reference?.deferredEvent) return null;
+  const { binding, deferredEvent } = reference;
+  const sourceAccess = input.packet.packet.sourceAccess;
+  const implementation = input.packets.find(row => row.packet.taskId === binding.implementationTaskId);
+  const dependency = input.packet.dependencyPins.find(pin => pin.taskId === binding.implementationTaskId);
+  if (input.packet.packet.kind !== "qa" || input.packet.packet.revision !== binding.qaRevision
+    || input.packet.packet.taskId !== scope.qaTaskId || input.worker.agentId !== binding.qaAgentId
+    || input.worker.sessionId !== binding.qaSessionId || input.worker.packetRecordSha256 !== binding.qaDigest
+    || !sourceAccess || sourceAccess.sourceId !== binding.sourceId
+    || sourceAccess.folderKey !== binding.folderKey || sourceAccess.branch !== binding.branch
+    || !implementation || implementation.packet.kind !== "development"
+    || implementation.packet.revision !== binding.implementationRevision
+    || taskPacketRecordDigest(implementation, input.workspaceId, input.ctoId, input.workstreamId) !== binding.implementationDigest
+    || !dependency || dependency.revision !== binding.implementationRevision || dependency.recordSha256 !== binding.implementationDigest
+    || input.originalRunId === null || deferredEvent.previousRunId !== input.originalRunId) {
+    return fallback("qa-continuation-current-task-or-reference-mismatch");
+  }
+
+  const sessions = input.platform.agents.sessions as typeof input.platform.agents.sessions & {
+    list?: (agentId: string, companyId: string) => Promise<unknown[]>;
+    getRequest?: (sessionId: string, companyId: string, requestId: string) => Promise<unknown>;
+    getRun?: (sessionId: string, companyId: string, runId: string) => Promise<unknown>;
+  };
+  if (typeof sessions.list !== "function" || typeof sessions.getRequest !== "function" || typeof sessions.getRun !== "function") {
+    return fallback("qa-continuation-session-registry-or-run-reader-unavailable", "unsupported");
+  }
+
+  try {
+    const packetStore = await createTaskPacketStore(input.workspaceId, input.workspaceId, input.ctoId,
+      input.workstreamId, input.platform.state as typeof input.platform.state & RevisionState).current();
+    const currentPacket = packetStore?.revision.packets.find(row => row.packet.taskId === input.worker.taskId);
+    const rawRegistry = await input.platform.state.get({ scopeKind: "company", scopeId: input.workspaceId,
+      namespace: "sonpark.my-builder", stateKey: taskWorkerRegistryKey(input.workspaceId, input.ctoId) });
+    const currentRegistry = parseTaskWorkerRegistry(rawRegistry ?? { schemaVersion: 1, workspaceId: input.workspaceId,
+      projectId: input.workspaceId, ctoId: input.ctoId, revision: 0, records: [] }, input.workspaceId, input.workspaceId, input.ctoId);
+    const currentWorker = currentRegistry.records.filter(row => row.workstreamId === input.workstreamId
+      && row.taskId === input.worker.taskId && row.role === "qa");
+    if (!currentPacket || currentPacket.packet.revision !== input.packet.packet.revision
+      || taskPacketRecordDigest(currentPacket, input.workspaceId, input.ctoId, input.workstreamId)
+        !== input.worker.packetRecordSha256 || currentWorker.length !== 1
+      || JSON.stringify(currentWorker[0]) !== JSON.stringify(input.worker)) {
+      return fallback("qa-continuation-current-task-or-role-changed");
+    }
+    const implementationWorker = currentRegistry.records.filter(row => row.workstreamId === input.workstreamId
+      && row.taskId === implementation.packet.taskId && row.role === "worker"
+      && row.packetRevision === implementation.packet.revision
+      && row.packetRecordSha256 === binding.implementationDigest);
+    const implementationAccess = implementation.packet.sourceAccess;
+    if (implementationWorker.length !== 1 || !implementationAccess || typeof implementationAccess.sourceId !== "string"
+      || typeof implementationAccess.folderKey !== "string" || typeof implementationAccess.branch !== "string"
+      || typeof implementationAccess.expectedHead !== "string") return fallback("qa-continuation-current-implementation-source-unavailable");
+    const implementationBinding: Omit<TaskSourceSubmissionBinding, "runId"> = Object.freeze({
+      schemaVersion: 1, workspaceId: input.workspaceId, projectId: input.workspaceId, ctoId: input.ctoId,
+      workstreamId: input.workstreamId, taskId: implementation.packet.taskId, packetRevision: implementation.packet.revision,
+      packetRecordSha256: binding.implementationDigest, dependencyPins: implementation.dependencyPins, role: "worker",
+      agentId: implementationWorker[0]!.agentId, sessionId: implementationWorker[0]!.sessionId,
+      source: Object.freeze({ sourceId: implementationAccess.sourceId, folderKey: implementationAccess.folderKey,
+        branch: implementationAccess.branch, expectedHead: implementationAccess.expectedHead }),
+      readPaths: implementationAccess.readPaths, writePaths: implementationAccess.writePaths,
+      qaWritePaths: implementationAccess.qaWritePaths,
+    });
+    const sourceClaim = await readTaskSourceClaim({ state: input.platform.state as RevisionState, binding: implementationBinding });
+    if (sourceClaim.status !== "submitted" || sourceClaim.submission.submissionId !== binding.submissionId
+      || sourceClaim.submission.commitSha !== binding.commitSha || sourceClaim.submission.treeSha !== binding.treeSha) {
+      return fallback("qa-continuation-current-source-submission-mismatch");
+    }
+    const acceptance = await readCtoTaskSourceAcceptanceForSubmission({ workspaceId: input.workspaceId,
+      submission: sourceClaim.submission, state: input.platform.state as RevisionState });
+    if (!acceptance || acceptance.acceptanceId !== binding.acceptanceId || acceptance.submissionId !== binding.submissionId
+      || acceptance.commitSha !== binding.commitSha || acceptance.treeSha !== binding.treeSha) {
+      return fallback("qa-continuation-current-source-acceptance-mismatch");
+    }
+    const latestReference = (await createTaskQaRunReferenceStore(scope,
+      input.platform.state as typeof input.platform.state & RevisionState).current())?.revision;
+    if (latestReference?.revisionId !== reference.revisionId) return fallback("qa-continuation-reference-changed-during-read");
+
+    const localFolders = (input.platform as SpsPlatformInvocationContext & { localFolders?: {
+      readWorkspaceSourceGitTipV1?: (sourceId: string, folderKey: string, branch: string) => Promise<unknown>;
+    } }).localFolders;
+    if (typeof localFolders?.readWorkspaceSourceGitTipV1 !== "function") {
+      return fallback("qa-continuation-source-reader-unavailable", "unsupported");
+    }
+    const tip = await localFolders.readWorkspaceSourceGitTipV1(binding.sourceId, binding.folderKey, binding.branch);
+    const tipRow = exactToolRecord(tip, ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
+    if (tipRow.status !== "current" || tipRow.sourceId !== binding.sourceId || tipRow.folderKey !== binding.folderKey
+      || tipRow.branch !== binding.branch || tipRow.commitSha !== binding.commitSha || tipRow.treeSha !== binding.treeSha) {
+      return fallback("qa-continuation-source-changed");
+    }
+
+    const registryRows = await sessions.list(input.worker.agentId, input.workspaceId);
+    if (!Array.isArray(registryRows) || registryRows.length > 100) return fallback("qa-continuation-session-registry-invalid");
+    const matching = registryRows.filter(row => ownData(row, "sessionId") === input.worker.sessionId);
+    if (matching.length !== 1) return fallback("qa-continuation-owned-session-not-unique");
+    const row = matching[0];
+    const sessionId = ownData(row, "sessionId"), agentId = ownData(row, "agentId"), companyId = ownData(row, "companyId");
+    const status = ownData(row, "status"), closedAt = ownData(row, "closedAt"), lastRunId = ownData(row, "lastRunId");
+    const taskKey = ownData(row, "taskKey");
+    if (sessionId !== input.worker.sessionId || agentId !== input.worker.agentId || companyId !== input.workspaceId
+      || taskKey !== `plugin:com.sonparkserver.my-plugin-builder:session:${input.worker.pluginAgentKey}`
+      || status !== "active" || closedAt !== null || typeof lastRunId !== "string" || !UUID.test(lastRunId)) {
+      return fallback("qa-continuation-owned-session-observation-mismatch");
+    }
+    if (lastRunId === input.originalRunId) return fallback("qa-continuation-run-not-yet-observed", "pending");
+
+    const rawRun = await sessions.getRun(input.worker.sessionId, input.workspaceId, lastRunId);
+    // Core's optional lineage projection is runtime-compatible with legacy SDKs but absent from fixed-c699 declarations.
+    const run = exactToolRecord(rawRun, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"],
+      ["execution", "output", "timing", "systemEvent"]);
+    const event = exactToolRecord(run.systemEvent, ["schemaVersion", "kind", "requestId", "previousRunId", "eventId",
+      "protectedRunId", "receiptDigest", "subjectKeySha256"]);
+    if (run.runId !== lastRunId || !UUID.test(lastRunId) || !UUID.test(String(event.requestId))
+      || event.schemaVersion !== 1 || event.kind !== "protected-test-terminal-event"
+      || event.previousRunId !== deferredEvent.previousRunId || event.eventId !== deferredEvent.eventId
+      || event.protectedRunId !== binding.runId || event.receiptDigest !== deferredEvent.receiptDigest
+      || event.subjectKeySha256 !== binding.subjectKeySha256) {
+      return fallback("qa-continuation-core-lineage-unavailable");
+    }
+    const request = exactToolRecord(await sessions.getRequest(input.worker.sessionId, input.workspaceId, event.requestId as string),
+      ["requestId", "state", "runId"]);
+    if (request.requestId !== event.requestId || request.state !== "submitted" || request.runId !== lastRunId) {
+      return fallback("qa-continuation-request-run-mismatch");
+    }
+    const registryAfterReads = await sessions.list(input.worker.agentId, input.workspaceId);
+    const matchingAfterReads = Array.isArray(registryAfterReads) && registryAfterReads.length <= 100
+      ? registryAfterReads.filter(item => ownData(item, "sessionId") === input.worker.sessionId) : [];
+    if (matchingAfterReads.length !== 1 || ownData(matchingAfterReads[0], "agentId") !== input.worker.agentId
+      || ownData(matchingAfterReads[0], "companyId") !== input.workspaceId
+      || ownData(matchingAfterReads[0], "taskKey") !== taskKey || ownData(matchingAfterReads[0], "status") !== "active"
+      || ownData(matchingAfterReads[0], "closedAt") !== null || ownData(matchingAfterReads[0], "lastRunId") !== lastRunId) {
+      return fallback("qa-continuation-owned-session-changed-during-read");
+    }
+    const finalTip = exactToolRecord(await localFolders.readWorkspaceSourceGitTipV1(binding.sourceId, binding.folderKey, binding.branch),
+      ["status", "sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt"]);
+    if (finalTip.status !== "current" || finalTip.sourceId !== binding.sourceId || finalTip.folderKey !== binding.folderKey
+      || finalTip.branch !== binding.branch || finalTip.commitSha !== binding.commitSha || finalTip.treeSha !== binding.treeSha) {
+      return fallback("qa-continuation-source-changed-during-read");
+    }
+    const latestAfterReads = (await createTaskQaRunReferenceStore(scope,
+      input.platform.state as typeof input.platform.state & RevisionState).current())?.revision;
+    if (latestAfterReads?.revisionId !== reference.revisionId) return fallback("qa-continuation-reference-changed-during-read");
+    if (input.seenRuns.has(lastRunId)) return null;
+    if (typeof run.status !== "string" || !["queued", "running", "succeeded", "failed", "cancelled", "interrupted", "timed_out"].includes(run.status)
+      || typeof run.cancellationRequested !== "boolean" || !["not_applicable", "pending", "confirmed"].includes(String(run.termination))) {
+      return fallback("qa-continuation-run-status-invalid", "unknown", lastRunId);
+    }
+    const observedAt = new Date().toISOString();
+    const timingDescriptor = Object.getOwnPropertyDescriptor(rawRun, "timing");
+    const timing = timingDescriptor?.enumerable && Object.hasOwn(timingDescriptor, "value")
+      ? readExecutionTiming(timingDescriptor.value, run.status, observedAt) : null;
+    input.seenRuns.add(lastRunId);
+    return { ctoId: input.ctoId, workstreamId: input.workstreamId, taskId: input.worker.taskId, role: "qa",
+      packetRevision: input.worker.packetRevision, requestId: event.requestId as string, runId: lastRunId, runStatus: run.status,
+      normalEnded: run.status === "succeeded" && run.cancellationRequested === false && run.termination === "not_applicable",
+      timing: timing?.timing ?? null, queueMs: timing?.queueMs ?? null, executionMs: timing?.executionMs ?? null,
+      reason: timing ? null : "host-run-timing-unavailable-or-inconsistent", commitAcceptanceMs: null };
+  } catch { return fallback("qa-continuation-run-or-lineage-observation-unavailable"); }
+}
 
 function instant(value: unknown): number | null {
   if (typeof value !== "string") return null;
@@ -155,6 +342,13 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
           requestId: observation.requestId, runId: observation.runId, commitAcceptanceMs };
         if (observation.status !== "observed") {
           runs.push({ ...base, runStatus: observation.status, normalEnded: false, timing: null, queueMs: null, executionMs: null, reason: observation.reason });
+          const continuation = await currentQaContinuationMetric({ workspaceId, ctoId, workstreamId, packet,
+            packets: packets!.revision.packets, worker, requestId: observation.requestId, originalRunId: observation.runId,
+            platform, seenRuns });
+          if (continuation) {
+            if (runs.length >= MAX_RUNS) return { status: "unknown", reason: "metrics-run-inventory-over-bound" };
+            runs.push(continuation);
+          }
           continue;
         }
         if (seenRuns.has(observation.runId)) throw new Error("One Run is bound to multiple Worker records.");
@@ -168,6 +362,13 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
         runs.push({ ...base, runStatus: current.status, normalEnded: current.status === "succeeded" && current.cancellationRequested === false
           && current.termination === "not_applicable", timing: parsed?.timing ?? null, queueMs: parsed?.queueMs ?? null,
           executionMs: parsed?.executionMs ?? null, reason: parsed ? null : "host-run-timing-unavailable-or-inconsistent" });
+        const continuation = await currentQaContinuationMetric({ workspaceId, ctoId, workstreamId, packet,
+          packets: packets!.revision.packets, worker, requestId: observation.requestId, originalRunId: observation.runId,
+          platform, seenRuns });
+        if (continuation) {
+          if (runs.length >= MAX_RUNS) return { status: "unknown", reason: "metrics-run-inventory-over-bound" };
+          runs.push(continuation);
+        }
       }
     }
     const observedAt = new Date().toISOString();

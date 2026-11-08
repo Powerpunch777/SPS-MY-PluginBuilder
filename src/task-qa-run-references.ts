@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { exactToolRecord } from "./lead-tool-authority.ts";
-import { createRevisionJournal, type RevisionState } from "./solution-revision-store.ts";
+import { createRevisionJournal, type RevisionState, type RevisionPublicationGuard } from "./solution-revision-store.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
@@ -14,8 +14,9 @@ export type TaskQaRunBinding = Readonly<{
   acceptanceId: string; submissionId: string; approvalId: string; planSha256: string;
   requestId: string; subjectKey: string; subjectKeySha256: string; runId: string;
 }>;
+export type TaskQaDeferredEvent = Readonly<{ eventId: string; previousRunId: string; receiptDigest: string }>;
 export type TaskQaRunReference = Readonly<{ schemaVersion: 1; revisionId: string;
-  scope: TaskQaReferenceScope; binding: TaskQaRunBinding }>;
+  scope: TaskQaReferenceScope; binding: TaskQaRunBinding; deferredEvent?: TaskQaDeferredEvent }>;
 type ReferenceTarget = Omit<TaskQaReferenceScope, "qaTaskId"> & Readonly<{
   implementation: { packet: { taskId: string; revision: number } }; implementationDigest: string;
   qa: { packet: { taskId: string; revision: number } }; qaDigest: string;
@@ -55,15 +56,29 @@ function binding(value: unknown): TaskQaRunBinding {
   return Object.freeze(Object.fromEntries(bindingFields.map(field => [field, row[field]]))) as TaskQaRunBinding;
 }
 
-function reference(rawScope: unknown, rawBinding: unknown): TaskQaRunReference {
+function reference(rawScope: unknown, rawBinding: unknown, rawEvent?: unknown): TaskQaRunReference {
   const normalizedScope = scope(rawScope), normalizedBinding = binding(rawBinding);
-  const body = { schemaVersion: 1 as const, scope: normalizedScope, binding: normalizedBinding };
+  let deferredEvent: TaskQaDeferredEvent | undefined;
+  if (rawEvent !== undefined) {
+    const event = exactToolRecord(rawEvent, ["eventId", "previousRunId", "receiptDigest"]);
+    const parts = typeof event.eventId === "string" ? event.eventId.split(":") : [];
+    if (typeof event.previousRunId !== "string" || !uuid.test(event.previousRunId)
+      || typeof event.receiptDigest !== "string" || !sha.test(event.receiptDigest)
+      || parts.length !== 5 || parts[0] !== "sps-protected-test-terminal-v1" || parts[1] !== normalizedBinding.runId
+      || parts[2] !== event.receiptDigest || parts[3] !== normalizedBinding.subjectKeySha256 || !uuid.test(parts[4] ?? "")) {
+      throw new TypeError("Invalid deferred QA event reference.");
+    }
+    deferredEvent = Object.freeze({ eventId: event.eventId as string, previousRunId: event.previousRunId,
+      receiptDigest: event.receiptDigest });
+  }
+  const body = { schemaVersion: 1 as const, scope: normalizedScope, binding: normalizedBinding,
+    ...(deferredEvent ? { deferredEvent } : {}) };
   return Object.freeze({ ...body, revisionId: `task-qa-run-v1:${hash(body)}` });
 }
 
 export function parseTaskQaRunReference(value: unknown): TaskQaRunReference {
-  const row = exactToolRecord(value, ["schemaVersion", "revisionId", "scope", "binding"]);
-  const parsed = reference(row.scope, row.binding);
+  const row = exactToolRecord(value, ["schemaVersion", "revisionId", "scope", "binding"], ["deferredEvent"]);
+  const parsed = reference(row.scope, row.binding, row.deferredEvent);
   if (row.schemaVersion !== 1 || row.revisionId !== parsed.revisionId) throw new TypeError("Invalid immutable QA run reference.");
   return parsed;
 }
@@ -86,11 +101,12 @@ export function createTaskQaRunReferenceStore(rawScope: TaskQaReferenceScope, st
       if (!uuid.test(runId)) throw new TypeError("A Core run UUID is required.");
       let cursor: string | null = null;
       let found: TaskQaRunReference | null = null;
+      let foundSequence = 0;
       for (let pageIndex = 0; pageIndex < 64; pageIndex++) {
         const page = await journal.publishedPage(cursor, 50);
-        for (const { revision } of page.revisions) if (revision.binding.runId === runId) {
-          if (found && found.revisionId !== revision.revisionId) return { status: "conflict" as const };
-          found = revision;
+        for (const { sequence, revision } of page.revisions) if (revision.binding.runId === runId) {
+          if (found && JSON.stringify(found.binding) !== JSON.stringify(revision.binding)) return { status: "conflict" as const };
+          if (sequence > foundSequence) { found = revision; foundSequence = sequence; }
         }
         cursor = page.nextCursor;
         if (cursor === null) return found ? { status: "found" as const, reference: found } : { status: "not-found" as const };
@@ -115,7 +131,7 @@ export async function recordTaskQaRunReference(state: RevisionState, target: Ref
   const prior = await store.findRun(runId);
   if (prior.status !== "not-found") {
     await target.assertCurrent();
-    return prior.status === "found" ? prior.reference.revisionId === value.revisionId
+    return prior.status === "found" ? JSON.stringify(prior.reference.binding) === JSON.stringify(value.binding)
       ? { status: "existing" as const, reference: prior.reference } : { status: "conflict" as const } : prior;
   }
   const current = await store.current();
@@ -133,4 +149,23 @@ export async function recordTaskQaRunReference(state: RevisionState, target: Ref
   try { await target.assertCurrent(); }
   catch { return { status: "stale" as const, reference: value }; }
   return { status: "recorded" as const, reference: value };
+}
+
+/** A dependency-event pointer in the existing reference journal, not a duplicate Run status. */
+export async function recordDeferredTaskQaEvent(state: RevisionState, current: TaskQaRunReference,
+  event: TaskQaDeferredEvent, guards: readonly RevisionPublicationGuard[]) {
+  const store = createTaskQaRunReferenceStore(current.scope, state);
+  const latest = await store.current();
+  if (latest?.revision.revisionId !== current.revisionId) return { status: "conflict" as const };
+  const next = reference(current.scope, current.binding, event);
+  if (current.deferredEvent) return current.revisionId === next.revisionId
+    ? { status: "existing" as const, reference: current } : { status: "conflict" as const };
+  try {
+    const saved = await store.publishGuarded({ expectedBaseRevisionId: current.revisionId, revision: next }, guards);
+    return saved.status === "published" ? { status: "recorded" as const, reference: saved.revision } : saved;
+  } catch {
+    const saved = await store.publishedRevision(next.revisionId).catch(() => null);
+    return saved ? { status: "existing" as const, reference: saved.revision }
+      : { status: "unknown" as const, reason: "qa-event-reference-publication-unconfirmed" };
+  }
 }

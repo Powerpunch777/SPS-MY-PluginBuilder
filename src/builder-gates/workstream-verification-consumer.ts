@@ -61,6 +61,7 @@ export type ProtectedContinuation = Readonly<{
   subjectKeySha256: string;
   phase: "ci" | "e2e" | "regression";
   requestId: string;
+  previousRunId?: string;
   status: "waiting" | "pending" | "uncertain" | "accepted" | "manager-failed";
   dispatchAttempts: 0 | 1;
   recoveryWakeCount: 0 | 1;
@@ -204,13 +205,14 @@ function parseReservation(value: unknown): Reservation {
 }
 
 function parseContinuation(value: unknown): ProtectedContinuation {
-  if (!isRecord(value) || ![10, 11].includes(Reflect.ownKeys(value).length)
+  if (!isRecord(value) || ![10, 11, 12].includes(Reflect.ownKeys(value).length)
     || typeof value.terminalEventId !== "string" || !EVENT_ID.test(value.terminalEventId)
     || typeof value.protectedRunId !== "string" || !ID.test(value.protectedRunId)
     || typeof value.receiptDigest !== "string" || !HASH.test(value.receiptDigest)
     || typeof value.subjectKeySha256 !== "string" || !HASH.test(value.subjectKeySha256)
     || !["ci", "e2e", "regression"].includes(value.phase as string)
     || typeof value.requestId !== "string" || !/^builder-ws-continuation-v1:[a-f0-9]{64}$/u.test(value.requestId)
+    || Object.hasOwn(value, "previousRunId") && (typeof value.previousRunId !== "string" || !ID.test(value.previousRunId))
     || !["waiting", "pending", "uncertain", "accepted", "manager-failed"].includes(value.status as string)
     || !Number.isSafeInteger(value.dispatchAttempts) || ![0, 1].includes(value.dispatchAttempts as number)
     || !Number.isSafeInteger(value.recoveryWakeCount) || ![0, 1].includes(value.recoveryWakeCount as number)) {
@@ -389,9 +391,14 @@ export async function queueProtectedContinuationRecheck(scope: ContinuationScope
   }
 }
 
-export async function startProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity, state: StateClient) {
-  return updateProtectedContinuation(scope, identity, state, prior => prior.status === "waiting"
-    ? Object.freeze({ ...prior, status: "pending", dispatchAttempts: 1 }) : prior);
+export async function startProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity,
+  previousRunId: string, state: StateClient) {
+  if (typeof previousRunId !== "string" || !ID.test(previousRunId)) return { status: "unknown" as const,
+    reason: "manager-continuation-previous-run-invalid" };
+  return updateProtectedContinuation(scope, identity, state, prior => {
+    if (prior.status !== "waiting") return prior;
+    return Object.freeze({ ...prior, status: "pending", dispatchAttempts: 1, previousRunId });
+  });
 }
 
 export async function finishProtectedContinuation(scope: ContinuationScope, identity: ContinuationIdentity,

@@ -162,7 +162,8 @@ async function assertOtherRoleContext(context: TaskWorkerToolContext, ctos: Awai
   }
 }
 
-async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, platform: SpsPlatformInvocationContext): Promise<CurrentTaskWorkerBinding> {
+async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, platform: SpsPlatformInvocationContext,
+  observation: "active-tool" | "qa-event-origin" = "active-tool"): Promise<CurrentTaskWorkerBinding> {
   const sessions = platform.agents.sessions as typeof platform.agents.sessions & {
     describePolicySupport?: (sessionId: string, companyId: string) => Promise<unknown>;
     getRequest?: (sessionId: string, companyId: string, requestId: string) => Promise<null | { requestId: string;
@@ -175,7 +176,15 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
   }
   try { await assertSessionExecutionPolicySupport(platform, context.sessionId, context.companyId); }
   catch { throw new Error("unsupported:restricted-task-worker-session-policy-unavailable"); }
-  const activeRun = currentActiveRun(await sessions.getRun(context.sessionId, context.companyId, context.runId), context);
+  const observedRun = await sessions.getRun(context.sessionId, context.companyId, context.runId);
+  const activeRun = observation === "active-tool" ? currentActiveRun(observedRun, context)
+    : exactToolRecord(observedRun, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"],
+      ["execution", "output", "timing", "systemEvent"]);
+  if (observation === "qa-event-origin" && (activeRun.runId !== context.runId || activeRun.cancellationRequested !== false
+    || activeRun.termination !== "not_applicable"
+    || !["running", "succeeded", "failed", "interrupted", "timed_out"].includes(String(activeRun.status)))) {
+    throw new Error("The QA event origin is cancelled or not an observed existing Run.");
+  }
 
   const ctos = await readProjectCtos(context.companyId, context.projectId, platform);
   await assertOtherRoleContext(context, ctos, platform, owned);
@@ -197,6 +206,7 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
   }
   if (matches.length !== 1) throw new Error("The active Host run must match exactly one registered Task Worker or QA identity.");
   const { ctoId, worker } = matches[0]!;
+  if (observation === "qa-event-origin" && worker.role !== "qa") throw new Error("Only a current QA Task can be an event origin.");
   const cto = ctos.ctos.find(item => item.ctoId === ctoId)!;
   if (cto.status !== "ACTIVE" || cto.agentId === context.agentId || cto.sessionId === context.sessionId) {
     throw new Error("Task Worker authority is historical or overlaps a current CTO identity.");
@@ -237,7 +247,7 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
   const requestId = taskWorkerRequestId(binding);
   const request = await sessions.getRequest(context.sessionId, context.companyId, requestId);
   if (!request || request.requestId !== requestId || request.state !== "submitted" || !request.runId
-    || worker.role !== "qa" && request.runId !== context.runId) {
+    || (worker.role !== "qa" || observation === "qa-event-origin") && request.runId !== context.runId) {
     throw new Error("The active Run is not the exact current Task dispatch request for this Worker identity.");
   }
   const protectedContinuation = request.runId !== context.runId
@@ -245,6 +255,11 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
       originalRunId: request.runId, activeRunId: context.runId, activeRun, platform }) : undefined;
   return Object.freeze({ context, ctoId, worker, packet, currentPackets: board!.revision.packets,
     workerRecords: matches[0]!.workerRecords, binding, ...(protectedContinuation ? { protectedContinuation } : {}) });
+}
+
+/** Read-only Job observation. It never supplies active tool authority or starts a Run. */
+export async function readTaskQaEventOrigin(runContext: unknown, platform: SpsPlatformInvocationContext) {
+  return readCurrentTaskWorkerBinding(parseTaskWorkerToolContext(runContext), platform, "qa-event-origin");
 }
 
 export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, platform: SpsPlatformInvocationContext) {

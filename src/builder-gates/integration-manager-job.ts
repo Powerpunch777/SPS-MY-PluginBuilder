@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
+import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { integrationManagerSessionStateKey, integrationManagerSessionTaskKey, integrationManagerStateKey,
   parseIntegrationManagerBinding, parseIntegrationManagerSessionBinding } from "../domain/integration-manager.ts";
 import { parseLeadAgentBinding } from "../domain/lead-agent.ts";
@@ -12,10 +12,11 @@ import { consumeVerifiedWorkstream, queueProtectedContinuationRecheck,
   failProtectedContinuation,
   type ManagerDispatchRequest, type ProtectedContinuation, type VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
 import { readWorkstreams } from "../workstream-tools.ts";
-import type { RevisionState } from "../solution-revision-store.ts";
+import type { RevisionPublicationGuard, RevisionState } from "../solution-revision-store.ts";
 import type { IntegrationPlan } from "./integration-plan.ts";
 import { INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY } from "../session-execution-policy.ts";
 import { hasConfirmedNotStartedSessionRequest } from "../session-request-diagnostic.ts";
+import { consumeTaskQaProtectedTerminal } from "../task-qa-event-job.ts";
 
 export const INTEGRATION_MANAGER_VERIFIED_READ_TOOL = "builder.read-verified-workstream";
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
@@ -45,6 +46,8 @@ type Host = SpsPlatformInvocationContext & {
       describePolicySupport?(sessionId: string, companyId: string): Promise<unknown>;
       getRequest(sessionId: string, companyId: string, requestId: string): Promise<unknown>;
       getRun(sessionId: string, companyId: string, runId: string): Promise<unknown>;
+      dispatchProtectedEventV1?: (sessionId: string, companyId: string, input: { previousRunId: string; eventId: string;
+        protectedRunId: string; guards: readonly RevisionPublicationGuard[] }) => Promise<{ requestId: string; runId: string; replayed: boolean }>;
       sendMessage(sessionId: string, companyId: string, options: { requestId: string; prompt: string; reason: string;
         executionPolicy: { mode: "plugin-tools-only-v1"; toolNames: readonly string[] } }): Promise<{ runId: string }>;
     };
@@ -191,13 +194,14 @@ function exactObject(value: unknown): value is Record<string, unknown> {
 type ProtectedTerminalPayload = Readonly<{ schemaVersion: 1; kind: "protected-node-test-v1"; companyId: string;
   pluginId: string; pluginKey: string; runId: string; status: "succeeded" | "failed" | "cancelled";
   receiptDigest: string; subjectKeySha256: string; sourceEventId?: string }>;
+type ProtectedTerminalFacts = Pick<ProtectedTerminalPayload, "runId" | "status" | "receiptDigest" | "subjectKeySha256">;
 function parseProtectedTerminalPayload(value: unknown, recheck: boolean): ProtectedTerminalPayload | null {
   if (!exactObject(value)) return null;
   const expected = ["schemaVersion", "kind", "companyId", "pluginId", "pluginKey", "runId", "status", "receiptDigest", "subjectKeySha256",
     ...(recheck ? ["sourceEventId"] : [])];
   if (Reflect.ownKeys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))
     || value.schemaVersion !== 1 || value.kind !== "protected-node-test-v1" || value.companyId === undefined
-    || typeof value.companyId !== "string" || !UUID.test(value.companyId) || value.pluginId !== BUILDER_PLUGIN_ID
+    || typeof value.companyId !== "string" || !UUID.test(value.companyId) || typeof value.pluginId !== "string" || !UUID.test(value.pluginId)
     || value.pluginKey !== BUILDER_PLUGIN_ID || typeof value.runId !== "string" || !UUID.test(value.runId)
     || !["succeeded", "failed", "cancelled"].includes(value.status as string)
     || typeof value.receiptDigest !== "string" || !/^[a-f0-9]{64}$/u.test(value.receiptDigest)
@@ -211,7 +215,7 @@ type ProtectedTerminalCandidate = Readonly<{ scope: { workspaceId: string; proje
   reference: NonNullable<NonNullable<import("./integration-progress.ts").IntegrationAttempt["validationRuns"]>["ci"]>;
   attempt: import("./integration-progress.ts").IntegrationAttempt; plan: CurrentIntegrationPlan }>;
 
-async function findProtectedTerminalCandidate(workspaceId: string, payload: ProtectedTerminalPayload, platform: Host) {
+async function findProtectedTerminalCandidate(workspaceId: string, payload: ProtectedTerminalFacts, platform: Host) {
   const board = await readWorkstreams(workspaceId, workspaceId, platform);
   if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) return { status: "unknown" as const, reason: "protected-terminal-workstream-board-unavailable-or-over-bound" };
   const publication = createWorkstreamVerificationPublication(revisionState(platform));
@@ -265,7 +269,7 @@ async function findProtectedTerminalCandidate(workspaceId: string, payload: Prot
   return { status: "current" as const, candidate };
 }
 
-async function validateProtectedTerminalReceipt(candidate: ProtectedTerminalCandidate, payload: ProtectedTerminalPayload, platform: Host) {
+async function validateProtectedTerminalReceipt(candidate: ProtectedTerminalCandidate, payload: ProtectedTerminalFacts, platform: Host) {
   const api = platform.protectedTests;
   if (typeof api?.getRunV1 !== "function") return { status: "unsupported" as const, reason: "protected-run-reader-unavailable" };
   const folders = platform.localFolders;
@@ -325,7 +329,12 @@ async function validateProtectedTerminalReceipt(candidate: ProtectedTerminalCand
 
 async function managerRequestRun(workspaceId: string, authority: ManagerAuthority, ledgerRequestId: string,
   expectedRunId: string | undefined, platform: Host) {
-  const requestUuid = managerRequestUuidForLedgerKey(ledgerRequestId);
+  return managerRequestRunByUuid(workspaceId, authority, managerRequestUuidForLedgerKey(ledgerRequestId), expectedRunId, platform);
+}
+
+async function managerRequestRunByUuid(workspaceId: string, authority: ManagerAuthority, requestUuid: string,
+  expectedRunId: string | undefined, platform: Host) {
+  if (!REQUEST_ID.test(requestUuid)) return { status: "unknown" as const, reason: "manager-core-request-id-invalid" };
   try {
     const request = await platform.agents.sessions.getRequest(authority.sessionId, workspaceId, requestUuid);
     if (!exactObject(request) || request.requestId !== requestUuid || request.state !== "submitted"
@@ -340,6 +349,49 @@ async function managerRequestRun(workspaceId: string, authority: ManagerAuthorit
   }
 }
 
+function trackContinuationState(workspaceId: string, platform: Host) {
+  const captured = new Map<string, RevisionPublicationGuard>();
+  const guardId = (key: SpsStateKey) => JSON.stringify([key.namespace ?? "default", key.stateKey]);
+  const state = { ...platform.state, async get(key: SpsStateKey) {
+    if (key.scopeKind !== "company" || key.scopeId !== workspaceId) throw new Error("Manager continuation read escaped its Workspace.");
+    const value = await platform.state.get(key);
+    const identity = guardId(key);
+    const previous = captured.get(identity);
+    if (previous && JSON.stringify(previous.expectedValue) !== JSON.stringify(value)) {
+      throw new Error("Manager continuation inputs changed during observation.");
+    }
+    if (value !== null) captured.set(identity, { stateKey: key.stateKey,
+      ...(key.namespace === undefined ? {} : { namespace: key.namespace }), expectedValue: value });
+    return value;
+  } };
+  return { platform: { ...platform, state } as Host, async refresh(key: SpsStateKey) {
+    if (key.scopeKind !== "company" || key.scopeId !== workspaceId) throw new Error("Manager continuation guard escaped its Workspace.");
+    const value = await platform.state.get(key);
+    const identity = guardId(key);
+    if (value === null) captured.delete(identity);
+    else captured.set(identity, { stateKey: key.stateKey,
+      ...(key.namespace === undefined ? {} : { namespace: key.namespace }), expectedValue: value });
+  }, guards() {
+    const guards = [...captured.values()].filter(item => !item.stateKey.includes("-revision.v1."));
+    if (!guards.length || guards.length > 64 || Buffer.byteLength(JSON.stringify(guards), "utf8") > 200_000) {
+      throw new Error("Manager continuation state guards unavailable or over bound.");
+    }
+    return guards;
+  } };
+}
+
+async function currentManagerLastRunId(workspaceId: string, authority: ManagerAuthority, platform: Host) {
+  const observations = await platform.agents.sessions.list(authority.agentId, workspaceId);
+  if (!Array.isArray(observations) || observations.length > 100) throw new Error("manager-session-observation-unavailable");
+  const rows = observations.filter(item => exactObject(item) && item.sessionId === authority.sessionId);
+  if (rows.length !== 1 || rows[0]!.agentId !== authority.agentId || rows[0]!.companyId !== workspaceId
+    || rows[0]!.taskKey !== authority.taskKey || rows[0]!.status !== "active" || rows[0]!.closedAt !== null
+    || typeof rows[0]!.lastRunId !== "string" || !REQUEST_ID.test(rows[0]!.lastRunId)) {
+    throw new Error("manager-current-last-run-unavailable-or-mismatched");
+  }
+  return rows[0]!.lastRunId;
+}
+
 function continuationScope(candidate: ProtectedTerminalCandidate) {
   return { workspaceId: candidate.scope.workspaceId, projectId: candidate.scope.projectId,
     workstreamId: candidate.scope.workstreamId, verifiedEventId: candidate.scope.verifiedEventId };
@@ -347,7 +399,8 @@ function continuationScope(candidate: ProtectedTerminalCandidate) {
 
 async function reconcileContinuation(scope: ReturnType<typeof continuationScope>, continuation: ProtectedContinuation,
   authority: ManagerAuthority, platform: Host) {
-  const observed = await managerRequestRun(scope.workspaceId, authority, continuation.requestId,
+  if (!continuation.receipt) return { status: "uncertain" as const, reason: "manager-continuation-core-request-receipt-unavailable" };
+  const observed = await managerRequestRunByUuid(scope.workspaceId, authority, continuation.receipt.receiptId,
     continuation.receipt?.runId, platform);
   if (observed.status !== "current") {
     if (continuation.status === "pending") await finishProtectedContinuation(scope, continuation, { status: "uncertain" }, platform.state);
@@ -361,19 +414,9 @@ async function reconcileContinuation(scope: ReturnType<typeof continuationScope>
   return { status: "accepted" as const, runId: observed.runId, active: observed.active };
 }
 
-function continuationPrompt(input: Readonly<{ candidate: ProtectedTerminalCandidate; terminalEventId: string;
-  payload: ProtectedTerminalPayload; coreRun: unknown; originalRequestId: string; originalRunId: string; requestId: string }>) {
-  const body = { schemaVersion: 1, type: "builder.protected-validation-terminal-continuation", requestId: input.requestId,
-    originalRequestId: input.originalRequestId, originalRunId: input.originalRunId, workstreamId: input.candidate.scope.workstreamId,
-    verifiedEventId: input.candidate.scope.verifiedEventId, taskId: input.candidate.taskId, phase: input.candidate.phase,
-    terminalEventId: input.terminalEventId, protectedRun: input.coreRun };
-  return `Continue the same current Integration Manager work only for this exact protected validation receipt.\n${JSON.stringify(body)}\n`
-    + "Re-read builder.read-verified-workstream and builder.read-integration-progress before any action. "
-    + "Treat the protected run as technical evidence only, never as QA PASS or final approval. Continue using the existing approved plan and current verified Task pins. "
-    + "If source, plan, dependencies, or receipt are stale, stop and preserve prior history. Do not create another Agent or duplicate protected run.";
-}
-
-async function consumeProtectedTerminalJob(job: Job, platform: Host, payload: ProtectedTerminalPayload, terminalEventId: string) {
+async function consumeProtectedTerminalJob(job: Job, platform: Host, payload: ProtectedTerminalFacts, terminalEventId: string) {
+  const tracked = trackContinuationState(job.companyId!, platform);
+  platform = tracked.platform;
   const located = await findProtectedTerminalCandidate(job.companyId!, payload, platform);
   if (located.status !== "current") return { status: located.status, eventId: terminalEventId, reason: located.reason };
   const candidate = located.candidate;
@@ -384,19 +427,25 @@ async function consumeProtectedTerminalJob(job: Job, platform: Host, payload: Pr
     subjectKeySha256: payload.subjectKeySha256, phase: candidate.phase } as const;
   const reservation = await reserveProtectedContinuation(scope, identity, platform.state);
   if (reservation.status === "unknown" || reservation.status === "conflict") return { status: reservation.status, eventId: terminalEventId, reason: reservation.reason };
+  const continuationKey = { scopeKind: "company" as const, scopeId: scope.workspaceId, namespace: "sonpark.my-builder",
+    stateKey: `verified-consumption.v1.${createHash("sha256").update(`${scope.projectId}\0${scope.workstreamId}`, "utf8").digest("hex")}` };
+  try { await tracked.refresh(continuationKey); }
+  catch { return { status: "unknown" as const, eventId: terminalEventId, reason: "manager-continuation-reservation-readback-failed" }; }
   let continuation = reservation.continuation;
   const authority = await resolveCurrentIntegrationManagerAuthority(job.companyId!, platform);
   const original = await readVerifiedWorkstreamReservation(scope, platform.state);
   if (!original || original.status !== "accepted" || !original.receipt || !original.requestId) {
     return { status: "unknown" as const, eventId: terminalEventId, reason: "original-manager-request-receipt-unavailable" };
   }
-  if (continuation.status !== "waiting") {
+  if (continuation.status === "accepted") {
     const reconciled = await reconcileContinuation(scope, continuation, authority, platform);
     if (reconciled.status !== "accepted") return { status: "unknown" as const, eventId: terminalEventId, reason: reconciled.reason };
     return { status: "accepted" as const, eventId: terminalEventId, requestId: continuation.requestId,
-      receipt: { receiptId: managerRequestUuidForLedgerKey(continuation.requestId), runId: reconciled.runId },
+      receipt: { receiptId: continuation.receipt!.receiptId, runId: reconciled.runId },
       reason: "continuation-core-request-receipt-confirmed-not-completion" };
   }
+  if (continuation.status === "uncertain" || continuation.status === "manager-failed") return { status: "unknown" as const,
+    eventId: terminalEventId, reason: "manager-continuation-outcome-uncertain-or-terminal-no-replacement" };
   const originalRun = await managerRequestRun(job.companyId!, authority, original.requestId, original.receipt.runId, platform);
   if (originalRun.status !== "current") return { status: "unknown" as const, eventId: terminalEventId, reason: originalRun.reason };
   let activeManagerRun = originalRun.active;
@@ -408,6 +457,18 @@ async function consumeProtectedTerminalJob(job: Job, platform: Host, payload: Pr
     if (observed.status !== "accepted") return { status: "unknown" as const, eventId: terminalEventId, reason: observed.reason };
     if (observed.active) activeManagerRun = true;
   }
+  let currentLastRunId: string;
+  try { currentLastRunId = await currentManagerLastRunId(job.companyId!, authority, platform); }
+  catch { return { status: "unknown" as const, eventId: terminalEventId, reason: "manager-current-last-run-unavailable-or-mismatched" }; }
+  let currentRun: unknown;
+  try { currentRun = await platform.agents.sessions.getRun(authority.sessionId, job.companyId!, currentLastRunId); }
+  catch { return { status: "unknown" as const, eventId: terminalEventId, reason: "manager-current-last-run-read-failed" }; }
+  if (!safeRunReceipt(currentRun, currentLastRunId)) return { status: "unknown" as const, eventId: terminalEventId,
+    reason: "manager-current-last-run-receipt-invalid" };
+  const currentRunActive = ["queued", "running", "cancelling"].includes(String((currentRun as Record<string, unknown>).status))
+    || (currentRun as Record<string, unknown>).cancellationRequested !== false
+    || (currentRun as Record<string, unknown>).termination === "pending";
+  activeManagerRun ||= currentRunActive;
   if (activeManagerRun) {
     if (continuation.recoveryWakeCount === 0) {
       const managerBinding = await platform.state.get(integrationManagerStateKey(job.companyId!));
@@ -439,35 +500,50 @@ async function consumeProtectedTerminalJob(job: Job, platform: Host, payload: Pr
   if (currentAuthority.agentId !== authority.agentId || currentAuthority.sessionId !== authority.sessionId
     || currentAuthority.taskKey !== authority.taskKey) return { status: "stale" as const, eventId: terminalEventId,
       reason: "manager-authority-changed-before-continuation" };
-  const policy = (await import("../session-execution-policy.ts")).INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY;
-  if (!policy || policy.mode !== "plugin-tools-only-v1"
-    || JSON.stringify([...policy.toolNames].sort()) !== JSON.stringify(MANAGER_EXECUTION_TOOLS)) {
-    return { status: "unsupported" as const, eventId: terminalEventId, reason: "manager-restricted-tool-policy-unavailable-or-mismatched" };
+  const dispatchProtectedEvent = platform.agents.sessions.dispatchProtectedEventV1;
+  if (typeof dispatchProtectedEvent !== "function") return { status: "unsupported" as const, eventId: terminalEventId,
+    reason: "core-protected-event-dispatch-unavailable" };
+  if (continuation.status === "pending" && !continuation.previousRunId) return { status: "unknown" as const,
+    eventId: terminalEventId, reason: "manager-continuation-previous-run-pin-missing" };
+  const pinnedPreviousRunId = continuation.status === "pending" ? continuation.previousRunId! : currentLastRunId;
+  let dispatching = continuation;
+  if (continuation.status === "waiting") {
+    const started = await startProtectedContinuation(scope, identity, pinnedPreviousRunId, platform.state);
+    if (started.status !== "updated") return { status: started.status, eventId: terminalEventId,
+      reason: started.reason ?? "continuation-reservation-not-startable" };
+    dispatching = started.continuation;
+    try { await tracked.refresh(continuationKey); }
+    catch { return { status: "unknown" as const, eventId: terminalEventId, reason: "manager-continuation-pin-readback-failed" }; }
   }
-  const started = await startProtectedContinuation(scope, identity, platform.state);
-  if (started.status !== "updated") return { status: started.status, eventId: terminalEventId,
-    reason: started.reason ?? "continuation-reservation-not-startable" };
-  const coreRequestId = managerRequestUuidForLedgerKey(started.continuation.requestId);
+  let sent: { requestId: string; runId: string; replayed: boolean };
+  const dispatchInput = { previousRunId: pinnedPreviousRunId, eventId: terminalEventId,
+    protectedRunId: payload.runId, guards: tracked.guards() };
   try {
-    const sent = await platform.agents.sessions.sendMessage(authority.sessionId, job.companyId!, { requestId: coreRequestId,
-      prompt: continuationPrompt({ candidate, terminalEventId, payload, coreRun: validated.run, originalRequestId: original.requestId,
-        originalRunId: original.receipt.runId, requestId: started.continuation.requestId }),
-      reason: "builder-protected-validation-terminal-continuation", executionPolicy: policy });
-    if (!sent || !REQUEST_ID.test(sent.runId)) return { status: "unknown" as const, eventId: terminalEventId,
-      reason: "manager-continuation-send-receipt-invalid" };
-  } catch { /* Reconcile the deterministic Core request; never issue a replacement ID. */ }
-  const sentReceipt = await managerRequestRun(job.companyId!, authority, started.continuation.requestId, undefined, platform);
-  if (sentReceipt.status !== "current") {
-    await finishProtectedContinuation(scope, identity, { status: "uncertain" }, platform.state);
-    return { status: "unknown" as const, eventId: terminalEventId, requestId: started.continuation.requestId,
-      reason: "manager-continuation-request-outcome-uncertain-no-retry" };
+    sent = await dispatchProtectedEvent(authority.sessionId, job.companyId!, dispatchInput);
+  } catch {
+    try { sent = await dispatchProtectedEvent(authority.sessionId, job.companyId!, dispatchInput); }
+    catch {
+      await finishProtectedContinuation(scope, identity, { status: "uncertain" }, platform.state);
+      return { status: "unknown" as const, eventId: terminalEventId, requestId: dispatching.requestId,
+        reason: "manager-protected-event-dispatch-outcome-uncertain-no-fallback" };
+    }
   }
-  const saved = await finishProtectedContinuation(scope, identity, { status: "accepted", receiptId: sentReceipt.requestUuid,
-    runId: sentReceipt.runId }, platform.state);
-  if (saved.status === "conflict" || saved.status === "unknown") return { status: "unknown" as const, eventId: terminalEventId,
-    requestId: started.continuation.requestId, reason: saved.reason };
-  return { status: "accepted" as const, eventId: terminalEventId, requestId: started.continuation.requestId,
-    receipt: { receiptId: sentReceipt.requestUuid, runId: sentReceipt.runId },
+  if (!sent || !REQUEST_ID.test(sent.requestId) || !REQUEST_ID.test(sent.runId) || typeof sent.replayed !== "boolean") {
+    await finishProtectedContinuation(scope, identity, { status: "uncertain" }, platform.state);
+    return { status: "unknown" as const, eventId: terminalEventId, requestId: dispatching.requestId,
+      reason: "manager-protected-event-dispatch-receipt-invalid" };
+  }
+  if (continuation.status === "pending" && currentLastRunId !== pinnedPreviousRunId && sent.replayed !== true) {
+    await finishProtectedContinuation(scope, identity, { status: "uncertain" }, platform.state);
+    return { status: "unknown" as const, eventId: terminalEventId, requestId: dispatching.requestId,
+      reason: "manager-pending-retry-not-confirmed-as-core-replay" };
+  }
+  const saved = await finishProtectedContinuation(scope, identity, { status: "accepted", receiptId: sent.requestId, runId: sent.runId }, platform.state);
+  if ((saved.status !== "updated" && saved.status !== "existing") || saved.continuation.receipt?.receiptId !== sent.requestId
+    || saved.continuation.receipt?.runId !== sent.runId) return { status: "unknown" as const, eventId: terminalEventId,
+      requestId: dispatching.requestId, reason: saved.reason ?? "manager-continuation-receipt-persistence-mismatch" };
+  return { status: "accepted" as const, eventId: terminalEventId, requestId: dispatching.requestId,
+    receipt: { receiptId: sent.requestId, runId: sent.runId },
     reason: "continuation-core-request-receipt-confirmed-not-completion" };
 }
 
@@ -532,9 +608,10 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
     for (const continuation of reservation.continuations ?? []) {
       if (++continuationScans > MAX_TERMINAL_ATTEMPT_LOOKUPS) return { status: "unknown" as const,
         eventId: job.eventId, reason: "manager-terminal-continuation-scan-over-bound" };
-      const continuationMatches = managerRequestUuidForLedgerKey(continuation.requestId) === payload.requestId
-        && (continuation.receipt === null || continuation.receipt.runId === payload.runId);
-      if (!continuationMatches && continuation.status !== "waiting") continue;
+      const continuationMatches = continuation.receipt?.receiptId === payload.requestId
+        && continuation.receipt.runId === payload.runId;
+      const pendingReplay = continuation.status === "pending" && typeof continuation.previousRunId === "string";
+      if (!continuationMatches && continuation.status !== "waiting" && !pendingReplay) continue;
       const protectedApi = platform.protectedTests;
       if (typeof protectedApi?.getRunV1 !== "function") return { status: "unsupported" as const, eventId: job.eventId,
         reason: "protected-run-reader-unavailable" };
@@ -549,10 +626,8 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
         || !exactObject(protectedRun.receipt) || typeof protectedRun.receipt.digest !== "string"
         || protectedRun.receipt.digest !== continuation.receiptDigest) continue;
       const protectedStatus = protectedRun.status as ProtectedTerminalPayload["status"];
-      const terminalPayload: ProtectedTerminalPayload = { schemaVersion: 1, kind: "protected-node-test-v1",
-        companyId: job.companyId, pluginId: BUILDER_PLUGIN_ID, pluginKey: BUILDER_PLUGIN_ID,
-        runId: continuation.protectedRunId, status: protectedStatus, receiptDigest: continuation.receiptDigest,
-        subjectKeySha256: continuation.subjectKeySha256 };
+      const terminalPayload: ProtectedTerminalFacts = { runId: continuation.protectedRunId, status: protectedStatus,
+        receiptDigest: continuation.receiptDigest, subjectKeySha256: continuation.subjectKeySha256 };
       const result = await consumeProtectedTerminalJob({ ...job, jobKey: WORKSTREAM_VERIFIED_JOB,
         eventId: continuation.terminalEventId, event: { eventType: PROTECTED_TERMINAL_EVENT, payload: terminalPayload } },
       platform, terminalPayload, continuation.terminalEventId);
@@ -594,8 +669,7 @@ async function closeFailedManagerContinuations(workspaceId: string, requestId: s
     for (const continuation of reservation.continuations ?? []) {
       if (++scans > MAX_TERMINAL_ATTEMPT_LOOKUPS) return { status: "unknown" as const, eventId,
         reason: "failed-manager-terminal-continuation-scan-over-bound" };
-      const continuationMatches = managerRequestUuidForLedgerKey(continuation.requestId) === requestId
-        && (continuation.receipt === null || continuation.receipt.runId === runId);
+      const continuationMatches = continuation.receipt?.receiptId === requestId && continuation.receipt.runId === runId;
       if (!continuationMatches && !(originalMatches && continuation.status === "waiting")) continue;
       if (["accepted", "waiting", "pending", "uncertain"].includes(continuation.status)) {
         const result = await failProtectedContinuation(scope, continuation, terminalStatus, platform.state);
@@ -770,6 +844,10 @@ export async function consumeVerifiedWorkstreamJob(job: Job, platformInput: SpsP
         return { status: "unknown" as const, eventId: job.eventId, reason: "protected-terminal-recheck-identity-mismatch" };
       }
       const terminalEventId = recheck ? payload.sourceEventId! : job.eventId;
+      if (!recheck) {
+        const qa = await consumeTaskQaProtectedTerminal(job.companyId, terminalEventId, payload, platform);
+        if (qa.status !== "not-applicable") return qa;
+      }
       return consumeProtectedTerminalJob(job, platform, payload, terminalEventId);
     }
     if (job.event.eventType !== WORKSTREAM_VERIFIED_EVENT) {
@@ -837,23 +915,21 @@ export function createVerifiedWorkstreamManagerReadHandler(
     || !/^builder-ws-dispatch-v1:[a-f0-9]{64}$/u.test(row.requestId)) {
     throw new Error("This verification event has no current effect-bound Manager request.");
   }
-  let ledgerRequestId: string | null = null, storedReceipt: unknown = null;
+  let ledgerRequestId: string | null = null, requestId: string | null = null, storedReceipt: unknown = null;
   const initialUuid = managerRequestUuidForLedgerKey(row.requestId);
   if (row.status === "pending") {
-    ledgerRequestId = row.requestId;
+    ledgerRequestId = row.requestId; requestId = initialUuid;
   } else if (row.status === "accepted" && row.receipt?.receiptId === initialUuid && row.receipt.runId === runContext.runId) {
-    ledgerRequestId = row.requestId; storedReceipt = row.receipt;
+    ledgerRequestId = row.requestId; requestId = row.receipt.receiptId; storedReceipt = row.receipt;
   } else {
     const continuation = row.continuations?.find(item => {
       if (!(["pending", "accepted"].includes(item.status))) return false;
-      const coreRequest = managerRequestUuidForLedgerKey(item.requestId);
-      return item.status === "pending" && item.receipt === null
-        || item.status === "accepted" && item.receipt?.runId === runContext.runId && item.receipt?.receiptId === coreRequest;
+      return item.status === "accepted" && item.receipt !== null && item.receipt.runId === runContext.runId
+        && REQUEST_ID.test(item.receipt.receiptId);
     });
-    if (continuation) { ledgerRequestId = continuation.requestId; storedReceipt = continuation.receipt; }
+    if (continuation) { ledgerRequestId = continuation.requestId; requestId = continuation.receipt!.receiptId; storedReceipt = continuation.receipt; }
   }
-  if (!ledgerRequestId) throw new Error("Manager run is not authorized by an exact Core request receipt or accepted ledger receipt.");
-  const requestId = managerRequestUuidForLedgerKey(ledgerRequestId);
+  if (!ledgerRequestId || !requestId) throw new Error("Manager run is not authorized by an exact Core request receipt or accepted ledger receipt.");
   if (storedReceipt !== null && (!exactObject(storedReceipt) || storedReceipt.receiptId !== requestId || storedReceipt.runId !== runContext.runId)) {
     throw new Error("Accepted ledger receipt does not match this exact Manager run.");
   }

@@ -511,7 +511,8 @@ export async function requestProtectedTaskQa(params: unknown, runContext: unknow
         referenceReason: "reason" in reference ? reference.reason : undefined,
         qaVerdict: "not-established" as const });
     }
-    return Object.freeze({ ...queued, taskRunReference: reference.status, qaVerdict: "not-established" as const });
+    return Object.freeze({ ...queued, taskRunReference: reference.status,
+      nextAction: "end-current-turn-await-protected-terminal-event", qaVerdict: "not-established" as const });
   } catch {
     return Object.freeze({ ...queued, taskRunReference: "unknown", referenceReason: "reference-publication-outcome-unknown",
       qaVerdict: "not-established" as const });

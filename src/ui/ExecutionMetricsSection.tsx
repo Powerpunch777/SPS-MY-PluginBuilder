@@ -130,7 +130,8 @@ export function ExecutionMetricsPanel({ value, workspaceId, loading, error, onRe
       {!metrics.runs.length ? <p>현재 Task에 등록된 Worker 실행 기록이 없습니다.</p> : <div style={{ overflowX: "auto", maxWidth: "100%" }}>
         <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", textAlign: "left", color: "var(--builder-text,#ededed)" }}><thead><tr>
           {["Workstream / Task", "역할", "Run 상태", "실행 시간", "큐 대기", "Commit 인수 대기"].map(label => <th key={label} style={{ padding: 8 }}>{label}</th>)}
-        </tr></thead><tbody>{metrics.runs.map(run => <tr key={`${run.requestId}:${run.role}`}>
+        </tr></thead><tbody>{metrics.runs.map(run => <tr key={JSON.stringify([run.ctoId, run.workstreamId,
+          run.taskId, run.role, run.requestId, run.runId, run.reason])}>
           <td style={{ padding: 8, overflowWrap: "anywhere" }}>{run.workstreamId} / {run.taskId}</td><td>{run.role}</td><td>{runStatusLabel(run)}</td>
           <td>{duration(run.executionMs)}</td><td>{duration(run.queueMs)}</td><td>{duration(run.commitAcceptanceMs ?? null)}</td>
         </tr>)}</tbody></table>

@@ -231,6 +231,10 @@ test("Builder mounts execution metrics only in System and has no page-level hori
   };
   {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const keyWarnings: string[] = [];
+    page.on("console", message => {
+      if (/same key|unique ["']key["']/iu.test(message.text())) keyWarnings.push(message.text());
+    });
     await page.setContent("<div id='root'></div>");
     await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
     await page.evaluate(value => (window as unknown as { mountBuilder(value: unknown): void }).mountBuilder(value), metricsWithUnstartedRequest());
@@ -246,6 +250,17 @@ test("Builder mounts execution metrics only in System and has no page-level hori
     await page.setViewportSize({ width: 1440, height: 900 });
     assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true, "1440px viewport must not overflow horizontally");
     await saveScreenshot(page, "builder-metrics-1440.png");
+    const pending = metricsWithUnstartedRequest();
+    const initial = { ...pending.runs[0]!, taskId: "task-qa", role: "qa", reason: "qa-origin-not-observed" };
+    const continuation = { ...initial, reason: "qa-continuation-current-session-unavailable" };
+    await page.evaluate(value => (window as unknown as { mountBuilder(value: unknown): void }).mountBuilder(value),
+      { ...pending, runs: [initial, continuation] });
+    await page.waitForFunction(() => document.querySelector('section[aria-label="개발 실행 지표"] tbody')?.children.length === 2);
+    assert.equal(await page.getByRole("cell", { name: "ws-1 / task-qa", exact: true }).count(), 2);
+    assert.deepEqual(keyWarnings, [], "initial and unmeasured continuation rows must retain distinct React keys");
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true);
+    await saveScreenshot(page, "builder-metrics-continuation-390.png");
     await page.getByRole("button", { name: "Lead 대화" }).click();
     assert.equal(await page.getByRole("region", { name: "개발 실행 지표" }).count(), 0, "leaving System unmounts the metrics panel");
   }

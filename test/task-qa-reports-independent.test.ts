@@ -10,7 +10,10 @@ import { acceptCtoTaskSourceSubmission } from "../src/task-source-acceptance.ts"
 import { submitTaskSourceFiles } from "../src/task-source-submissions.ts";
 import type { RevisionState } from "../src/solution-revision-store.ts";
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "../src/task-worker-runtime.ts";
+import { readTaskQaEventOrigin, readTaskWorkerFile } from "../src/task-worker-tools.ts";
 import { publishTaskQaReport, createTaskQaReportStore, taskQaCriteria } from "../src/task-qa-reports.ts";
+import { MANAGER_SESSION_TERMINAL_JOB } from "../src/builder-gates/integration-manager-job.ts";
+import { WORKSTREAM_VERIFIED_JOB } from "../src/builder-gates/workstream-verification-publication.ts";
 import { REQUEST_PROTECTED_TASK_QA_TOOL } from "../src/task-packet-tool-declarations.mjs";
 import { createBuilderPlatform } from "../src/platform.ts";
 import { fixture, A, C, CTO, W, ctx, now, key, mapKey } from "./fixtures/cto-platform.ts";
@@ -26,9 +29,22 @@ const QA_RUN = "88888888-8888-4888-8888-888888888888";
 const CORE_RUN = "99999999-9999-4999-8999-999999999999";
 const APPROVAL = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const COMMIT = "b".repeat(40), TREE = "c".repeat(40), PLAN = "d".repeat(64);
+type Fixture = Awaited<ReturnType<typeof fixture>>;
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 const runKey = (runId: string) => ({ runId, status: "running", cancellationRequested: false,
   termination: "not_applicable", errorCode: null, error: null });
+
+async function runRegisteredProtectedTerminalJob(job: unknown, platform: Fixture["platform"]) {
+  const registered = createBuilderPlatform().jobs.find(item => item.jobKey === WORKSTREAM_VERIFIED_JOB);
+  assert.ok(registered, "protected terminal consumer remains registered on WORKSTREAM_VERIFIED_JOB");
+  await registered.handler(job as never, platform);
+}
+
+async function runRegisteredSessionTerminalJob(job: unknown, platform: Fixture["platform"]) {
+  const registered = createBuilderPlatform().jobs.find(item => item.jobKey === MANAGER_SESSION_TERMINAL_JOB);
+  assert.ok(registered, "QA origin terminal consumer remains registered on agent-session-terminal");
+  await registered.handler(job as never, platform);
+}
 
 /** Host/Core callbacks below are deterministic contract fixtures; they do not run a Node test or AppContainer. */
 async function setup() {
@@ -83,6 +99,8 @@ async function setup() {
   const requests = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
   const runStates = new Map<string, string>([[ctoRunId, "running"], [DEV_RUN, "running"], [QA_RUN, "running"]]);
   const systemEvents = new Map<string, Record<string, unknown>>();
+  const dispatchCalls: Array<{ sessionId: string; companyId: string; input: Record<string, unknown>; replayed: boolean }> = [];
+  const dispatchReceipts = new Map<string, { requestId: string; runId: string }>();
   const sessions = f.platform.agents.sessions as typeof f.platform.agents.sessions;
   const originalGetRequest = sessions.getRequest.bind(sessions), originalGetRun = sessions.getRun.bind(sessions);
   (sessions as any).getRequest = async (sessionId: string, companyId: string, requestId: string) =>
@@ -92,6 +110,19 @@ async function setup() {
       ...(systemEvents.has(runId) ? { systemEvent: systemEvents.get(runId) } : {}) };
     return originalGetRun(sessionId, companyId, runId);
   };
+  const fakeDispatch = async (sessionId: string, companyId: string, input: Record<string, unknown>) => {
+    const eventId = String(input.eventId);
+    const existing = dispatchReceipts.get(eventId);
+    if (existing) {
+      dispatchCalls.push({ sessionId, companyId, input: structuredClone(input), replayed: true });
+      return { ...existing, replayed: true };
+    }
+    const receipt = { requestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc", runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbd" };
+    dispatchReceipts.set(eventId, receipt);
+    dispatchCalls.push({ sessionId, companyId, input: structuredClone(input), replayed: false });
+    return { ...receipt, replayed: false };
+  };
+  (sessions as any).dispatchProtectedEventV1 = fakeDispatch;
   const hostPlatform = f.platform as typeof f.platform & { localFolders: Record<string, (...args: any[]) => any> };
   Object.assign(hostPlatform, { localFolders: {
     async status(folderKey: string) { return { folderKey, configured: true, access: "read-write", readable: true, writable: true,
@@ -116,10 +147,9 @@ async function setup() {
     packet: devRecord, currentPackets: board.packets, worker: workers[0]! }))}`, {
     requestId: taskWorkerRequestId(deriveTaskWorkerFileBinding({ workspaceId: W, projectId: P, ctoId: CTO,
       packet: devRecord, currentPackets: board.packets, worker: workers[0]! })), state: "submitted", runId: DEV_RUN });
-  requests.set(`${QA_SESSION}:${taskWorkerRequestId(deriveTaskWorkerFileBinding({ workspaceId: W, projectId: P, ctoId: CTO,
-    packet: qaRecord, currentPackets: board.packets, worker: workers[1]! }))}`, {
-    requestId: taskWorkerRequestId(deriveTaskWorkerFileBinding({ workspaceId: W, projectId: P, ctoId: CTO,
-      packet: qaRecord, currentPackets: board.packets, worker: workers[1]! })), state: "submitted", runId: QA_RUN });
+  const qaDispatchRequestId = taskWorkerRequestId(deriveTaskWorkerFileBinding({ workspaceId: W, projectId: P, ctoId: CTO,
+    packet: qaRecord, currentPackets: board.packets, worker: workers[1]! }));
+  requests.set(`${QA_SESSION}:${qaDispatchRequestId}`, { requestId: qaDispatchRequestId, state: "submitted", runId: QA_RUN });
   const accepted = await acceptCtoTaskSourceSubmission({ projectId: P, ctoId: CTO, workstreamId: "ws-1", taskId: "task-dev",
     submissionId: submitted.submission!.submissionId }, ctoContext, f.platform);
   assert.equal(accepted.status, "accepted");
@@ -172,7 +202,19 @@ async function setup() {
   const reportStore = () => createTaskQaReportStore(reportScope, revisionState);
   const params = reportParams();
   const qaContext = { companyId: W, projectId: P, agentId: QA_AGENT, sessionId: QA_SESSION, runId: QA_RUN };
-  return { f, params, criteria, reportStore, qaContext, workers, runStates, setCore(status: string, receipt: Record<string, unknown>) {
+  const coreSubjectKeySha256 = (coreRows.get(CORE_RUN) as { pins: { subjectKeySha256: string } }).pins.subjectKeySha256;
+  const terminalEvent = (eventNonce = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") => ({ jobKey: WORKSTREAM_VERIFIED_JOB,
+    trigger: "event" as const, eventId: `sps-protected-test-terminal-v1:${CORE_RUN}:${"4".repeat(64)}:${coreSubjectKeySha256}:${eventNonce}`,
+    companyId: W, runId: QA_RUN, event: { eventType: "sps.protected-test.terminal",
+      payload: { schemaVersion: 1, kind: "protected-node-test-v1", companyId: W, pluginId: P,
+        pluginKey: "com.sonparkserver.my-plugin-builder", runId: CORE_RUN, status: "succeeded",
+        receiptDigest: "4".repeat(64), subjectKeySha256: coreSubjectKeySha256 } } });
+  return { f, params, criteria, reportStore, qaContext, workers, runStates, qaDispatchRequestId, terminalEvent,
+    dispatchCalls, dispatchReceipts, coreSubjectKeySha256, fakeDispatch,
+    setDispatchAvailable(available: boolean) {
+      if (available) (sessions as any).dispatchProtectedEventV1 = fakeDispatch;
+      else delete (sessions as any).dispatchProtectedEventV1;
+    }, setCore(status: string, receipt: Record<string, unknown>) {
     coreStatus = status; coreReceipt = receipt;
   }, setTip(commitSha: string) {
     hostPlatform.localFolders.readWorkspaceSourceGitTipV1 = async (sourceId: string, folderKey: string, branch: string) =>
@@ -283,6 +325,108 @@ test("continuation cannot borrow another Run, event, protected reference or canc
     const f = await setup(); const resumed = f.resumeQa(); f.runStates.set(resumed.runId, "succeeded");
     await assert.rejects(async () => f.registered!.handler(f.params, resumed, f.f.platform));
     assert.equal(await f.reportStore().current(), null);
+  });
+});
+
+test("registered protected-terminal job resumes only the exact QA Worker through Core event dispatch", async t => {
+  await t.test("closed QA origin dispatches exact six-field Core request and duplicate delivery replays one wake", async () => {
+    const f = await setup(); f.runStates.set(QA_RUN, "succeeded");
+    const eventId = `sps-protected-test-terminal-v1:${CORE_RUN}:${"4".repeat(64)}:${f.coreSubjectKeySha256}:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
+    const job = f.terminalEvent();
+    await runRegisteredProtectedTerminalJob(job, f.f.platform);
+    await runRegisteredProtectedTerminalJob(job, f.f.platform);
+    assert.equal(f.dispatchCalls.length, 2);
+    assert.deepEqual(f.dispatchCalls.map(call => call.replayed), [false, true]);
+    assert.equal(f.dispatchReceipts.size, 1, "same Core event ID is idempotently replayed, not a second wake");
+    assert.deepEqual(f.dispatchCalls.map(call => [call.sessionId, call.companyId]), [[QA_SESSION, W], [QA_SESSION, W]]);
+    for (const call of f.dispatchCalls) {
+      assert.deepEqual(Object.keys(call.input).sort(), ["eventId", "guards", "previousRunId", "protectedRunId"]);
+      assert.equal(call.input.previousRunId, QA_RUN);
+      assert.equal(call.input.eventId, eventId);
+      assert.equal(call.input.protectedRunId, CORE_RUN);
+      assert.ok(Array.isArray(call.input.guards) && call.input.guards.length > 0);
+    }
+    const guards = f.dispatchCalls[0]!.input.guards as Array<{ stateKey: string; namespace?: string; expectedValue: unknown }>;
+    const stateKeys = guards.map(guard => guard.stateKey);
+    const packetHead = guards.find(guard => guard.stateKey.startsWith("task-packets-head.v1."));
+    const qaReferenceHead = guards.find(guard => guard.stateKey.startsWith("task-protected-qa-runs-head.v1."));
+    const registryKey = taskWorkerRegistryKey(P, CTO);
+    const workerRegistry = guards.find(guard => guard.stateKey === registryKey);
+    assert.ok(packetHead, `current Task packet head must be guarded: ${JSON.stringify(stateKeys)}`);
+    assert.ok(qaReferenceHead, `current QA run-reference head must be guarded: ${JSON.stringify(stateKeys)}`);
+    assert.ok(workerRegistry, `current owned Worker registry must be guarded: ${JSON.stringify(stateKeys)}`);
+    for (const guard of [packetHead, qaReferenceHead, workerRegistry]) {
+      const currentValue = f.f.values.get(mapKey({ scopeKind: "company", scopeId: W,
+        namespace: guard.namespace, stateKey: guard.stateKey }));
+      assert.notEqual(currentValue, undefined);
+      assert.deepEqual(guard.expectedValue, currentValue, `CAS guard must pin the current value for ${guard.stateKey}`);
+    }
+  });
+
+  await t.test("protected event first stores a deferred pointer and origin terminal later emits one wake", async () => {
+    const f = await setup();
+    const eventId = `sps-protected-test-terminal-v1:${CORE_RUN}:${"4".repeat(64)}:${f.coreSubjectKeySha256}:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab`;
+    await runRegisteredProtectedTerminalJob(f.terminalEvent("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"), f.f.platform);
+    assert.equal(f.dispatchCalls.length, 0);
+    assert.equal(f.dispatchReceipts.size, 0);
+
+    f.runStates.set(QA_RUN, "succeeded");
+    await runRegisteredSessionTerminalJob({ jobKey: MANAGER_SESSION_TERMINAL_JOB, trigger: "event", companyId: W,
+      runId: QA_RUN, eventId: `agent-session-terminal-v1:${"a".repeat(64)}`, event: { eventType: "agent.session.run.terminal",
+        payload: { schemaVersion: 1, runId: QA_RUN, sessionId: QA_SESSION, requestId: f.qaDispatchRequestId,
+          status: "succeeded", resultSha256: "b".repeat(64), finishedAt: now } } }, f.f.platform);
+    assert.equal(f.dispatchCalls.length, 1);
+    assert.equal(f.dispatchReceipts.size, 1);
+    assert.equal(f.dispatchCalls[0]!.input.eventId, eventId);
+    assert.equal(f.dispatchCalls[0]!.input.previousRunId, QA_RUN);
+  });
+
+  await t.test("existing exact QA report suppresses automatic wake", async () => {
+    const f = await setup();
+    const published = await f.registered!.handler(f.params, f.qaContext, f.f.platform) as any;
+    assert.equal(published.data.status, "published");
+    await runRegisteredProtectedTerminalJob(f.terminalEvent("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaac"), f.f.platform);
+    assert.equal(f.dispatchCalls.length, 0);
+    assert.equal(f.dispatchReceipts.size, 0);
+  });
+
+  await t.test("legacy SDK and moved source fail closed without dispatch fallback", async () => {
+    const legacy = await setup(); legacy.runStates.set(QA_RUN, "succeeded"); legacy.setDispatchAvailable(false);
+    await assert.rejects(async () => runRegisteredProtectedTerminalJob(
+      legacy.terminalEvent("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaad"), legacy.f.platform));
+    assert.equal(legacy.dispatchCalls.length, 0);
+    assert.equal(legacy.enqueueCalls(), 1, "unsupported continuation never enqueues another Task run");
+
+    const moved = await setup(); moved.runStates.set(QA_RUN, "succeeded"); moved.setTip("e".repeat(40));
+    await assert.rejects(async () => runRegisteredProtectedTerminalJob(
+      moved.terminalEvent("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaae"), moved.f.platform));
+    assert.equal(moved.dispatchCalls.length, 0);
+    assert.equal(moved.dispatchReceipts.size, 0);
+    assert.equal(moved.enqueueCalls(), 1);
+  });
+});
+
+test("read-only QA origin observation is not active file authority and accepts only a current uncancelled origin", async t => {
+  const f = await setup();
+  f.runStates.set(QA_RUN, "succeeded");
+  const origin = await readTaskQaEventOrigin(f.qaContext, f.f.platform);
+  assert.equal(origin.worker.role, "qa");
+  await assert.rejects(readTaskWorkerFile({ relativePath: "test/feature.test.ts" }, f.qaContext, f.f.platform));
+  await assert.rejects(readTaskWorkerFile({ relativePath: "test/feature.test.ts" },
+    { ...f.qaContext, observation: "qa-event-origin" }, f.f.platform));
+  assert.equal(f.dispatchCalls.length, 0, "read-only origin inspection does not dispatch or wake a session");
+
+  await t.test("queued origin is not eligible", async () => {
+    const queued = await setup(); queued.runStates.set(QA_RUN, "queued");
+    await assert.rejects(readTaskQaEventOrigin(queued.qaContext, queued.f.platform));
+  });
+  await t.test("cancelled origin is not eligible", async () => {
+    const cancelled = await setup(); cancelled.runStates.set(QA_RUN, "cancelled");
+    await assert.rejects(readTaskQaEventOrigin(cancelled.qaContext, cancelled.f.platform));
+  });
+  await t.test("a different current Run cannot be presented as the QA request origin", async () => {
+    const foreign = await setup();
+    await assert.rejects(readTaskQaEventOrigin({ ...foreign.qaContext, runId: DEV_RUN }, foreign.f.platform));
   });
 });
 

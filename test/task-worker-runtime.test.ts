@@ -380,7 +380,10 @@ test("QA Agent session is dispatchable with its distinct QA file-scope policy an
     },
     async sendMessage(_sessionId: string, _companyId: string, input: { prompt: string; executionPolicy?: unknown }) {
       sends += 1; assert.equal(input.executionPolicy, TASK_WORKER_EXECUTION_POLICY);
-      assert.match(input.prompt, /qaWritePaths/u); return { runId: RUN };
+      assert.match(input.prompt, /qaWritePaths/u);
+      assert.match(input.prompt, /finish this AI turn normally without polling/u);
+      assert.match(input.prompt, /Unsupported or uncertain execution is not QA PASS/u);
+      return { runId: RUN };
     },
   } }, localFolders: localFolderFixture({ async readWorkspaceSourceTextV1() { return ""; },
     async writeWorkspaceSourceTextAtomicV1() {}, async deleteWorkspaceSourceFileV1() {} }) }) as unknown as SpsPlatformInvocationContext;

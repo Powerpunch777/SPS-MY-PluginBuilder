@@ -38,6 +38,7 @@ import { PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL } from "./task-pack
 import { publishTaskQaReport } from "./task-qa-reports.ts";
 import { verifyCurrentWorkstream } from "./builder-gates/current-workstream-verification.ts";
 import { WORKSTREAM_VERIFIED_JOB } from "./builder-gates/workstream-verification-publication.ts";
+import { consumeTaskQaOriginTerminal } from "./task-qa-event-job.ts";
 import { consumeManagerSessionTerminalJob, consumeVerifiedWorkstreamJob,
   MANAGER_SESSION_TERMINAL_JOB } from "./builder-gates/integration-manager-job.ts";
 import { readVerifiedWorkstreamForManager } from "./builder-gates/integration-manager-job.ts";
@@ -1064,6 +1065,8 @@ async function consumeWorkspaceSessionTerminalJob(job: {
     return { status: "unknown" as const, reason: "agent-session-terminal-event-id-invalid" };
   }
   if (!payload || !job.companyId) return consumeManagerSessionTerminalJob(job as never, platform);
+  const qa = await consumeTaskQaOriginTerminal(job.companyId, payload, platform);
+  if (qa.status !== "not-applicable") return qa;
   try {
     const binding = await readLeadAgentBinding(job.companyId, platform);
     const sessions = await leadSessionsFor(job.companyId, binding, platform);

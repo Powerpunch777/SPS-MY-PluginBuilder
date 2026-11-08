@@ -599,10 +599,26 @@
   버전이 거부하면 실패로 남긴다. Goal이 없다는 정확한 응답을 확인하지 못하면 일반
   시스템 턴 경로를 사용하지 않는다. Goal 재개를 임의로 대체하지 않는다.
 - 입력/기존 영수증의 로컬 및 임시 DB 회귀와 가짜 Node 실행기의 실제 어댑터 코드 검사는
-  통과했다. DB의 이전 Run/종료 자료와 JSONL 응답은 합성 증거다. Core 완료 이벤트의
-  권위 있는 입력 생산자, SDK/Builder의 재개 인수, 실제 no-Wake 조회·모델 턴·보고서 발행은
-  아직 미연결/미인수다. 이 후보 변경으로 기존 AC를 PASS 처리하거나 제품 SDK pin·설치본을
-  바꾸지 않는다. 실제 사용 흐름과 두 CTO 통합 인수는 계속 남는다.
+  통과했다. DB의 이전 Run/종료 자료와 JSONL 응답은 합성 증거다. 후속 Core 후보는 저장된
+  보호 테스트 완료 이벤트·영수증·현재 Host 계획·기존 세션에서 입력을 생산하고, 기존
+  Plugin state guard와 새 세션 요청 예약을 같은 DB 트랜잭션으로 검사한다. 호출자가
+  Thread·출력·완료 boolean을 대신 공급하지 않는다. 재생은 기존 요청 영수증 확인이며
+  현재 QA 권위를 새로 발급하지 않는다.
+- 후보 공개 SDK `96bc3d2`는 이 범용 Host API를 선택적으로 연결한다. 해당 Host operation과
+  기존 실행·상태 읽기 capability가 없으면 전송하지 않는다. Worker/Host 계약 검사는
+  오프라인 fixture이며, 별도 tarball의 소비자 타입·Worker 종료 smoke도 오프라인 설치와
+  로컬 TypeScript 6.0.3으로 통과했다. 최초 smoke의 컴파일러 경로 누락 실패를 보존했다.
+  제품 SDK pin·설치본을 갱신하거나 실제 모델 요청 성공으로 세지 않는다.
+- `a293e5f`는 실제 Core가 반환한 요청·Run·저장 이벤트의 일치 정보와 현재 QA Task/Source
+  참조를 결속한다. 후속 Run의 QA 보고서는 원래 요청·독립 작성자·정확한 보호 실행·영수증
+  해시가 모두 맞아야 한다. 닫힌 원래 Run을 작성자로 재사용하지 않으며 다른 요청이나
+  바뀐 Source를 빌릴 수 없다. 등록 보고 도구의 독립 회귀는 fixture 기반이다.
+- 후속 이벤트 소비 연결은 기존 Workspace Job과 Task-to-run 참조 저널을 재사용한다.
+  먼저 도착한 보호 완료 이벤트의 포인터를 보존하고 원래 QA 턴의 시스템 종료 이벤트로
+  이어받는다. 별도 관리 Agent·Run 상태 저장소·사용자 continue 메시지를 추가하지 않는다.
+  등록 handler의 순서·중복·완료 세션 차단 검사는 통과했으나 실제 Core/Node/AI 전체 연결과
+  Goal 세션의 공식 재개는 계속 미인수다. Manager 후속 재개 연결도 별도 진행 중이다.
+  기존 AC를 PASS 처리하지 않으며 두 CTO 병렬 업무·통합·실제 납품 인수도 남는다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
