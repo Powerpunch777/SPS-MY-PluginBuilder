@@ -10,6 +10,7 @@ import { parseTaskWorkerRegistry, taskWorkerRegistryKey } from "../src/domain/ta
 import type { TaskPacketRecord } from "../src/domain/task-packets.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import { fixture, W, A, C, CTO, ctx, now, key, mapKey } from "./fixtures/cto-platform.ts";
+import { prepareApprovedTaskFileDesign } from "./fixtures/task-file-approved-design.ts";
 
 const AGENT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RUN = "cccccccc-cccc-4ccc-8ccc-cccccccccccc", SOURCE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -20,7 +21,8 @@ type EffectInput = { sourceId: string; folderKey: string; relativePath: string; 
 
 async function setup(role: "worker" | "qa" = "worker") {
   const f = await fixture(W);
-  await dispatchCtoWorkstream(f.params, ctx(), f.platform);
+  const design = await prepareApprovedTaskFileDesign(f);
+  await dispatchCtoWorkstream(design.params, ctx(), f.platform);
   const delivery = (await f.deliveryStore().current())!.revision, ctoRun = [...f.runs.keys()][0]!;
   const taskId = role === "worker" ? "task-dev" : "task-readonly-qa";
   const record: TaskPacketRecord = { packet: { projectId: W, ctoId: CTO, workstreamId: "ws-1", taskId, revision: 1,
@@ -31,8 +33,8 @@ async function setup(role: "worker" | "qa" = "worker") {
       expectedResults: ["No source mutations"], passCriteria: ["Assessment remains separate"] } : null,
     sourceAccess: { sourceId: SOURCE, folderKey: "project-source", branch: "feature/task", expectedHead: "a".repeat(40),
       readPaths: ["src/feature.ts"], writePaths: role === "worker" ? ["src/feature.ts"] : [], qaWritePaths: [] } },
-    source: { requestId: delivery.requestId, workstreamId: "ws-1", specRevision: 1,
-      instructionSha256: workstreamInstructionDigest(f.instruction) }, author: { agentId: A, sessionId: C, runId: ctoRun },
+    source: { requestId: delivery.requestId, workstreamId: "ws-1", specRevision: design.instruction.spec.revision,
+      instructionSha256: workstreamInstructionDigest(design.instruction) }, author: { agentId: A, sessionId: C, runId: ctoRun },
     createdAtISO: now, dependencyPins: [] };
   const packets = createTaskPacketStore(W, W, CTO, "ws-1", f.state);
   assert.equal((await packets.publish({ expectedBaseRevisionId: null, revision: {
@@ -67,7 +69,7 @@ async function setup(role: "worker" | "qa" = "worker") {
     async sendMessage() { sends++; return { runId: RUN }; },
   });
   const required = [taskWorkerRegistryKey(W, CTO), ...["project-ctos.v1.", "workstreams-head.v1.",
-    "task-packets-head.v1.", "cto-delivery-head.v1."].map(prefix => {
+    "task-packets-head.v1.", "cto-delivery-head.v1.", "design-baseline-head.v1.", "technology-decisions-head.v1."].map(prefix => {
       const matches = [...f.values.keys()].map(value => JSON.parse(value) as { namespace: string; stateKey: string })
         .filter(value => value.namespace === NS && value.stateKey.startsWith(prefix));
       assert.equal(matches.length, 1, `fixture must contain one actual ${prefix} row`);
@@ -120,7 +122,7 @@ async function setup(role: "worker" | "qa" = "worker") {
     cancel() { active = false; }, clearWorkerRequest() { submitted = false; } };
 }
 
-test("registered guarded file handlers bind all five actual mutable authority heads and no caller guard", async () => {
+test("registered guarded file handlers bind the five authority heads plus current design heads and no caller guard", async () => {
   const f = await setup();
   assert.equal(((await f.call("read")).data as { text: string }).text, "original");
   assert.equal(((await f.call("write")).data as { status: string }).status, "written");

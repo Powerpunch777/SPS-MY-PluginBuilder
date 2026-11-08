@@ -22,6 +22,7 @@ import { assertSessionExecutionPolicySupport } from "./session-execution-policy.
 import { createCurrentBaselineAssuranceProvider } from "./spec-assurance/current-baseline-provider.ts";
 import { hasUndecidedTaskRequirement } from "./builder-gates/task-decision-scope.ts";
 import { resolveTaskQaContinuationAuthority, type TaskQaContinuationAuthority } from "./task-qa-continuation-authority.ts";
+import { assertTaskWorkerFileDesignAuthority } from "./task-worker-file-design-authority.ts";
 
 const asJson = (value: unknown) => value as JsonValue;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -262,7 +263,8 @@ export async function readTaskQaEventOrigin(runContext: unknown, platform: SpsPl
   return readCurrentTaskWorkerBinding(parseTaskWorkerToolContext(runContext), platform, "qa-event-origin");
 }
 
-export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, platform: SpsPlatformInvocationContext) {
+export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, platform: SpsPlatformInvocationContext,
+  purpose: "binding" | "file-effect" = "binding") {
   const context = parseTaskWorkerToolContext(runContext);
   const captured = new Map<string, RevisionPublicationGuard>();
   const observed = { ...platform, state: { ...platform.state, async get(key: SpsStateKey) {
@@ -280,6 +282,13 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
     return value;
   } } } as SpsPlatformInvocationContext;
   let current = await readCurrentTaskWorkerBinding(context, observed);
+  let fileDesign: Awaited<ReturnType<typeof assertTaskWorkerFileDesignAuthority>> | null = null;
+  const assertFileDesign = async () => {
+    if (purpose === "file-effect") fileDesign = await assertTaskWorkerFileDesignAuthority({ workspaceId: context.companyId,
+      projectId: context.projectId, ctoId: current.ctoId, workstreamId: current.worker.workstreamId,
+      taskRecord: current.packet, platform: observed });
+  };
+  await assertFileDesign();
   const assertCurrent = async () => {
     const latest = await readCurrentTaskWorkerBinding(context, observed);
     if (latest.ctoId !== current.ctoId || latest.worker.agentId !== current.worker.agentId
@@ -289,6 +298,7 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
       throw new Error("Current Task Worker, packet or source authority changed during the file operation.");
     }
     current = latest;
+    await assertFileDesign();
   };
   const fileGuards = () => {
     const rawHash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -297,6 +307,11 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
     const required = [taskWorkerRegistryKey(context.projectId, current.ctoId),
       `project-ctos.v1.${rawHash(context.projectId)}`, `workstreams-head.v1.${rawHash(context.projectId)}`,
       `task-packets-head.v1.${rawHash(packetScope)}`, `cto-delivery-head.v1.${rawHash(deliveryScope)}`];
+    if (purpose === "file-effect") {
+      if (!fileDesign) throw new Error("unsupported:task-file-design-authority-unavailable");
+      required.push(`design-baseline-head.v1.${rawHash(context.projectId)}`, "lead-agent.v1");
+      if (fileDesign.g5.status !== "not-scoped") required.push(`ui-contracts-head.v1.${rawHash(context.projectId)}`);
+    }
     // Immutable journal bodies are already digest checked. Lock their current heads and mutable role bindings.
     const guards = [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1."));
     if (required.some(stateKey => !guards.some(guard => guard.stateKey === stateKey && guard.namespace === "sonpark.my-builder"))
@@ -310,7 +325,7 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
 
 const resolveTaskWorkerFileCall = resolveCurrentTaskWorkerToolCall;
 async function resolveGuardedTaskWorkerFileCall(runContext: unknown, platform: SpsPlatformInvocationContext) {
-  const call = await resolveTaskWorkerFileCall(runContext, platform);
+  const call = await resolveTaskWorkerFileCall(runContext, platform, "file-effect");
   return { ...call, guards: call.fileGuards() };
 }
 

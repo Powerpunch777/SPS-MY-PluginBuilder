@@ -9,6 +9,7 @@ import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "../src/task-wo
 import { parseTaskWorkerRegistry, taskWorkerRegistryKey } from "../src/domain/task-workers.ts";
 import { createBuilderPlatform } from "../src/platform.ts";
 import { fixture, W, A, C, CTO, ctx, now } from "./fixtures/cto-platform.ts";
+import { prepareApprovedTaskFileDesign } from "./fixtures/task-file-approved-design.ts";
 
 const AGENT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -19,7 +20,8 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 
 async function taskFixture(sourceBound = true) {
   const f = await fixture(W);
-  await dispatchCtoWorkstream(f.params, ctx(), f.platform);
+  const design = await prepareApprovedTaskFileDesign(f);
+  await dispatchCtoWorkstream(design.params, ctx(), f.platform);
   const delivery = (await f.deliveryStore().current())!.revision;
   const ctoRun = [...f.runs.keys()][0]!;
   const record = { packet: { projectId: W, ctoId: CTO, workstreamId: "ws-1", taskId: "task-dev", revision: 1,
@@ -28,8 +30,8 @@ async function taskFixture(sourceBound = true) {
     constraints: [], acceptance: ["Review the submitted commit"], evidenceRequired: ["Exact source commit"], reuse: [], testPlan: null,
     sourceAccess: { sourceId: SOURCE, folderKey: "project-source", branch: "feature/task-dev", expectedHead: HEAD,
       readPaths: ["src/feature.ts"], writePaths: ["src/feature.ts"], qaWritePaths: [] } },
-    source: { requestId: delivery.requestId, workstreamId: "ws-1", specRevision: 1,
-      instructionSha256: workstreamInstructionDigest(f.instruction) }, author: { agentId: A, sessionId: C, runId: ctoRun },
+    source: { requestId: delivery.requestId, workstreamId: "ws-1", specRevision: design.instruction.spec.revision,
+      instructionSha256: workstreamInstructionDigest(design.instruction) }, author: { agentId: A, sessionId: C, runId: ctoRun },
     createdAtISO: now, dependencyPins: [] };
   const packets = createTaskPacketStore(W, W, CTO, "ws-1", f.state);
   await packets.publish({ expectedBaseRevisionId: null, revision: { projectId: W, ctoId: CTO,
@@ -101,6 +103,8 @@ async function taskFixture(sourceBound = true) {
         await onEffect();
         assert.ok(input.guards.length >= 5);
         assert.ok(input.guards.every(guard => !guard.stateKey.includes("-revision.v1.")));
+        for (const prefix of ["design-baseline-head.v1.", "technology-decisions-head.v1."])
+          assert.ok(input.guards.some(guard => guard.namespace === "sonpark.my-builder" && guard.stateKey.startsWith(prefix)));
         for (const guard of input.guards) {
           assert.deepEqual(await f.state.get({ scopeKind: "company", scopeId: W,
             ...(guard.namespace === undefined ? {} : { namespace: guard.namespace }), stateKey: guard.stateKey }), guard.expectedValue);
