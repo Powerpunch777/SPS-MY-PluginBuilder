@@ -15,7 +15,8 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 type Receipt = NonNullable<Awaited<ReturnType<SpsPlatformInvocationContext["agents"]["sessions"]["getRequest"]>>>;
 type SystemEvent = { schemaVersion: 1; kind: "agent-session-terminal-event"; requestId: string; previousRunId: string;
   eventId: string; sourceSessionId: string; sourceRunId: string; resultSha256: string };
-type Run = SpsAgentSessionRunResult & { systemEvent?: SystemEvent };
+type SdkSystemEvent = SpsAgentSessionRunResult extends { systemEvent?: infer Event } ? Event : never;
+type Run = Omit<SpsAgentSessionRunResult, "systemEvent"> & { systemEvent?: SystemEvent | SdkSystemEvent };
 type DispatchInput = { previousRunId: string; eventId: string; sourceSessionId: string; sourceRunId: string;
   guards: readonly { stateKey: string; namespace?: string; expectedValue: unknown }[] };
 type Dispatch = (sessionId: string, companyId: string, input: DispatchInput) => Promise<{ requestId: string; runId: string; replayed: boolean }>;
