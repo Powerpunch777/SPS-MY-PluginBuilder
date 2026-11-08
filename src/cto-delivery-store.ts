@@ -8,7 +8,10 @@ import type { parseLeadToolContext } from "./lead-tool-authority.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const workstreamInstructionDigest = (record: WorkstreamRecord) => hash({ ...record, receipt: null });
-type ResolvedCtoDelivery = CtoDelivery & Readonly<{ currentTaskResult?: CtoTaskResultHandoff }>;
+type ResolvedCtoDelivery = CtoDelivery & Readonly<{ currentTaskResult?: CtoTaskResultHandoff & Readonly<{
+  failure?: Readonly<{ code: string | null; recovery: "cto-review-required"; automaticallyRetried: false;
+    sourceEffects: "not-established" }>;
+}> }>;
 
 export function createCtoDeliveryStore(workspaceId: string, projectId: string, ctoId: string, state: RevisionState) {
   // The opaque journal key includes both logical scopes without introducing a
@@ -97,6 +100,20 @@ export async function resolveCtoDeliveryRun(context: ReturnType<typeof parseLead
     || taskPacketRecordDigest(packet, projectId, ctoId, workstreamId) !== handoff.packetRecordSha256 || worker.length !== 1) {
     throw new Error("The CTO handoff no longer matches its current Workstream, Task, or Worker registration.");
   }
+  let failure: NonNullable<ResolvedCtoDelivery["currentTaskResult"]>["failure"];
+  if (latestHandoff.sourceStatus === "failed") {
+    const sourceReceipt = await platform.agents.sessions.getRequest(latestHandoff.sourceSessionId, context.companyId,
+      latestHandoff.sourceRequestId);
+    const sourceRun = await platform.agents.sessions.getRun(latestHandoff.sourceSessionId, context.companyId, latestHandoff.sourceRunId);
+    if (!sourceReceipt || sourceReceipt.requestId !== latestHandoff.sourceRequestId || sourceReceipt.state !== "submitted"
+      || sourceReceipt.runId !== latestHandoff.sourceRunId || sourceRun.runId !== latestHandoff.sourceRunId
+      || sourceRun.status !== "failed" || sourceRun.cancellationRequested || sourceRun.termination !== "not_applicable") {
+      throw new Error("The handed-off failure no longer has its exact Core request and failed Run.");
+    }
+    const code = typeof sourceRun.errorCode === "string" && /^[A-Za-z0-9._:-]{1,96}$/u.test(sourceRun.errorCode)
+      ? sourceRun.errorCode : null;
+    failure = Object.freeze({ code, recovery: "cto-review-required", automaticallyRetried: false, sourceEffects: "not-established" });
+  }
   // This read projection is not part of the persisted delivery codec or a new acceptance.
-  return Object.freeze({ ...delivery, currentTaskResult: latestHandoff });
+  return Object.freeze({ ...delivery, currentTaskResult: Object.freeze({ ...latestHandoff, ...(failure ? { failure } : {}) }) });
 }

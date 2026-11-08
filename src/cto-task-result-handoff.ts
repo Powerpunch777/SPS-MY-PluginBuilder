@@ -130,7 +130,7 @@ function assertScopedGuardCoverage(guards: readonly RevisionPublicationGuard[], 
   }
   const missing = heads.filter(key => !keys.has(key));
   if (missing.length) throw new Error("Required current Task-result source guards are missing.");
-  if (!guards.some(guard => guard.stateKey.startsWith("task-source-outcome.v2."))) {
+  if (sourceSubmissionId !== null && !guards.some(guard => guard.stateKey.startsWith("task-source-outcome.v2."))) {
     throw new Error("Exact Task source claim outcome guard is missing.");
   }
   if (role === "qa" && sourceSubmissionId
@@ -166,6 +166,10 @@ async function taskResult(input: Readonly<{ workspaceId: string; workstreamId: s
       ? run.cancellationRequested === true && run.termination === "confirmed"
       : run.cancellationRequested === false && run.termination === "not_applicable";
     if (!terminalStateMatches) throw new Error("Worker terminal status and Core cancellation termination facts disagree.");
+    if (event.status === "failed") {
+      // Relay the Core failure fact, not a claim about whether partial file or Git effects occurred.
+      return { binding, requestId, run, sourceCommitSha: null, sourceSubmissionId: null, qaReportRevisionId: null };
+    }
   } else {
     const scope = { workspaceId, projectId: workspaceId, ctoId, workstreamId, qaTaskId: taskId };
     const reportStore = createTaskQaReportStore(scope, platform.state as RevisionState);

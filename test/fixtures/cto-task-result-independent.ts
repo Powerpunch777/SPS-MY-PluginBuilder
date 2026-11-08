@@ -21,14 +21,15 @@ type DispatchInput = { previousRunId: string; eventId: string; sourceSessionId: 
 type Dispatch = (sessionId: string, companyId: string, input: DispatchInput) => Promise<{ requestId: string; runId: string; replayed: boolean }>;
 type Admission = { sessionId: string; companyId: string; input: DispatchInput; requestId: string; runId: string };
 type WorkerResult = { worker: TaskWorkerRecord; packet: TaskPacketRecord; runId: string; requestId: string; eventId: string;
-  payload: { schemaVersion: 1; runId: string; sessionId: string; requestId: string; status: "succeeded"; resultSha256: string; finishedAt: string } };
+  payload: { schemaVersion: 1; runId: string; sessionId: string; requestId: string; status: "succeeded" | "failed"; resultSha256: string; finishedAt: string } };
 
 export const runDto = (runId: string, status = "running"): Run => ({ runId, status,
   cancellationRequested: status === "cancelled", termination: status === "cancelled" ? "confirmed" : "not_applicable",
   error: null, errorCode: null });
 
 /** In-memory stores, injected source/Run readers and fake dispatch only; no AI, Core or OS execution. */
-export async function workerResultFixture(count = 1) {
+export async function workerResultFixture(count = 1,
+  options: Readonly<{ noSourceSubmission?: boolean; sourceStatus?: "succeeded" | "failed" }> = {}) {
   const f = await fixture(W);
   await dispatchCtoWorkstream(f.params, ctx(), f.platform);
   const parent = (await f.deliveryStore().current())!.revision;
@@ -59,7 +60,7 @@ export async function workerResultFixture(count = 1) {
   const sourceRuns = new Map<string, ReturnType<typeof runDto>>();
   const sourceReceipts = new Map<string, Receipt>();
   const tips = new Map<string, { commitSha: string; treeSha: string }>();
-  let committingBranch = "";
+  let committingBranch = "", sourceSubmissionCalls = 0, commitCalls = 0;
   Object.assign(f.platform, { localFolders: {
     async status(folderKey: string) {
       return { folderKey, configured: true, access: "readWrite", readable: true, writable: true,
@@ -67,6 +68,7 @@ export async function workerResultFixture(count = 1) {
     },
     async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) { return { folderKey, workspaceSourceId, match: "same_root" }; },
     async commitTaskFilesV1(input: { branch: string; paths: string[] }) {
+      commitCalls++;
       committingBranch = input.branch;
       return { status: "committed", ...tips.get(input.branch)!, changedPaths: input.paths };
     },
@@ -83,19 +85,24 @@ export async function workerResultFixture(count = 1) {
       dependencyPins: packet.dependencyPins, role: "worker" as const, agentId: worker.agentId, sessionId: worker.sessionId, runId,
       source: { sourceId: access.sourceId, folderKey: access.folderKey, branch: access.branch!, expectedHead: access.expectedHead! },
       readPaths: access.readPaths, writePaths: access.writePaths, qaWritePaths: access.qaWritePaths };
-    const submitted = await submitTaskSourceFiles({ runContext: { companyId: W, projectId: W, agentId: worker.agentId,
-      sessionId: worker.sessionId, runId }, paths: access.writePaths, platform: f.platform, state: f.state,
-      async resolveAuthority() { return { binding, async assertCurrent() {} }; } });
-    assert.equal(submitted.status, "submitted", JSON.stringify(submitted));
-    assert.equal(committingBranch, access.branch);
+    if (!options.noSourceSubmission) {
+      sourceSubmissionCalls++;
+      const submitted = await submitTaskSourceFiles({ runContext: { companyId: W, projectId: W, agentId: worker.agentId,
+        sessionId: worker.sessionId, runId }, paths: access.writePaths, platform: f.platform, state: f.state,
+        async resolveAuthority() { return { binding, async assertCurrent() {} }; } });
+      assert.equal(submitted.status, "submitted", JSON.stringify(submitted));
+      assert.equal(committingBranch, access.branch);
+    }
     const requestId = taskWorkerRequestId(deriveTaskWorkerFileBinding({ workspaceId: W, projectId: W, ctoId: CTO,
       packet, currentPackets, worker }));
-    sourceRuns.set(runId, runDto(runId, "succeeded"));
+    const sourceStatus = options.sourceStatus ?? "succeeded";
+    sourceRuns.set(runId, { ...runDto(runId, sourceStatus),
+      ...(sourceStatus === "failed" ? { errorCode: "synthetic_worker_technical_failure", error: "Fixture-only failure; no source submission attempted" } : {}) });
     sourceReceipts.set(`${worker.sessionId}:${requestId}`, { requestId, state: "submitted", runId });
     // Deliberately reverse event order relative to arrival/ledger order for deterministic selection coverage.
     const eventId = `agent-session-terminal-v1:${(count - index).toString(16).padStart(64, "0")}`;
     const payload: WorkerResult["payload"] = { schemaVersion: 1, runId, sessionId: worker.sessionId, requestId,
-      status: "succeeded", resultSha256: hash([worker.taskId, "synthetic-result"]), finishedAt: now };
+      status: sourceStatus, resultSha256: hash([worker.taskId, sourceStatus, "synthetic-result"]), finishedAt: now };
     results.push({ worker, packet, runId, requestId, eventId, payload });
   }
   const sessions = f.platform.agents.sessions as typeof f.platform.agents.sessions & {
@@ -152,6 +159,7 @@ export async function workerResultFixture(count = 1) {
   const job = (payload: unknown, eventId: string) => ({ jobKey: MANAGER_SESSION_TERMINAL_JOB, companyId: W,
     runId: randomUUID(), trigger: "event", eventId, event: { eventType: "agent.session.run.terminal", payload } });
   return { f, sessions, results, sourceRuns, sourceReceipts, tips, packetStore, workers, registryKey, dispatches, attempts, parentRunId,
+    get sourceSubmissionCalls() { return sourceSubmissionCalls; }, get commitCalls() { return commitCalls; },
     childJob(index = 0) { return job(results[index]!.payload, results[index]!.eventId); },
     terminalParent(runId = parentRunId, status = "succeeded") {
       f.runs.set(runId, { ...f.runs.get(runId)!, ...runDto(runId, status) });

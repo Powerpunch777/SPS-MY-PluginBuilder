@@ -206,3 +206,94 @@ test("legacy fixed SDK missing the optional new method is surfaced by the regist
   assert.equal(f.dispatches.length, 0);
   assert.equal(f.f.sends, 1);
 });
+
+function assertNoSourceOrQaAuthority(f: Awaited<ReturnType<typeof workerResultFixture>>) {
+  assert.equal(f.sourceSubmissionCalls, 0, "noSourceSubmission skips submission entirely, not a deletion of committed journals");
+  assert.equal(f.commitCalls, 0);
+  const stateKeys = [...f.f.values.keys()].map(address => (JSON.parse(address) as { stateKey: string }).stateKey);
+  assert.deepEqual(stateKeys.filter(stateKey => /^task-source-(intent|outcome|acceptance)\.v/u.test(stateKey)), []);
+  assert.deepEqual(stateKeys.filter(stateKey => /^(task-qa-reports|task-protected-qa-runs|verified-consumption)[.-]/u.test(stateKey)), []);
+}
+
+test("registered no-source failed Worker terminal waits for CTO and dispatches one technical-result child without source or QA authority", async () => {
+  const f = await workerResultFixture(1, { noSourceSubmission: true, sourceStatus: "failed" });
+  assertNoSourceOrQaAuthority(f);
+  const source = f.results[0]!;
+  assert.deepEqual(await f.sessions.getRequest(source.worker.sessionId, W, source.requestId),
+    { requestId: source.requestId, state: "submitted", runId: source.runId });
+  assert.deepEqual(await f.sessions.getRun(source.worker.sessionId, W, source.runId), { ...runDto(source.runId, "failed"),
+    errorCode: "synthetic_worker_technical_failure", error: "Fixture-only failure; no source submission attempted" });
+  await deliver(f);
+  assert.equal(f.dispatches.length, 0);
+  const pending = await f.handoffs();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.phase, "pending");
+  assert.equal(pending[0]!.sourceStatus, "failed");
+  assert.equal(pending[0]!.sourceCommitSha, null);
+  assert.equal(pending[0]!.sourceSubmissionId, null);
+  assert.equal(pending[0]!.qaReportRevisionId, null);
+  assert.equal(pending[0]!.sourceRunId, source.runId);
+  await deliver(f);
+  assert.deepEqual(await f.handoffs(), pending);
+  await deliver(f, f.terminalParent());
+  assert.equal(f.dispatches.length, 1);
+  const accepted = (await f.handoffs())[0]!;
+  assert.equal(accepted.phase, "accepted");
+  assert.equal(accepted.sourceStatus, "failed");
+  assert.deepEqual([accepted.sourceCommitSha, accepted.sourceSubmissionId, accepted.qaReportRevisionId], [null, null, null]);
+  const child = f.dispatches[0]!;
+  assert.equal(accepted.runId, child.runId);
+  assert.equal(child.input.sourceRunId, source.runId);
+  assert.equal(child.input.sourceSessionId, source.worker.sessionId);
+  assert.equal(child.input.previousRunId, f.parentRunId);
+  const writesBeforeRead = f.f.writes;
+  const view = await readChild(f, child.runId);
+  const data = view.data as unknown as { currentTaskResult: typeof accepted; workstream: { receipt: unknown } };
+  assert.deepEqual(data.currentTaskResult, { ...accepted, failure: { code: "synthetic_worker_technical_failure",
+    recovery: "cto-review-required", automaticallyRetried: false, sourceEffects: "not-established" } },
+  "reader exposes a bounded technical diagnostic, not source acceptance, QA or an assertion of no effects");
+  assert.equal(JSON.stringify(data).includes("Fixture-only failure; no source submission attempted"), false, "raw Core error stays outside the CTO reader");
+  assert.equal(Object.hasOwn(accepted, "failure"), false);
+  assert.equal(Object.hasOwn((await f.handoffs())[0]!, "failure"), false, "diagnostic is read-only and not persisted into the handoff codec");
+  assert.equal(data.workstream.receipt, null);
+  assert.equal(f.f.writes, writesBeforeRead, "CTO read must not create an acceptance or promote verification");
+  assertNoSourceOrQaAuthority(f);
+  await deliver(f);
+  await deliver(f, f.terminalParent(f.parentRunId));
+  assert.equal(f.dispatches.length, 1);
+  assert.equal(f.f.sends, 1, "technical handoff never resumes the Worker or sends a replacement prompt");
+  assert.equal(f.sourceRuns.get(source.runId)!.status, "failed");
+  assertNoSourceOrQaAuthority(f);
+});
+
+test("registered no-source succeeded Worker terminal stays unresolved and cannot claim a successful result", async () => {
+  const f = await workerResultFixture(1, { noSourceSubmission: true, sourceStatus: "succeeded" });
+  assertNoSourceOrQaAuthority(f);
+  await assert.rejects(deliver(f), /handoff unresolved/u);
+  assert.equal(f.dispatches.length, 0);
+  assert.equal((await f.handoffs()).length, 0);
+  assert.equal(f.f.sends, 1);
+  assertNoSourceOrQaAuthority(f);
+});
+
+for (const changed of ["Task", "CTO"] as const) {
+  test(`registered no-source failed Worker cannot wake CTO after ${changed} authority changes`, async () => {
+    const f = await workerResultFixture(1, { noSourceSubmission: true, sourceStatus: "failed" });
+    await deliver(f);
+    assert.equal((await f.handoffs())[0]!.phase, "pending");
+    if (changed === "CTO") f.retireCto();
+    else {
+      const current = (await f.packetStore.current())!.revision;
+      assert.equal((await f.packetStore.publish({ expectedBaseRevisionId: current.revisionId, revision: {
+        ...current, revisionId: "changed-no-source-packets", packets: current.packets.map(row => ({ ...row,
+          packet: { ...row.packet, revision: row.packet.revision + 1 } })),
+      } })).status, "published");
+    }
+    await deliver(f, f.terminalParent()).catch(error => assert.match(String(error), /handoff unresolved/u));
+    assert.equal(f.dispatches.length, 0);
+    assert.equal((await f.handoffs())[0]!.phase, "pending");
+    assert.equal((await f.handoffs())[0]!.sourceStatus, "failed");
+    assert.equal(f.f.sends, 1);
+    assertNoSourceOrQaAuthority(f);
+  });
+}
