@@ -6,11 +6,12 @@ import { readProjectCtos } from "./project-cto-tools.ts";
 import { createTaskPacketStore } from "./task-packet-tools.ts";
 import { deriveTaskWorkerFileBinding, readTaskWorkerSessionRun } from "./task-worker-runtime.ts";
 import { readCtoTaskSourceAcceptanceForSubmission } from "./task-source-acceptance.ts";
-import { readTaskSourceClaim, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
+import { readTaskSourceClaim, readTaskSourceSubmission, type TaskSourceSubmissionBinding } from "./task-source-submissions.ts";
 import type { RevisionState } from "./solution-revision-store.ts";
 import { readWorkstreams } from "./workstream-tools.ts";
 import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
 import { createTaskQaRunReferenceStore, type TaskQaRunReference } from "./task-qa-run-references.ts";
+import { createTaskQaReportStore } from "./task-qa-reports.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const MAX_RUNS = 128;
@@ -19,13 +20,18 @@ export type WorkerExecutionMetric = Readonly<{ ctoId: string; workstreamId: stri
   packetRevision: number; requestId: string; runId: string | null; runStatus: string;
   normalEnded: boolean; timing: Timing | null; queueMs: number | null; executionMs: number | null; reason: string | null;
   commitAcceptanceMs: number | null }>;
+export type TaskDevelopmentMetric = Readonly<{ ctoId: string; workstreamId: string; taskId: string; packetRevision: number;
+  preparedAt: string; submittedAt: string | null; sourceSubmissionMs: number | null;
+  reworkCount: number | null; reworkBasis: "failed-qa-then-changed-source-and-new-qa";
+  historyCoverage: "complete-current-task-scope" | "unavailable-or-incomplete" }>;
 export type ExecutionMetrics = Readonly<{ status: "ready"; workspaceId: string; projectId: string; observedAt: string;
   consistency: "rechecked-current-records-not-a-global-transaction";
   runs: readonly WorkerExecutionMetric[]; summary: Readonly<{ observedRuns: number; normalEndedRuns: number;
     measuredRuns: number; totalExecutionMs: number | null; totalQueueMs: number | null;
     commitAcceptanceCount: number; totalCommitAcceptanceMs: number | null }>;
+  development?: Readonly<{ tasks: readonly TaskDevelopmentMetric[]; observedExecutionWindowMs: number | null }>;
   unmeasured: Readonly<{ taskCompletionMs: null; permissionWaitMs: null; integrationWaitMs: null;
-    reworkCount: null; manualInterventionCount: null }>; completionAuthority: "not-established" }>;
+    reworkCount: number | null; manualInterventionCount: null }>; completionAuthority: "not-established" }>;
 
 function unmeasuredQaContinuation(input: Readonly<{ ctoId: string; workstreamId: string; taskId: string; packetRevision: number;
   requestId: string; reason: string; runId?: string | null; runStatus?: string }>): WorkerExecutionMetric {
@@ -219,9 +225,140 @@ function instant(value: unknown): number | null {
   return Number.isFinite(time) && new Date(time).toISOString() === value ? time : null;
 }
 
+/** Union of observed execution intervals, not elapsed project or Task completion time. */
+export function observedExecutionWindowMs(runs: readonly Pick<WorkerExecutionMetric, "timing" | "executionMs">[]): number | null {
+  const intervals = runs.filter(run => run.executionMs !== null && run.timing?.startedAt && run.timing.finishedAt)
+    .map(run => [instant(run.timing!.startedAt), instant(run.timing!.finishedAt)] as const);
+  if (!intervals.length || intervals.some(([start, end]) => start === null || end === null || end < start)) return null;
+  intervals.sort((a, b) => a[0]! - b[0]!);
+  let total = 0, start = intervals[0]![0]!, end = intervals[0]![1]!;
+  for (const [nextStart, nextEnd] of intervals.slice(1)) {
+    if (nextStart! > end) { total += end - start; start = nextStart!; }
+    end = Math.max(end, nextEnd!);
+  }
+  total += end - start;
+  return Number.isSafeInteger(total) ? total : null;
+}
+
+type SubmissionMetric = Readonly<{ submittedAt: string; submissionId: string; commitSha: string; sourceSubmissionMs: number | null }>;
+
+async function currentTaskRework(input: Readonly<{ workspaceId: string; ctoId: string; workstreamId: string;
+  packet: TaskPacketRecord; packets: readonly TaskPacketRecord[]; submission: SubmissionMetric | null;
+  platform: SpsPlatformInvocationContext }>): Promise<Pick<TaskDevelopmentMetric, "reworkCount" | "historyCoverage">> {
+  const unavailable = { reworkCount: null, historyCoverage: "unavailable-or-incomplete" } as const;
+  if (!input.submission) return unavailable;
+  try {
+    const state = input.platform.state as typeof input.platform.state & RevisionState;
+    const packetStore = createTaskPacketStore(input.workspaceId, input.workspaceId, input.ctoId, input.workstreamId, state);
+    const boards = await packetStore.recent(50);
+    if (boards.hasMore) return unavailable;
+    const qaPackets = input.packets.filter(row => row.packet.kind === "qa"
+      && row.dependencyPins.some(pin => pin.taskId === input.packet.packet.taskId));
+    if (qaPackets.length !== 1) return unavailable;
+    const qaTaskId = qaPackets[0]!.packet.taskId;
+    if (boards.revisions.some(({ revision }) => revision.packets.some(row => row.packet.kind === "qa"
+      && row.packet.taskId !== qaTaskId && row.dependencyPins.some(pin => pin.taskId === input.packet.packet.taskId)))) return unavailable;
+    const scope = { workspaceId: input.workspaceId, projectId: input.workspaceId, ctoId: input.ctoId,
+      workstreamId: input.workstreamId, qaTaskId };
+    const references = await createTaskQaRunReferenceStore(scope, state).recent(50);
+    const reports = await createTaskQaReportStore(scope, state).recent(50);
+    if (references.hasMore || reports.hasMore || !references.revisions.length || !reports.revisions.length) return unavailable;
+    const latest = references.revisions[0]!.revision.binding;
+    const packetDigest = taskPacketRecordDigest(input.packet, input.workspaceId, input.ctoId, input.workstreamId);
+    if (latest.implementationDigest !== packetDigest || latest.implementationRevision !== input.packet.packet.revision
+      || latest.qaDigest !== taskPacketRecordDigest(qaPackets[0]!, input.workspaceId, input.ctoId, input.workstreamId)
+      || latest.qaRevision !== qaPackets[0]!.packet.revision
+      || latest.submissionId !== input.submission.submissionId || latest.commitSha !== input.submission.commitSha) return unavailable;
+    const ordered = [...references.revisions].reverse().map(row => row.revision);
+    const matchingPacket = (reference: TaskQaRunReference) => boards.revisions.some(({ revision }) => {
+      const binding = reference.binding;
+      const dev = revision.packets.find(row => row.packet.taskId === input.packet.packet.taskId);
+      const qa = revision.packets.find(row => row.packet.taskId === qaTaskId);
+      return dev && qa && dev.source.instructionSha256 === input.packet.source.instructionSha256
+        && dev.packet.kind === "development" && dev.packet.revision === binding.implementationRevision
+        && taskPacketRecordDigest(dev, input.workspaceId, input.ctoId, input.workstreamId) === binding.implementationDigest
+        && qa.packet.kind === "qa" && qa.packet.revision === binding.qaRevision
+        && taskPacketRecordDigest(qa, input.workspaceId, input.ctoId, input.workstreamId) === binding.qaDigest
+        && qa.dependencyPins.some(pin => pin.taskId === dev.packet.taskId && pin.revision === dev.packet.revision
+          && pin.recordSha256 === binding.implementationDigest);
+    });
+    const access = input.packet.packet.sourceAccess;
+    const relevant = ordered.filter(ref => ref.binding.implementationTaskId === input.packet.packet.taskId
+      && ref.binding.sourceId === access?.sourceId && ref.binding.folderKey === access.folderKey
+      && ref.binding.branch === access.branch && matchingPacket(ref));
+    if (relevant.length !== ordered.length) return unavailable;
+    const cycles = new Set<string>();
+    const sourceSubmittedAt = async (reference: TaskQaRunReference): Promise<number | null> => {
+      const binding = reference.binding;
+      if (binding.submissionId === input.submission!.submissionId && binding.commitSha === input.submission!.commitSha) {
+        return instant(input.submission!.submittedAt);
+      }
+      const packet = boards.revisions.flatMap(row => row.revision.packets).find(row => row.packet.kind === "development"
+        && row.packet.taskId === input.packet.packet.taskId && row.packet.revision === binding.implementationRevision
+        && taskPacketRecordDigest(row, input.workspaceId, input.ctoId, input.workstreamId) === binding.implementationDigest);
+      const source = packet?.packet.sourceAccess;
+      if (!packet || !source?.branch || !source.expectedHead) return null;
+      const registry = parseTaskWorkerRegistry(await state.get({ scopeKind: "company", scopeId: input.workspaceId,
+        namespace: "sonpark.my-builder", stateKey: taskWorkerRegistryKey(input.workspaceId, input.ctoId) }),
+      input.workspaceId, input.workspaceId, input.ctoId);
+      const workers = registry.records.filter(row => row.role === "worker" && row.workstreamId === input.workstreamId
+        && row.taskId === packet.packet.taskId && row.packetRevision === packet.packet.revision
+        && row.packetRecordSha256 === binding.implementationDigest);
+      if (workers.length !== 1) return null;
+      const worker = workers[0]!;
+      const claimed = await readTaskSourceSubmission({ state, submissionId: binding.submissionId, binding: {
+        schemaVersion: 1, workspaceId: input.workspaceId, projectId: input.workspaceId, ctoId: input.ctoId,
+        workstreamId: input.workstreamId, taskId: packet.packet.taskId, packetRevision: packet.packet.revision,
+        packetRecordSha256: binding.implementationDigest, dependencyPins: packet.dependencyPins, role: "worker",
+        agentId: worker.agentId, sessionId: worker.sessionId,
+        source: { sourceId: source.sourceId, folderKey: source.folderKey, branch: source.branch, expectedHead: source.expectedHead },
+        readPaths: source.readPaths, writePaths: source.writePaths, qaWritePaths: source.qaWritePaths,
+      } });
+      if (claimed.status !== "submitted" || claimed.submission.commitSha !== binding.commitSha
+        || claimed.submission.treeSha !== binding.treeSha || claimed.submission.authorityAfterCommit !== "current") return null;
+      const accepted = await readCtoTaskSourceAcceptanceForSubmission({ workspaceId: input.workspaceId, submission: claimed.submission, state });
+      return accepted?.acceptanceId === binding.acceptanceId ? instant(claimed.submission.submittedAt) : null;
+    };
+    const api = input.platform as SpsPlatformInvocationContext & { protectedTests?: {
+      getRunV1?(workspaceId: string, runId: string, subjectKeySha256: string): Promise<unknown>;
+    } };
+    for (const { revision: report } of reports.revisions) {
+      if (report.verdict !== "failed") continue;
+      const index = relevant.findIndex(ref => JSON.stringify(ref.binding) === JSON.stringify(report.reference.binding));
+      if (index < 0) return unavailable;
+      const before = relevant[index]!.binding;
+      const next = relevant.slice(index + 1).find(ref => ref.binding.commitSha !== before.commitSha
+        && ref.binding.submissionId !== before.submissionId && ref.binding.runId !== before.runId);
+      // A failed check, same-source retry, or revised prose alone is not completed source rework.
+      if (!next) continue;
+      if (typeof api.protectedTests?.getRunV1 !== "function") return unavailable;
+      const author = await input.platform.agents.sessions.getRun(report.author.sessionId, input.workspaceId, report.author.runId);
+      if (author.runId !== report.author.runId || author.status !== "succeeded" || author.cancellationRequested !== false
+        || author.termination !== "not_applicable") return unavailable;
+      const timing = readExecutionTiming(ownData(author, "timing"), author.status, new Date().toISOString());
+      const finished = timing?.timing.finishedAt ? instant(timing.timing.finishedAt) : null;
+      const core = exactToolRecord(await api.protectedTests.getRunV1(input.workspaceId, next.binding.runId, next.binding.subjectKeySha256),
+        ["schemaVersion", "kind", "id", "status", "termination", "pins", "receipt", "timestamps", "qaVerdict"]);
+      const pins = core.pins;
+      if (core.schemaVersion !== 1 || core.kind !== "protected-node-test-v1" || core.id !== next.binding.runId
+        || core.qaVerdict !== "not-established" || !["queued", "claimed", "running", "cancelling", "succeeded", "failed", "cancelled"].includes(String(core.status))
+        || !["not_applicable", "pending", "confirmed"].includes(String(core.termination))
+        || ownData(pins, "sourceId") !== next.binding.sourceId || ownData(pins, "commitSha") !== next.binding.commitSha
+        || ownData(pins, "treeSha") !== next.binding.treeSha || ownData(pins, "subjectKeySha256") !== next.binding.subjectKeySha256
+        || ownData(pins, "approvalId") !== next.binding.approvalId || ownData(pins, "planSha256") !== next.binding.planSha256) return unavailable;
+      const created = instant(ownData(core.timestamps, "createdAt"));
+      const submitted = await sourceSubmittedAt(next);
+      if (finished === null || created === null || submitted === null || submitted < finished
+        || created < submitted || created > Date.now()) return unavailable;
+      cycles.add(JSON.stringify([before.submissionId, next.binding.submissionId]));
+    }
+    return { reworkCount: cycles.size, historyCoverage: "complete-current-task-scope" };
+  } catch { return unavailable; }
+}
+
 async function currentCommitAcceptanceMs(input: Readonly<{ workspaceId: string; projectId: string; ctoId: string;
   workstreamId: string; packet: TaskPacketRecord; worker: TaskWorkerRecord; packets: readonly TaskPacketRecord[];
-  platform: SpsPlatformInvocationContext; assertCurrent(): Promise<void> }>): Promise<number | null> {
+  platform: SpsPlatformInvocationContext; assertCurrent(): Promise<void>; onSubmission?(value: SubmissionMetric): void }>): Promise<number | null> {
   if (input.worker.role !== "worker" || !input.packet?.packet.sourceAccess?.branch || !input.packet.packet.sourceAccess.expectedHead) return null;
   try {
     const packetDigest = taskPacketRecordDigest(input.packet, input.projectId, input.ctoId, input.workstreamId);
@@ -253,6 +390,10 @@ async function currentCommitAcceptanceMs(input: Readonly<{ workspaceId: string; 
       || submission.ctoId !== input.ctoId || submission.workstreamId !== input.workstreamId
       || submission.taskId !== input.packet.packet.taskId || submission.packetRevision !== input.packet.packet.revision
       || submission.packetRecordSha256 !== packetDigest) return null;
+    const prepared = instant(input.packet.createdAtISO), submitted = instant(submission.submittedAt);
+    if (submitted !== null && submitted <= Date.now()) input.onSubmission?.({ submittedAt: submission.submittedAt,
+      submissionId: submission.submissionId, commitSha: submission.commitSha,
+      sourceSubmissionMs: prepared !== null && prepared <= submitted && Number.isSafeInteger(submitted - prepared) ? submitted - prepared : null });
     const acceptance = await readCtoTaskSourceAcceptanceForSubmission({ workspaceId: input.workspaceId, submission, state });
     await input.assertCurrent();
     if (!acceptance || acceptance.submissionId !== submission.submissionId || acceptance.commitSha !== submission.commitSha
@@ -313,7 +454,7 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
     const sharedScope = new Set<string>(), tracked = track(sharedScope);
     const board = await readWorkstreams(workspaceId, workspaceId, tracked), ctos = await readProjectCtos(workspaceId, workspaceId, tracked);
     if ((board?.revision.workstreams.length ?? 0) > 64 || ctos.ctos.length > 64) return { status: "unknown", reason: "metrics-scope-over-bound" };
-    const runs: WorkerExecutionMetric[] = [], seenRuns = new Set<string>();
+    const runs: WorkerExecutionMetric[] = [], tasks: TaskDevelopmentMetric[] = [], seenRuns = new Set<string>();
     for (const workstream of board?.revision.workstreams ?? []) {
       const ctoId = workstream.spec.assignedCtoId, workstreamId = workstream.spec.id;
       if (!ctos.ctos.some(cto => cto.ctoId === ctoId && cto.status !== "RETIRED")) throw new Error("Metrics CTO is not current.");
@@ -334,9 +475,18 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
         if (runs.length >= MAX_RUNS) return { status: "unknown", reason: "metrics-run-inventory-over-bound" };
         const rowScope = new Set(workstreamScope), rowPlatform = track(rowScope);
         const assertCurrent = () => check(rowScope);
+        const submission: { value: SubmissionMetric | null } = { value: null };
         const commitAcceptanceMs = worker.role === "worker" ? await currentCommitAcceptanceMs({ workspaceId,
           projectId: workspaceId, ctoId, workstreamId, packet, worker, packets: packets!.revision.packets,
-          platform: rowPlatform, assertCurrent }) : null;
+          platform: rowPlatform, assertCurrent, onSubmission(value) { submission.value = value; } }) : null;
+        if (worker.role === "worker") {
+          const rework = await currentTaskRework({ workspaceId, ctoId, workstreamId, packet,
+            packets: packets!.revision.packets, submission: commitAcceptanceMs === null ? null : submission.value, platform: rowPlatform });
+          tasks.push({ ctoId, workstreamId, taskId: worker.taskId, packetRevision: packet.packet.revision,
+            preparedAt: packet.createdAtISO, submittedAt: submission.value?.submittedAt ?? null,
+            sourceSubmissionMs: submission.value?.sourceSubmissionMs ?? null,
+            reworkBasis: "failed-qa-then-changed-source-and-new-qa", ...rework });
+        }
         const observation = await readTaskWorkerSessionRun({ platform: rowPlatform, binding, assertCurrent });
         const base = { ctoId, workstreamId, taskId: worker.taskId, role: worker.role, packetRevision: worker.packetRevision,
           requestId: observation.requestId, runId: observation.runId, commitAcceptanceMs };
@@ -344,7 +494,7 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
           runs.push({ ...base, runStatus: observation.status, normalEnded: false, timing: null, queueMs: null, executionMs: null, reason: observation.reason });
           const continuation = await currentQaContinuationMetric({ workspaceId, ctoId, workstreamId, packet,
             packets: packets!.revision.packets, worker, requestId: observation.requestId, originalRunId: observation.runId,
-            platform, seenRuns });
+            platform: rowPlatform, seenRuns });
           if (continuation) {
             if (runs.length >= MAX_RUNS) return { status: "unknown", reason: "metrics-run-inventory-over-bound" };
             runs.push(continuation);
@@ -364,7 +514,7 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
           executionMs: parsed?.executionMs ?? null, reason: parsed ? null : "host-run-timing-unavailable-or-inconsistent" });
         const continuation = await currentQaContinuationMetric({ workspaceId, ctoId, workstreamId, packet,
           packets: packets!.revision.packets, worker, requestId: observation.requestId, originalRunId: observation.runId,
-          platform, seenRuns });
+          platform: rowPlatform, seenRuns });
         if (continuation) {
           if (runs.length >= MAX_RUNS) return { status: "unknown", reason: "metrics-run-inventory-over-bound" };
           runs.push(continuation);
@@ -388,7 +538,10 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
       summary: { observedRuns: runs.filter(run => run.runId !== null && !["unknown", "unsupported", "pending"].includes(run.runStatus)).length,
         normalEndedRuns: runs.filter(run => run.normalEnded).length, measuredRuns: executions.length,
         totalExecutionMs, totalQueueMs, commitAcceptanceCount: acceptedCommits.length, totalCommitAcceptanceMs },
-      unmeasured: { taskCompletionMs: null, permissionWaitMs: null, integrationWaitMs: null, reworkCount: null, manualInterventionCount: null },
+      development: { tasks, observedExecutionWindowMs: observedExecutionWindowMs(runs) },
+      unmeasured: { taskCompletionMs: null, permissionWaitMs: null, integrationWaitMs: null,
+        reworkCount: tasks.length && tasks.every(task => task.reworkCount !== null)
+          ? tasks.reduce((total, task) => total + task.reworkCount!, 0) : null, manualInterventionCount: null },
       completionAuthority: "not-established" };
   } catch { return { status: "unknown", reason: "metrics-current-scope-or-run-observation-unavailable" }; }
 }

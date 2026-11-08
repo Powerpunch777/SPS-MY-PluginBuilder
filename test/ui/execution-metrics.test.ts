@@ -64,6 +64,15 @@ function metricsWithUnstartedRequest() {
   ], summary: { observedRuns: 0, normalEndedRuns: 0, measuredRuns: 0, totalExecutionMs: null, totalQueueMs: null } };
 }
 
+function metricsWithDevelopment() {
+  const base = metricsWithCommitAcceptance();
+  return { ...base, unmeasured: { ...base.unmeasured, reworkCount: 1 },
+    development: { observedExecutionWindowMs: 1250, tasks: [{ ctoId: "cto-one", workstreamId: "ws-1", taskId: "task-worker",
+      packetRevision: 1, preparedAt: "2026-11-07T00:00:00.000Z", submittedAt: "2026-11-07T00:00:01.500Z",
+      sourceSubmissionMs: 1500, reworkCount: 1, reworkBasis: "failed-qa-then-changed-source-and-new-qa",
+      historyCoverage: "complete-current-task-scope" }] } };
+}
+
 async function loadMetricsPanel() {
   const temporary = await mkdtemp(path.join(projectRoot, PANEL_TEMP_PREFIX));
   const output = path.join(temporary, "ExecutionMetricsSection.mjs");
@@ -176,6 +185,36 @@ test("strict metrics parser rejects false, incomplete, foreign, role-invalid, an
   } finally { await removeOwnedTemp(temporary, PANEL_TEMP_PREFIX); }
 });
 
+test("record-backed development DTO renders measured source work without promoting absent completion, permission or manual evidence", async () => {
+  const { Panel, parseDTO, temporary } = await loadMetricsPanel();
+  try {
+    const value = metricsWithDevelopment();
+    assert.ok(parseDTO(value, WORKSPACE));
+    const html = renderPanel(Panel, value);
+    assert.match(html, /관측 실행 구간\(중복 제외\)/u);
+    assert.match(html, /Task 준비→소스 제출/u);
+    assert.match(html, /기록 기반 재작업 횟수/u);
+    assert.match(html, /1회/u);
+    assert.match(html, /Task 완료 시간<\/dt><dd[^>]*>미측정/u);
+    assert.match(html, /수동 개입 횟수<\/dt><dd[^>]*>미측정/u);
+    for (const invalid of [
+      { ...value, development: { ...value.development, observedExecutionWindowMs: 2500 } },
+      { ...value, unmeasured: { ...value.unmeasured, reworkCount: 2 } },
+      { ...value, unmeasured: { ...value.unmeasured, taskCompletionMs: 1250 } },
+      { ...value, unmeasured: { ...value.unmeasured, manualInterventionCount: 0 } },
+      { ...value, development: { ...value.development, tasks: value.development.tasks.map(task => ({ ...task, sourceSubmissionMs: 1 })) } },
+      { ...value, development: { ...value.development, tasks: value.development.tasks.map(task => ({ ...task, taskId: "foreign-task" })) } },
+      { ...value, development: { ...value.development, tasks: value.development.tasks.map(task => ({ ...task, historyCoverage: "unavailable-or-incomplete" })) } },
+      { ...value, development: { ...value.development, tasks: [...value.development.tasks, ...value.development.tasks] } },
+    ]) assert.equal(parseDTO(invalid, WORKSPACE), null);
+    let reads = 0;
+    const accessor = metricsWithDevelopment();
+    Object.defineProperty(accessor.development.tasks[0], "sourceSubmissionMs", { enumerable: true, get() { reads++; return 1500; } });
+    assert.equal(parseDTO(accessor, WORKSPACE), null);
+    assert.equal(reads, 0);
+  } finally { await removeOwnedTemp(temporary, PANEL_TEMP_PREFIX); }
+});
+
 test("Builder mounts execution metrics only in System and has no page-level horizontal overflow", async () => {
   const temporary = await mkdtemp(path.join(projectRoot, BROWSER_TEMP_PREFIX));
   const evidenceDirectory = process.env.SPS_EXECUTION_METRICS_QA_EVIDENCE_DIR?.trim();
@@ -250,6 +289,14 @@ test("Builder mounts execution metrics only in System and has no page-level hori
     await page.setViewportSize({ width: 1440, height: 900 });
     assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true, "1440px viewport must not overflow horizontally");
     await saveScreenshot(page, "builder-metrics-1440.png");
+    await page.evaluate(value => (window as unknown as { mountBuilder(value: unknown): void }).mountBuilder(value), metricsWithDevelopment());
+    await page.getByText("1회", { exact: true }).waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true);
+    await saveScreenshot(page, "builder-metrics-development-390.png");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true);
+    await saveScreenshot(page, "builder-metrics-development-1440.png");
     const pending = metricsWithUnstartedRequest();
     const initial = { ...pending.runs[0]!, taskId: "task-qa", role: "qa", reason: "qa-origin-not-observed" };
     const continuation = { ...initial, reason: "qa-continuation-current-session-unavailable" };

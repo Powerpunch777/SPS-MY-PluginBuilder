@@ -263,9 +263,12 @@ export async function readCtoTaskSourceAcceptanceForSubmission(input: Readonly<{
 }
 
 async function verifyProducerRun(current: Current, submission: TaskSourceSubmission, platform: SpsPlatformInvocationContext) {
-  const worker = current.workerRecords.find(record => record.role === submission.role && record.agentId === submission.producer.agentId
-    && record.sessionId === submission.producer.sessionId);
-  if (!worker) throw new Error("Submitted source producer is not the current exact registered Task role.");
+  const matching = current.workerRecords.filter(record => record.role === submission.role && record.agentId === submission.producer.agentId
+    && record.sessionId === submission.producer.sessionId && record.workstreamId === current.workstreamId
+    && record.taskId === current.taskId && record.packetRevision === current.task.packet.revision
+    && record.packetRecordSha256 === current.packetDigest);
+  if (matching.length !== 1) throw new Error("Submitted source producer is not the current exact registered Task role.");
+  const worker = matching[0]!;
   const binding = deriveTaskWorkerFileBinding({ workspaceId: current.workspaceId, projectId: current.projectId, ctoId: current.ctoId,
     packet: current.task, currentPackets: current.packets, worker });
   const sessions = platform.agents.sessions as typeof platform.agents.sessions & {

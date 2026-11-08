@@ -31,7 +31,8 @@ export function parseExecutionMetricsDTO(value: unknown, workspaceId: string): E
   const instant = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value))
     && new Date(Date.parse(value)).toISOString() === value;
   try {
-    const row = fields(value, ["status", "workspaceId", "projectId", "observedAt", "consistency", "runs", "summary", "unmeasured", "completionAuthority"]);
+    const legacyFields = ["status", "workspaceId", "projectId", "observedAt", "consistency", "runs", "summary", "unmeasured", "completionAuthority"];
+    const row = fieldsWithLegacyShape(value, legacyFields, [...legacyFields, "development"]).row;
     if (row.status !== "ready" || !uuid(workspaceId) || row.workspaceId !== workspaceId || row.projectId !== workspaceId
       || !instant(row.observedAt) || row.consistency !== "rechecked-current-records-not-a-global-transaction"
       || row.completionAuthority !== "not-established" || !Array.isArray(row.runs) || Object.getPrototypeOf(row.runs) !== Array.prototype
@@ -41,7 +42,8 @@ export function parseExecutionMetricsDTO(value: unknown, workspaceId: string): E
       ["observedRuns", "normalEndedRuns", "measuredRuns", "totalExecutionMs", "totalQueueMs", "commitAcceptanceCount", "totalCommitAcceptanceMs"]);
     const summary = summaryShapes.row;
     const unmeasured = fields(row.unmeasured, ["taskCompletionMs", "permissionWaitMs", "integrationWaitMs", "reworkCount", "manualInterventionCount"]);
-    if (!Object.values(unmeasured).every(value => value === null)) return null;
+    if ([unmeasured.taskCompletionMs, unmeasured.permissionWaitMs, unmeasured.integrationWaitMs, unmeasured.manualInterventionCount]
+      .some(value => value !== null) || !safeDuration(unmeasured.reworkCount)) return null;
     const runs: Record<string, unknown>[] = [];
     for (let index = 0; index < row.runs.length; index++) {
       const item = Object.getOwnPropertyDescriptor(row.runs, String(index));
@@ -78,6 +80,49 @@ export function parseExecutionMetricsDTO(value: unknown, workspaceId: string): E
       }
       runs.push(run);
     }
+    if (Object.hasOwn(row, "development")) {
+      const development = fields(row.development, ["tasks", "observedExecutionWindowMs"]);
+      if (!Array.isArray(development.tasks) || Object.getPrototypeOf(development.tasks) !== Array.prototype
+        || development.tasks.length > 128 || Reflect.ownKeys(development.tasks).length !== development.tasks.length + 1) return null;
+      const tasks: Record<string, unknown>[] = [], identities = new Set<string>();
+      for (let index = 0; index < development.tasks.length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(development.tasks, String(index));
+        if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) return null;
+        const task = fields(descriptor.value, ["ctoId", "workstreamId", "taskId", "packetRevision", "preparedAt", "submittedAt",
+          "sourceSubmissionMs", "reworkCount", "reworkBasis", "historyCoverage"]);
+        const identity = JSON.stringify([task.ctoId, task.workstreamId, task.taskId]);
+        const prepared = instant(task.preparedAt) ? Date.parse(task.preparedAt as string) : null;
+        const submitted = task.submittedAt === null ? null : instant(task.submittedAt) ? Date.parse(task.submittedAt as string) : NaN;
+        if (![task.ctoId, task.workstreamId, task.taskId].every(id) || identities.has(identity)
+          || !Number.isSafeInteger(task.packetRevision) || (task.packetRevision as number) < 1
+          || prepared === null || ![task.sourceSubmissionMs, task.reworkCount].every(safeDuration)
+          || submitted !== null && (!Number.isFinite(submitted) || submitted > Date.parse(row.observedAt as string))
+          || task.sourceSubmissionMs !== null && (submitted === null || prepared > submitted || task.sourceSubmissionMs !== submitted - prepared)
+          || task.reworkBasis !== "failed-qa-then-changed-source-and-new-qa"
+          || !["complete-current-task-scope", "unavailable-or-incomplete"].includes(String(task.historyCoverage))
+          || (task.reworkCount === null) !== (task.historyCoverage === "unavailable-or-incomplete")
+          || !runs.some(run => run.role === "worker" && run.ctoId === task.ctoId && run.workstreamId === task.workstreamId
+            && run.taskId === task.taskId && run.packetRevision === task.packetRevision)) return null;
+        identities.add(identity); tasks.push(task);
+      }
+      const intervals = runs.filter(run => run.executionMs !== null).map(run => {
+        const timing = run.timing as { startedAt: string; finishedAt: string };
+        return [Date.parse(timing.startedAt), Date.parse(timing.finishedAt)];
+      }).sort((a, b) => a[0]! - b[0]!);
+      let union: number | null = null;
+      if (intervals.length) {
+        let total = 0, start = intervals[0]![0]!, end = intervals[0]![1]!;
+        for (const interval of intervals.slice(1)) {
+          if (interval[0]! > end) { total += end - start; start = interval[0]!; }
+          end = Math.max(end, interval[1]!);
+        }
+        union = total + end - start;
+      }
+      if (!safeDuration(development.observedExecutionWindowMs) || development.observedExecutionWindowMs !== union
+        || unmeasured.reworkCount !== (tasks.length && tasks.every(task => task.reworkCount !== null)
+          ? tasks.reduce((total, task) => total + (task.reworkCount as number), 0) : null)) return null;
+      row.development = { tasks, observedExecutionWindowMs: union };
+    } else if (unmeasured.reworkCount !== null) return null;
     const sum = (key: "queueMs" | "executionMs") => {
       const measured = runs.filter(run => run[key] !== null);
       return measured.length ? measured.reduce((total, run) => total + (run[key] as number), 0) : null;
@@ -121,19 +166,24 @@ export function ExecutionMetricsPanel({ value, workspaceId, loading, error, onRe
       <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,150px),1fr))", gap: 12, margin: "12px 0" }}>
         {[["관측 Run", String(metrics.summary.observedRuns)], ["정상 종료 Run", String(metrics.summary.normalEndedRuns)],
           ["실행 시간 측정 Run", String(metrics.summary.measuredRuns)], ["누적 AI 실행 시간", duration(metrics.summary.totalExecutionMs)],
+          ["관측 실행 구간(중복 제외)", duration(metrics.development?.observedExecutionWindowMs ?? null)],
           ["누적 실행 큐 대기", duration(metrics.summary.totalQueueMs)], ["Commit 인수 대기", duration(metrics.summary.totalCommitAcceptanceMs)],
           ["Task 완료 시간", "미측정"], ["권한 대기", "미측정"],
-          ["통합 대기", "미측정"], ["재작업 횟수", "미측정"], ["수동 개입 횟수", "미측정"]].map(([label, result]) =>
+          ["통합 대기", "미측정"], ["기록 기반 재작업 횟수", metrics.unmeasured.reworkCount === null ? "미측정" : `${metrics.unmeasured.reworkCount}회`],
+          ["수동 개입 횟수", "미측정"]].map(([label, result]) =>
           <div key={label}><dt style={{ color: "var(--builder-muted,#b6b6b6)" }}>{label}</dt><dd style={{ margin: "4px 0 0" }}>{result}</dd></div>)}
       </dl>
       <p style={{ color: "var(--builder-muted,#b6b6b6)" }}>Run 종료는 Task·QA·프로젝트 완료가 아닙니다. 기록된 시각만 측정하며 미측정 값을 0으로 계산하지 않습니다.</p>
       {!metrics.runs.length ? <p>현재 Task에 등록된 Worker 실행 기록이 없습니다.</p> : <div style={{ overflowX: "auto", maxWidth: "100%" }}>
         <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", textAlign: "left", color: "var(--builder-text,#ededed)" }}><thead><tr>
-          {["Workstream / Task", "역할", "Run 상태", "실행 시간", "큐 대기", "Commit 인수 대기"].map(label => <th key={label} style={{ padding: 8 }}>{label}</th>)}
+          {["Workstream / Task", "역할", "Run 상태", "실행 시간", "큐 대기", "Task 준비→소스 제출", "Commit 인수 대기"].map(label => <th key={label} style={{ padding: 8 }}>{label}</th>)}
         </tr></thead><tbody>{metrics.runs.map(run => <tr key={JSON.stringify([run.ctoId, run.workstreamId,
           run.taskId, run.role, run.requestId, run.runId, run.reason])}>
           <td style={{ padding: 8, overflowWrap: "anywhere" }}>{run.workstreamId} / {run.taskId}</td><td>{run.role}</td><td>{runStatusLabel(run)}</td>
-          <td>{duration(run.executionMs)}</td><td>{duration(run.queueMs)}</td><td>{duration(run.commitAcceptanceMs ?? null)}</td>
+          <td>{duration(run.executionMs)}</td><td>{duration(run.queueMs)}</td><td>{duration(run.role === "worker"
+            ? metrics.development?.tasks.find(task => task.ctoId === run.ctoId && task.workstreamId === run.workstreamId
+              && task.taskId === run.taskId && task.packetRevision === run.packetRevision)?.sourceSubmissionMs ?? null : null)}</td>
+          <td>{duration(run.commitAcceptanceMs ?? null)}</td>
         </tr>)}</tbody></table>
       </div>}
     </>}
