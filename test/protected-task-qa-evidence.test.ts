@@ -176,6 +176,36 @@ async function setup(options: Readonly<{ timing?: boolean; wrongProducerRun?: bo
   const reportCurrent = await reportStore().current();
   assert.ok(reportCurrent);
   return { f, ctoNow, reportStore, referenceStore, reportParams, workers,
+    cancelQaRunAfterSourceProof(phase: "root" | "tip") {
+      const state = f.state as unknown as RevisionState;
+      const originalGet = state.get.bind(state);
+      let acceptanceRead = false, observed = false;
+      state.get = async stateKey => {
+        const value = await originalGet(stateKey);
+        if (stateKey.stateKey === `task-source-acceptance.v1.${submitted.submission!.submissionId}`) acceptanceRead = true;
+        return value;
+      };
+      const folders = (f.platform as unknown as { localFolders: {
+        matchWorkspaceSourceV1(folderKey: string, sourceId: string): Promise<unknown>;
+        readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string): Promise<unknown>;
+      } }).localFolders;
+      if (phase === "root") {
+        const originalMatch = folders.matchWorkspaceSourceV1!.bind(folders);
+        folders.matchWorkspaceSourceV1 = async (...args) => {
+          const value = await originalMatch(...args);
+          if (acceptanceRead) { observed = true; runStatuses.set(QA_RUN, "cancelled"); }
+          return value;
+        };
+      } else {
+        const originalTip = folders.readWorkspaceSourceGitTipV1!.bind(folders);
+        folders.readWorkspaceSourceGitTipV1 = async (...args) => {
+          const value = await originalTip(...args);
+          if (acceptanceRead) { observed = true; runStatuses.set(QA_RUN, "cancelled"); }
+          return value;
+        };
+      }
+      return () => observed;
+    },
     cancelQaRunAfterAcceptanceRead() {
       const state = f.state as unknown as RevisionState;
       const originalGet = state.get.bind(state);
@@ -226,6 +256,23 @@ test("QA Run cancellation immediately after source acceptance journal read block
     return true;
   });
   assert.equal(enqueues, 0, "a Run cancelled after the acceptance read must not reach Core enqueue");
+});
+
+test("QA cancellation during the read-only Source proof group blocks Core enqueue", async t => {
+  for (const phase of ["root", "tip"] as const) await t.test(phase, async () => {
+    let enqueues = 0;
+    const f = await setup({ keepQaRunActive: true, onEnqueue() { enqueues++; } });
+    enqueues = 0;
+    const observed = f.cancelQaRunAfterSourceProof(phase);
+    const qaContext = { companyId: W, projectId: P, agentId: QA_AGENT, sessionId: QA_SESSION, runId: QA_RUN };
+    const request = (await import("../src/task-protected-qa.ts")).requestProtectedTaskQa(
+      { approvalId: APPROVAL, planSha256: PLAN }, qaContext, f.f.platform);
+    await assert.rejects(request, error => {
+      assert.equal(observed(), true, `Source ${phase} hook must run before rejection: ${String(error)}`);
+      return true;
+    });
+    assert.equal(enqueues, 0);
+  });
 });
 
 test("current CTO can read exact current Task/report/Core evidence without another run", async () => {

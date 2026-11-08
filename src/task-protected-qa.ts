@@ -281,10 +281,12 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
   try { rootRaw = await folders.matchWorkspaceSourceV1(source.folderKey, source.sourceId); }
   catch (error) { if (hostApiUnsupported(error)) return unsupported("host-source-root-proof-unsupported"); throw error; }
   const root = exactToolRecord(rootRaw, ["folderKey", "workspaceSourceId", "match"]);
-  await assertActorCurrent();
   if (root.folderKey !== source.folderKey || root.workspaceSourceId !== source.sourceId || root.match !== "same_root") {
+    await assertActorCurrent();
     throw new Error("The configured Host folder does not prove the exact Workspace Source root.");
   }
+  // Fence these read-only Source proofs together. Enqueue still revalidates the
+  // complete target after resolution and before any protected execution effect.
   let tipRaw: unknown;
   try { tipRaw = await folders.readWorkspaceSourceGitTipV1(source.sourceId, source.folderKey, source.branch); }
   catch (error) { if (hostApiUnsupported(error)) return unsupported("host-git-tip-proof-unsupported"); throw error; }
@@ -304,7 +306,6 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
     qaRevision: qa.packet.revision, qaDigest, qaAgentId: qaWorker.agentId, qaSessionId: qaWorker.sessionId,
     sourceId: source.sourceId, folderKey: source.folderKey, branch: source.branch, commitSha: receipt.commitSha,
     treeSha: receipt.treeSha, acceptanceId: receipt.acceptanceId, submissionId: receipt.submissionId });
-  await assertActorCurrent();
   const assertCurrent = async () => {
     await assertActorCurrent();
     const currentRegistry = await platform.state.get(workerRegistryKey(context.companyId, projectId, ctoId));
