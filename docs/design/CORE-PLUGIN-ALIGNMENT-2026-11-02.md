@@ -35,6 +35,28 @@
 개발 체크아웃/비공개 브랜치 경로·인증정보·실사용 데이터는 공개 기록에 넣지 않는다.
 실제 제품 권한·설치본·두 PC 인수는 확인한 작업본과 별개다.
 
+### 2026-11-08 후속 실행과 Goal 선행 조건
+
+- 제품 SDK pin은 `c69915a5` 그대로다. 후보 공개 SDK `b1eff7d`의 선택적
+  `agents.sessions.dispatchProtectedEventV1`은 Core에 저장된 보호 실행 이벤트와
+  이전 Run, 현재 Workspace state guard를 전달하는 범용 경계다. 호출자가 Thread나
+  실행 결과를 만들지 않으며, Core의 요청/Run 영수증과 읽기 전용 `systemEvent` 연결을
+  재사용한다. 후보 구현과 오프라인 검사는 설치 Host의 지원이나 실제 모델 성공이 아니다.
+- 이 경계는 보호 QA/CI/E2E 완료 이후의 일반 세션 후속 실행용이다. Pool 계정 전환,
+  Capacity 복구 또는 Goal의 공식 연속 실행 전체가 구현됐다는 뜻이 아니다.
+- [공식 Goal 계약](https://learn.chatgpt.com/docs/app-server#manage-a-thread-goal)은
+  같은 Thread의 `thread/goal/set`, `get`, `clear`를 사용한다. 현재 확인한 어댑터의
+  상태 파서와 일시 정지 진단 경로는 실제 Goal 배정·활성화·자동 연속 실행 경로가 아니다.
+  Core의 일반 업무 Goal 저장 CRUD 역시 공급자 Thread Goal 실행을 대신하지 않는다.
+- 남은 범용 Core 선행 기능은 기존 소유 Session/Run 요청과 기술 권한에 결속한 공급자
+  Goal 배정·조회·정지·공식 재개 및 실제 종료 이벤트다. Builder는 기존 Workstream/Task와
+  승인 Revision에서 하향 배정과 범위를 검증해야 한다. Core에 Builder 역할 이름을
+  넣거나 별도 Goal DB·관리 Agent·스케줄러를 추가하지 않는다.
+- 활성 Goal에는 일반 `toolOutput` Wake를 중복 적용하지 않으며, 완료·사용자 정지·
+  취소 상태를 자동 재활성화하지 않는다. 현재 일반 Wake 어댑터는 Goal이 없다는 정확한
+  응답을 확인하지 못하면 거부한다. 이는 Goal 지원을 삭제한 것이 아니라 미지원 경계를
+  보존한 것이며, 하향 배정·완료 후 IDLE·재시작/계정 변경 복구의 실제 인수는 남는다.
+
 ## 2026-11-02 범위 메모 (역사)
 
 최신 사용자 결정으로 이전의 "paused, 문서 전용" 상태에서 Builder 목표 진행을 재개했다. 목표는 별도 `SPS-MY-PluginBuilder` 저장소의 통합 설계 v15, UI v9, 최신 UI 적용 기준을 따르는 실제 Builder 완성이다. 안전을 위해 꼭 필요한 Core 선행 사항만 먼저 다루며, Core 문서와 기술상 핵심 경로는 별도 담당 범위다. Core 전체 완성이나 Stable 선행 범위를 새로 요구하지 않는다.
