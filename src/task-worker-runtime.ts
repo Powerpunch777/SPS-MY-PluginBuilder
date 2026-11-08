@@ -364,9 +364,12 @@ export async function writeTaskWorkerSourceFile(input: Readonly<{
   }
   await input.assertCurrent();
   await assertTaskFolderAccess(localFolders, input.binding, "write");
-  await localFolders.writeWorkspaceSourceTextAtomicV1(input.binding.sourceAccess.sourceId,
-    input.binding.sourceAccess.folderKey, relativePath, input.contents);
-  await input.assertCurrent();
+  try {
+    await localFolders.writeWorkspaceSourceTextAtomicV1(input.binding.sourceAccess.sourceId,
+      input.binding.sourceAccess.folderKey, relativePath, input.contents);
+  } catch { return Object.freeze({ status: "unknown", reason: "task-source-write-outcome-uncertain" }); }
+  try { await input.assertCurrent(); }
+  catch { return Object.freeze({ status: "unknown", reason: "task-source-authority-changed-after-write" }); }
   try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
   catch { return Object.freeze({ status: "unknown", reason: "task-source-folder-changed-after-write" }); }
   return Object.freeze({ status: "written" });
@@ -386,9 +389,12 @@ export async function deleteTaskWorkerSourceFile(input: Readonly<{
   }
   await input.assertCurrent();
   await assertTaskFolderAccess(localFolders, input.binding, "write");
-  await localFolders.deleteWorkspaceSourceFileV1(input.binding.sourceAccess.sourceId,
-    input.binding.sourceAccess.folderKey, relativePath);
-  await input.assertCurrent();
+  try {
+    await localFolders.deleteWorkspaceSourceFileV1(input.binding.sourceAccess.sourceId,
+      input.binding.sourceAccess.folderKey, relativePath);
+  } catch { return Object.freeze({ status: "unknown", reason: "task-source-delete-outcome-uncertain" }); }
+  try { await input.assertCurrent(); }
+  catch { return Object.freeze({ status: "unknown", reason: "task-source-authority-changed-after-delete" }); }
   try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
   catch { return Object.freeze({ status: "unknown", reason: "task-source-folder-changed-after-delete" }); }
   return Object.freeze({ status: "deleted" });

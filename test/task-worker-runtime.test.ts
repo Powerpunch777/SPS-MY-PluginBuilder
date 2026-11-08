@@ -171,6 +171,56 @@ test("delete uses only the source-bound Host API and exact role-owned path", asy
   assert.equal(deletes, 1);
 });
 
+test("authority loss after a file effect stays unknown and does not repeat the effect", async t => {
+  for (const operation of ["write", "delete"] as const) await t.test(operation, async () => {
+    let effects = 0, checks = 0;
+    const platform = { localFolders: localFolderFixture({
+      async writeWorkspaceSourceTextAtomicV1() { effects += 1; },
+      async deleteWorkspaceSourceFileV1() { effects += 1; },
+    }) } as unknown as SpsPlatformInvocationContext;
+    const input = { platform, binding: fileBinding(), relativePath: "src/feature.ts",
+      async assertCurrent() { if (++checks > 1) throw new Error("Task scope was revoked after the effect."); } };
+    const result = operation === "write"
+      ? await writeTaskWorkerSourceFile({ ...input, contents: "bounded update" })
+      : await deleteTaskWorkerSourceFile(input);
+    assert.deepEqual(result, { status: "unknown", reason: `task-source-authority-changed-after-${operation}` });
+    assert.equal(effects, 1);
+    assert.equal(checks, 2);
+  });
+});
+
+test("a lost file-operation response never claims no effect or automatically retries", async t => {
+  for (const operation of ["write", "delete"] as const) await t.test(operation, async () => {
+    let effects = 0;
+    const effect = async () => { effects += 1; throw new Error("Transport closed after the file effect."); };
+    const platform = { localFolders: localFolderFixture({
+      writeWorkspaceSourceTextAtomicV1: effect, deleteWorkspaceSourceFileV1: effect,
+    }) } as unknown as SpsPlatformInvocationContext;
+    const input = { platform, binding: fileBinding(), relativePath: "src/feature.ts", async assertCurrent() {} };
+    const result = operation === "write"
+      ? await writeTaskWorkerSourceFile({ ...input, contents: "bounded update" })
+      : await deleteTaskWorkerSourceFile(input);
+    assert.deepEqual(result, { status: "unknown", reason: `task-source-${operation}-outcome-uncertain` });
+    assert.equal(effects, 1);
+  });
+});
+
+test("authority denied before a file effect still rejects without calling Core", async t => {
+  for (const operation of ["write", "delete"] as const) await t.test(operation, async () => {
+    let effects = 0;
+    const effect = async () => { effects += 1; };
+    const platform = { localFolders: localFolderFixture({
+      writeWorkspaceSourceTextAtomicV1: effect, deleteWorkspaceSourceFileV1: effect,
+    }) } as unknown as SpsPlatformInvocationContext;
+    const input = { platform, binding: fileBinding(), relativePath: "src/feature.ts",
+      async assertCurrent() { throw new Error("Task scope is not authorized."); } };
+    await assert.rejects(operation === "write"
+      ? writeTaskWorkerSourceFile({ ...input, contents: "must not be written" })
+      : deleteTaskWorkerSourceFile(input), /not authorized/u);
+    assert.equal(effects, 0);
+  });
+});
+
 test("protected run reader stays unsupported until Core provides task and approved-plan binding", async () => {
   let calls = 0;
   const platform = ({ protectedTests: { async getRunV1() { calls += 1; return null; } } }) as unknown as SpsPlatformInvocationContext;
