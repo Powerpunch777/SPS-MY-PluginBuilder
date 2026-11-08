@@ -685,6 +685,32 @@
   이 보완은 오류 결과의 분류이며 Task 권한·Source/폴더 설정과 파일 효과를 같은 Core
   경계에 원자적으로 결속하는 기능이나 실제 철회·OS 접근 통제 인수를 대신하지 않는다.
 
+### 2026-11-08 Worker·QA 결과의 CTO 인계
+
+- `1056a25`는 기존 Workspace terminal Job을 Worker·QA 결과와 담당 CTO의 기존 세션에
+  연결한다. 정확한 Task Packet·등록·소스 제출 Commit/Tree 또는 독립 QA 보고서와 실제
+  Core 요청/Run을 대조하며, 원본 CTO가 실행 중이면 같은 delivery journal에 포인터만 남긴다.
+  원본/후속 CTO가 종료된 뒤 여러 결과를 차례로 전달하며 별도 Agent·스케줄러는 만들지 않는다.
+- Core 접수 응답 유실과 child terminal 선도착은 현재 세션 head의 정확한 8필드 lineage 및
+  submitted 영수증으로 기존 Run을 찾아 조정한다. 단순 stale 관측으로 새 Run을 만들지 않는다.
+  CTO의 기존 조회 도구는 해당 child가 이어받은 Task·Commit·QA 보고서 포인터를 읽기 전용으로
+  표시한다. 이 조회나 전송 인수는 소스의 CTO 인수·QA 합격·VERIFIED가 아니다.
+- 보호 테스트의 terminal `confirmed`와 AI Run의 비취소 `not_applicable`을 구분한다.
+  QA 보호 테스트가 실패해도 QA author의 AI 턴이 정상 종료될 수 있으며, 이때 실패 판정과
+  보고서 원본을 그대로 전달한다. 원본 QA yield를 최종 assessment로 오인하지 않는다.
+- 실제 producer가 만든 CTO·Task Packet·QA 보고서/실행 참조·소스 인수의 키를 조건에 고정한다.
+  등록 경로의 철회·변경 거부, 복수 결과·중복·응답 유실·선도착, Main/Manager 회귀를 확인했다.
+  해시 키 계산 오류와 선도착 실패, 보호 실행/AI 종료 의미 혼동의 수정 전 로그를 보존했다.
+- 고정 SDK `c69915a`의 물리 사본에서 전체 1,342개 검사가 통과했다. 변경 15개 파일의
+  정규화 Git blob은 위 커밋과 일치했고, 해당 detached 커밋에서도 타입·빌드를 확인했다.
+  Node 26.4.0·TypeScript 6.0.3 환경이며 SDK의 기존 64도구 상수 미지원 경고와 32도구 경계는
+  유지했다. 별도 독립 QA도 권한 철회 거부를 재검증했다. 이 증거는 합성 Core 응답/dispatch
+  기반 소스 회귀이며 실제 모델·OS 실행·설치본이나 두 CTO 전체 업무 인수의 증거가 아니다.
+- 남은 실행 의존성은 제출 원본 없는 실패 Worker의 기술 오류 인계, Core의 원자적 파일 효과
+  권한 결속, 공식 Goal 실행·재개 및 실제 두 CTO→QA→Manager→Main/G7→사용자 승인이다.
+  다음 묶음은 실패 인계를 성공 산출물/검증과 분리해 보완한다. 제품 SDK pin·설치본과
+  기존 216개 AC/42개 정책의 검증 상태는 이 단위 회귀만으로 승격하지 않았다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)
