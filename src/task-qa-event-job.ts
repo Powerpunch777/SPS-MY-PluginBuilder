@@ -102,6 +102,12 @@ async function observeOrigin(reference: TaskQaRunReference, platform: Host) {
   return { context, active: run.status === "running", assertCurrent };
 }
 
+async function hasRecordedAssessment(reference: TaskQaRunReference, receiptDigest: string, platform: Host) {
+  const report = (await createTaskQaReportStore(reference.scope, platform.state).current())?.revision;
+  return report?.reference.binding.runId === reference.binding.runId
+    && report.coreReceiptDigest === receiptDigest;
+}
+
 /** Uses the existing event Job and Task reference journal; never sends a user prompt. */
 export async function consumeTaskQaProtectedTerminal(workspaceId: string, eventId: string, payload: Terminal, platformInput: SpsPlatformInvocationContext) {
   const platform = platformInput as Host;
@@ -120,8 +126,7 @@ export async function consumeTaskQaProtectedTerminal(workspaceId: string, eventI
     || core.pins.commitSha !== b.commitSha || core.pins.treeSha !== b.treeSha || core.pins.subjectKeySha256 !== b.subjectKeySha256) {
     return pending("protected-event-core-receipt-or-source-pins-disagree");
   }
-  const priorReport = (await createTaskQaReportStore(reference.scope, platform.state).current())?.revision;
-  if (priorReport?.reference.binding.runId === b.runId && priorReport.coreReceiptDigest === payload.receiptDigest) {
+  if (await hasRecordedAssessment(reference, payload.receiptDigest, platform)) {
     return { status: "ignored" as const, reason: "qa-assessment-already-recorded-no-wake" };
   }
   const initial = trackedPlatform(workspaceId, platform);
@@ -130,10 +135,12 @@ export async function consumeTaskQaProtectedTerminal(workspaceId: string, eventI
     { eventId, previousRunId: origin.context.runId, receiptDigest: payload.receiptDigest }, initial.guards(true));
   if (linked.status !== "recorded" && linked.status !== "existing") return pending("qa-event-reference-link-unconfirmed");
   reference = linked.reference;
-  if (origin.active) return { status: "waiting" as const, reason: "qa-origin-still-running-wait-for-system-terminal-event" };
   const current = trackedPlatform(workspaceId, platform);
   const ready = await observeOrigin(reference, current.platform);
-  if (ready.active) return pending("qa-origin-status-changed-before-event-dispatch");
+  if (ready.active) return { status: "waiting" as const, reason: "qa-origin-still-running-wait-for-system-terminal-event" };
+  if (await hasRecordedAssessment(reference, payload.receiptDigest, current.platform)) {
+    return { status: "ignored" as const, reason: "qa-assessment-already-recorded-no-wake" };
+  }
   const sessions = platform.agents.sessions as typeof platform.agents.sessions & {
     dispatchProtectedEventV1?: (sessionId: string, companyId: string, input: { previousRunId: string; eventId: string;
       protectedRunId: string; guards: readonly RevisionPublicationGuard[] }) => Promise<{ requestId: string; runId: string; replayed: boolean }>;
