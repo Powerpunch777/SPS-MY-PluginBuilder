@@ -671,6 +671,20 @@
   이 개별 경계의 성공은 실제 Builder의 Worker→CTO 연결이나 모델/Goal 실행, 설치·출시 인수가
   아니다. 제품 SDK pin은 그대로이며 해당 Builder 소비 경로는 후속 구현 중이다.
 
+- Core 후보 `24e3157`의 추가 검사는 공개 SDK `465417b`의 실제 Worker JSONL runtime을
+  기존 Workspace Host와 임시 PostgreSQL 접수에 연결했다. 같은 이벤트의 단일 Run,
+  영수증 재생, 정확한 lineage와 다른 Workspace 거부를 확인했다. Worker는 in-process이며
+  상류 Run·Node 종료 자료와 wake는 합성이다. 공개 SDK 경로를 지정하지 않은 기본 실행은
+  이 검사를 `NOT_TESTED`로 건너뛰며 실제 CLI·AI·OS 격리나 업무 인수로 계산하지 않는다.
+- Builder `e3c77d3`은 파일 쓰기·삭제를 호출한 뒤 응답이 유실되거나 현재 Task 권한 확인이
+  실패하면 결과를 `unknown`으로 남긴다. 이미 발생했을 수 있는 파일 효과를 미실행으로
+  표시하거나 자동 반복하지 않는다. 호출 전 권한 거부는 계속 효과 없이 실패한다.
+  정확한 두 변경 파일과 고정 SDK의 물리 QA 사본에서 관련 27개 검사와 타입 검사가
+  통과했다(Node 26.4.0, TypeScript 6.0.3). 첫 npm 타입 명령은 사본에 `.bin` shim이 없어
+  실행되지 않았고, 물리 컴파일러의 직접 호출로 검사했다. 실패 로그는 보존했다.
+  이 보완은 오류 결과의 분류이며 Task 권한·Source/폴더 설정과 파일 효과를 같은 Core
+  경계에 원자적으로 결속하는 기능이나 실제 철회·OS 접근 통제 인수를 대신하지 않는다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)
