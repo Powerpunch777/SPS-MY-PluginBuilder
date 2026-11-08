@@ -5,6 +5,8 @@ import { parseTaskPacketRecord, taskPacketRecordDigest, type TaskPacketRecord } 
 import { assertSessionExecutionPolicySupport, TASK_WORKER_FILE_TOOL_NAMES,
   TASK_WORKER_SESSION_EXECUTION_POLICY } from "./session-execution-policy.ts";
 import { hasConfirmedNotStartedSessionRequest } from "./session-request-diagnostic.ts";
+import { exactToolRecord } from "./lead-tool-authority.ts";
+import type { RevisionPublicationGuard } from "./solution-revision-store.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -106,6 +108,8 @@ type TaskLocalFolders = {
   readWorkspaceSourceTextV1?: (sourceId: string, folderKey: string, relativePath: string) => Promise<string>;
   writeWorkspaceSourceTextAtomicV1?: (sourceId: string, folderKey: string, relativePath: string, contents: string) => Promise<unknown>;
   deleteWorkspaceSourceFileV1?: (sourceId: string, folderKey: string, relativePath: string) => Promise<unknown>;
+  workspaceSourceFileEffectV1?: (input: Readonly<{ sourceId: string; folderKey: string; relativePath: string;
+    guards: readonly RevisionPublicationGuard[] } & ({ operation: "read" | "delete" } | { operation: "write"; contents: string })>) => Promise<unknown>;
 };
 
 type ScopedPlatform = SpsPlatformInvocationContext & Readonly<{
@@ -113,6 +117,14 @@ type ScopedPlatform = SpsPlatformInvocationContext & Readonly<{
   agents: SpsPlatformInvocationContext["agents"] & { sessions: TaskWorkerSessionClient };
   protectedTests?: Readonly<{ getRunV1?: (companyId: string, runId: string, subjectKeySha256: string) => Promise<unknown> }>;
 }>;
+
+function hasGuardedSourceFileHost(platform: SpsPlatformInvocationContext, localFolders: TaskLocalFolders | undefined) {
+  const support = (platform as SpsPlatformInvocationContext & { hostSupport?: Readonly<{
+    state: string; contractVersion: string | null; operations: readonly string[] }> }).hostSupport;
+  return typeof localFolders?.workspaceSourceFileEffectV1 === "function" && support?.state === "reported"
+    && support.contractVersion === "1.0" && Array.isArray(support.operations)
+    && (support.operations as readonly string[]).includes("localFolders.workspaceSourceFileEffectV1");
+}
 
 function requireAllowedPath(binding: TaskWorkerFileBinding, operation: "read" | "write" | "delete", relativePath: string) {
   if (typeof relativePath !== "string" || !relativePath.trim() || relativePath.length > 1_024
@@ -207,8 +219,7 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   }
   if (typeof sessions.describePolicySupport !== "function" || typeof sessions.sendMessage !== "function"
     || typeof localFolders?.status !== "function"
-    || typeof localFolders.matchWorkspaceSourceV1 !== "function" || typeof localFolders.readWorkspaceSourceTextV1 !== "function"
-    || typeof localFolders.writeWorkspaceSourceTextAtomicV1 !== "function" || typeof localFolders.deleteWorkspaceSourceFileV1 !== "function") {
+    || typeof localFolders.matchWorkspaceSourceV1 !== "function" || !hasGuardedSourceFileHost(input.platform, localFolders)) {
     return unsupported("task-worker-session-policy-or-local-folder-api-unavailable");
   }
   try {
@@ -325,79 +336,65 @@ async function assertTaskFolderAccess(localFolders: TaskLocalFolders, binding: T
     || match.match !== "same_root") throw new Error("Core local-folder alias does not match the pinned Workspace Source root.");
 }
 
-/** Uses the actual Workspace-bound Host folder API; packet paths narrow the configured folder grant. */
-export async function readTaskWorkerSourceFile(input: Readonly<{
+type TaskSourceFileCall = Readonly<{
   platform: SpsPlatformInvocationContext;
   binding: TaskWorkerFileBinding;
   relativePath: string;
+  guards: readonly RevisionPublicationGuard[];
   assertCurrent(): Promise<void>;
-}>): Promise<Readonly<{ status: "read"; text: string } | { status: "unsupported"; reason: string }>> {
-  const relativePath = requireAllowedPath(input.binding, "read", input.relativePath);
-  const localFolders = (input.platform as ScopedPlatform).localFolders;
-  if (typeof localFolders?.status !== "function" || typeof localFolders.matchWorkspaceSourceV1 !== "function"
-    || typeof localFolders.readWorkspaceSourceTextV1 !== "function") {
-    return Object.freeze({ status: "unsupported", reason: "source-bound-workspace-file-read-unavailable" });
+}>;
+type TaskSourceFileResult = Readonly<{ status: "read"; text: string } | { status: "written" | "deleted" }
+  | { status: "unsupported" | "unknown"; reason: string }>;
+
+/** Core holds the observed mutable state guards during I/O. This is not OS isolation or crash rollback. */
+async function taskSourceFileEffect(input: TaskSourceFileCall, operation: "read" | "write" | "delete", contents?: string): Promise<TaskSourceFileResult> {
+  const relativePath = requireAllowedPath(input.binding, operation, input.relativePath);
+  if (operation === "write" && (typeof contents !== "string" || Buffer.byteLength(contents, "utf8") > 256 * 1024)) {
+    throw new TypeError("Task source contents exceed the bounded write limit.");
   }
+  const localFolders = (input.platform as ScopedPlatform).localFolders;
+  const effect = localFolders?.workspaceSourceFileEffectV1;
+  if (typeof effect !== "function" || !hasGuardedSourceFileHost(input.platform, localFolders)) {
+    return Object.freeze({ status: "unsupported", reason: "guarded-source-file-effect-unavailable" });
+  }
+  if (!Array.isArray(input.guards) || input.guards.length < 1 || input.guards.length > 64
+    || Buffer.byteLength(JSON.stringify(input.guards), "utf8") > 200_000) {
+    return Object.freeze({ status: "unsupported", reason: "task-source-authority-guards-unavailable" });
+  }
+  const base = { sourceId: input.binding.sourceAccess.sourceId, folderKey: input.binding.sourceAccess.folderKey,
+    relativePath, guards: structuredClone(input.guards) };
+  const request = operation === "write" ? { ...base, operation, contents: contents! } : { ...base, operation };
   await input.assertCurrent();
-  await assertTaskFolderAccess(localFolders, input.binding, "read");
-  const text = await localFolders.readWorkspaceSourceTextV1(input.binding.sourceAccess.sourceId,
-    input.binding.sourceAccess.folderKey, relativePath);
-  if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > 256 * 1024) throw new TypeError("Core returned an invalid or oversized source file.");
-  await input.assertCurrent();
-  await assertTaskFolderAccess(localFolders, input.binding, "read");
-  return Object.freeze({ status: "read", text });
+  let result: TaskSourceFileResult;
+  try {
+    const raw = await effect.call(localFolders, request);
+    const row = exactToolRecord(raw, ["status"], ["text", "reason"]);
+    if (row.status === "unknown" && row.reason === "file-effect-outcome-uncertain" && !Object.hasOwn(row, "text")) {
+      return Object.freeze({ status: "unknown", reason: "task-source-file-effect-outcome-uncertain" });
+    }
+    if (operation === "read" && row.status === "read" && typeof row.text === "string"
+      && Buffer.byteLength(row.text, "utf8") <= 256 * 1024 && !Object.hasOwn(row, "reason")) {
+      result = { status: "read", text: row.text };
+    } else if (operation !== "read" && row.status === (operation === "write" ? "written" : "deleted")
+      && !Object.hasOwn(row, "text") && !Object.hasOwn(row, "reason")) {
+      result = { status: operation === "write" ? "written" : "deleted" };
+    } else throw new TypeError("Core file operation receipt does not match the exact operation.");
+  } catch { return Object.freeze({ status: "unknown", reason: "task-source-file-effect-outcome-uncertain" }); }
+  try { await input.assertCurrent(); }
+  catch { return Object.freeze({ status: "unknown", reason: "task-source-authority-changed-after-file-effect" }); }
+  return Object.freeze(result);
 }
 
-export async function writeTaskWorkerSourceFile(input: Readonly<{
-  platform: SpsPlatformInvocationContext;
-  binding: TaskWorkerFileBinding;
-  relativePath: string;
-  contents: string;
-  assertCurrent(): Promise<void>;
-}>): Promise<Readonly<{ status: "written" } | { status: "unsupported" | "unknown"; reason: string }>> {
-  const relativePath = requireAllowedPath(input.binding, "write", input.relativePath);
-  if (typeof input.contents !== "string" || Buffer.byteLength(input.contents, "utf8") > 256 * 1024) throw new TypeError("Task source contents exceed the bounded write limit.");
-  const localFolders = (input.platform as ScopedPlatform).localFolders;
-  if (typeof localFolders?.status !== "function" || typeof localFolders.matchWorkspaceSourceV1 !== "function"
-    || typeof localFolders.writeWorkspaceSourceTextAtomicV1 !== "function") {
-    return Object.freeze({ status: "unsupported", reason: "source-bound-workspace-file-write-unavailable" });
-  }
-  await input.assertCurrent();
-  await assertTaskFolderAccess(localFolders, input.binding, "write");
-  try {
-    await localFolders.writeWorkspaceSourceTextAtomicV1(input.binding.sourceAccess.sourceId,
-      input.binding.sourceAccess.folderKey, relativePath, input.contents);
-  } catch { return Object.freeze({ status: "unknown", reason: "task-source-write-outcome-uncertain" }); }
-  try { await input.assertCurrent(); }
-  catch { return Object.freeze({ status: "unknown", reason: "task-source-authority-changed-after-write" }); }
-  try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
-  catch { return Object.freeze({ status: "unknown", reason: "task-source-folder-changed-after-write" }); }
-  return Object.freeze({ status: "written" });
+export function readTaskWorkerSourceFile(input: TaskSourceFileCall): Promise<TaskSourceFileResult> {
+  return taskSourceFileEffect(input, "read");
 }
 
-export async function deleteTaskWorkerSourceFile(input: Readonly<{
-  platform: SpsPlatformInvocationContext;
-  binding: TaskWorkerFileBinding;
-  relativePath: string;
-  assertCurrent(): Promise<void>;
-}>): Promise<Readonly<{ status: "deleted" } | { status: "unsupported" | "unknown"; reason: string }>> {
-  const relativePath = requireAllowedPath(input.binding, "delete", input.relativePath);
-  const localFolders = (input.platform as ScopedPlatform).localFolders;
-  if (typeof localFolders?.status !== "function" || typeof localFolders.matchWorkspaceSourceV1 !== "function"
-    || typeof localFolders.deleteWorkspaceSourceFileV1 !== "function") {
-    return Object.freeze({ status: "unsupported", reason: "source-bound-workspace-file-delete-unavailable" });
-  }
-  await input.assertCurrent();
-  await assertTaskFolderAccess(localFolders, input.binding, "write");
-  try {
-    await localFolders.deleteWorkspaceSourceFileV1(input.binding.sourceAccess.sourceId,
-      input.binding.sourceAccess.folderKey, relativePath);
-  } catch { return Object.freeze({ status: "unknown", reason: "task-source-delete-outcome-uncertain" }); }
-  try { await input.assertCurrent(); }
-  catch { return Object.freeze({ status: "unknown", reason: "task-source-authority-changed-after-delete" }); }
-  try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
-  catch { return Object.freeze({ status: "unknown", reason: "task-source-folder-changed-after-delete" }); }
-  return Object.freeze({ status: "deleted" });
+export function writeTaskWorkerSourceFile(input: TaskSourceFileCall & Readonly<{ contents: string }>): Promise<TaskSourceFileResult> {
+  return taskSourceFileEffect(input, "write", input.contents);
+}
+
+export function deleteTaskWorkerSourceFile(input: TaskSourceFileCall): Promise<TaskSourceFileResult> {
+  return taskSourceFileEffect(input, "delete");
 }
 
 export type TaskProtectedRunObservation = Readonly<{ status: "unsupported"; reason: string; qaVerdict: "not-established" }>;

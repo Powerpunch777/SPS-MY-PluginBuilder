@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { JsonValue, SpsPlatformInvocationContext } from "@sonparkserver/plugin-sdk/platform";
+import type { JsonValue, SpsPlatformInvocationContext, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
 import { parseTaskWorkerRegistry, taskWorkerRegistryKey, type TaskWorkerRecord, type TaskWorkerRole } from "./domain/task-workers.ts";
 import { parseTaskPacketRecord, taskPacketRecordDigest, type TaskPacketRecord } from "./domain/task-packets.ts";
 import { exactToolRecord, parseLeadToolContext } from "./lead-tool-authority.ts";
@@ -10,7 +10,7 @@ import { integrationManagerSessionStateKey, legacyIntegrationManagerSessionState
   integrationManagerStateKey, parseIntegrationManagerBinding, parseIntegrationManagerSessionBinding } from "./domain/integration-manager.ts";
 import { readProjectCtos } from "./project-cto-tools.ts";
 import { resolveCtoTaskAuthority, createTaskPacketStore } from "./task-packet-tools.ts";
-import type { RevisionState } from "./solution-revision-store.ts";
+import type { RevisionPublicationGuard, RevisionState } from "./solution-revision-store.ts";
 import { readWorkstreams } from "./workstream-tools.ts";
 import { createCtoDeliveryStore, workstreamInstructionDigest } from "./cto-delivery-store.ts";
 import { assertCurrentCtoTaskG5Effect } from "./g5-change-impact-tools.ts";
@@ -264,9 +264,24 @@ export async function readTaskQaEventOrigin(runContext: unknown, platform: SpsPl
 
 export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, platform: SpsPlatformInvocationContext) {
   const context = parseTaskWorkerToolContext(runContext);
-  let current = await readCurrentTaskWorkerBinding(context, platform);
+  const captured = new Map<string, RevisionPublicationGuard>();
+  const observed = { ...platform, state: { ...platform.state, async get(key: SpsStateKey) {
+    if (key.scopeKind !== "company" || key.scopeId !== context.companyId) throw new Error("Task file authority escaped its Workspace.");
+    const value = await platform.state.get(key);
+    if (value !== null) {
+      const identity = JSON.stringify([key.namespace ?? "default", key.stateKey]);
+      const previous = captured.get(identity);
+      if (previous && JSON.stringify(previous.expectedValue) !== JSON.stringify(value)) {
+        throw new Error("Task file authority changed during observation.");
+      }
+      captured.set(identity, { stateKey: key.stateKey, ...(key.namespace === undefined ? {} : { namespace: key.namespace }),
+        expectedValue: structuredClone(value) });
+    }
+    return value;
+  } } } as SpsPlatformInvocationContext;
+  let current = await readCurrentTaskWorkerBinding(context, observed);
   const assertCurrent = async () => {
-    const latest = await readCurrentTaskWorkerBinding(context, platform);
+    const latest = await readCurrentTaskWorkerBinding(context, observed);
     if (latest.ctoId !== current.ctoId || latest.worker.agentId !== current.worker.agentId
       || latest.worker.sessionId !== current.worker.sessionId || latest.worker.role !== current.worker.role
       || latest.binding.packetRecordSha256 !== current.binding.packetRecordSha256
@@ -275,10 +290,29 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
     }
     current = latest;
   };
-  return { current, assertCurrent };
+  const fileGuards = () => {
+    const rawHash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+    const packetScope = `packets:${hash([context.projectId, current.ctoId, current.worker.workstreamId])}`;
+    const deliveryScope = `cto:${hash([context.projectId, current.ctoId])}`;
+    const required = [taskWorkerRegistryKey(context.projectId, current.ctoId),
+      `project-ctos.v1.${rawHash(context.projectId)}`, `workstreams-head.v1.${rawHash(context.projectId)}`,
+      `task-packets-head.v1.${rawHash(packetScope)}`, `cto-delivery-head.v1.${rawHash(deliveryScope)}`];
+    // Immutable journal bodies are already digest checked. Lock their current heads and mutable role bindings.
+    const guards = [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1."));
+    if (required.some(stateKey => !guards.some(guard => guard.stateKey === stateKey && guard.namespace === "sonpark.my-builder"))
+      || guards.length < 1 || guards.length > 64 || Buffer.byteLength(JSON.stringify(guards), "utf8") > 200_000) {
+      throw new Error("unsupported:task-source-authority-guard-inventory-unavailable");
+    }
+    return structuredClone(guards);
+  };
+  return { current, assertCurrent, fileGuards };
 }
 
 const resolveTaskWorkerFileCall = resolveCurrentTaskWorkerToolCall;
+async function resolveGuardedTaskWorkerFileCall(runContext: unknown, platform: SpsPlatformInvocationContext) {
+  const call = await resolveTaskWorkerFileCall(runContext, platform);
+  return { ...call, guards: call.fileGuards() };
+}
 
 function taskToolUnsupported(reason: string) {
   return { content: "Task Worker integration is unsupported by the current Host API. No fallback was used.",
@@ -299,40 +333,40 @@ function taskFileResult(result: { status: string; reason?: string; text?: string
 export async function readTaskWorkerFile(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["relativePath"]);
   if (typeof input.relativePath !== "string") throw new TypeError("relativePath must be a string.");
-  let call: Awaited<ReturnType<typeof resolveTaskWorkerFileCall>>;
-  try { call = await resolveTaskWorkerFileCall(runContext, platform); }
+  let call: Awaited<ReturnType<typeof resolveGuardedTaskWorkerFileCall>>;
+  try { call = await resolveGuardedTaskWorkerFileCall(runContext, platform); }
   catch (error) {
     if (error instanceof Error && error.message.startsWith("unsupported:")) return taskToolUnsupported(error.message.slice("unsupported:".length));
     throw error;
   }
   return taskFileResult(await readTaskWorkerSourceFile({ platform, binding: call.current.binding,
-    relativePath: input.relativePath, assertCurrent: call.assertCurrent }));
+    relativePath: input.relativePath, guards: call.guards, assertCurrent: call.assertCurrent }));
 }
 
 export async function writeTaskWorkerFile(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["relativePath", "contents"]);
   if (typeof input.relativePath !== "string" || typeof input.contents !== "string") throw new TypeError("relativePath and contents must be strings.");
-  let call: Awaited<ReturnType<typeof resolveTaskWorkerFileCall>>;
-  try { call = await resolveTaskWorkerFileCall(runContext, platform); }
+  let call: Awaited<ReturnType<typeof resolveGuardedTaskWorkerFileCall>>;
+  try { call = await resolveGuardedTaskWorkerFileCall(runContext, platform); }
   catch (error) {
     if (error instanceof Error && error.message.startsWith("unsupported:")) return taskToolUnsupported(error.message.slice("unsupported:".length));
     throw error;
   }
   return taskFileResult(await writeTaskWorkerSourceFile({ platform, binding: call.current.binding,
-    relativePath: input.relativePath, contents: input.contents, assertCurrent: call.assertCurrent }));
+    relativePath: input.relativePath, contents: input.contents, guards: call.guards, assertCurrent: call.assertCurrent }));
 }
 
 export async function deleteTaskWorkerFile(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["relativePath"]);
   if (typeof input.relativePath !== "string") throw new TypeError("relativePath must be a string.");
-  let call: Awaited<ReturnType<typeof resolveTaskWorkerFileCall>>;
-  try { call = await resolveTaskWorkerFileCall(runContext, platform); }
+  let call: Awaited<ReturnType<typeof resolveGuardedTaskWorkerFileCall>>;
+  try { call = await resolveGuardedTaskWorkerFileCall(runContext, platform); }
   catch (error) {
     if (error instanceof Error && error.message.startsWith("unsupported:")) return taskToolUnsupported(error.message.slice("unsupported:".length));
     throw error;
   }
   return taskFileResult(await deleteTaskWorkerSourceFile({ platform, binding: call.current.binding,
-    relativePath: input.relativePath, assertCurrent: call.assertCurrent }));
+    relativePath: input.relativePath, guards: call.guards, assertCurrent: call.assertCurrent }));
 }
 
 /** Submits only exact role-owned Task paths from the active Worker/QA Run. */

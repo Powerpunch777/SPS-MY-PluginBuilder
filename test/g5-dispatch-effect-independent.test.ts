@@ -176,10 +176,11 @@ function installWorkerHost(f: Awaited<ReturnType<typeof fixture>>, admissionHook
       await admissionHook?.(); return { runId };
     },
   });
-  Object.assign(f.platform, { localFolders: {
+  Object.assign(f.platform, { hostSupport: { state: "reported", contractVersion: "1.0", operations: ["localFolders.workspaceSourceFileEffectV1"] }, localFolders: {
     async status(folderKey: string) { return { folderKey, configured: true, healthy: true, readable: true, writable: true }; },
     async matchWorkspaceSourceV1(folderKey: string, sourceId: string) { return { folderKey, workspaceSourceId: sourceId, match: "same_root" }; },
     async readWorkspaceSourceTextV1() { return ""; }, async writeWorkspaceSourceTextAtomicV1() {}, async deleteWorkspaceSourceFileV1() {},
+    async workspaceSourceFileEffectV1() { assert.fail("Dispatch observation does not perform file I/O"); },
   } });
   return { workerRequest: () => workerRequest, sessions };
 }

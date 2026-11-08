@@ -36,12 +36,13 @@ async function dispatchFixture(undecided: readonly string[], withUnmapped = fals
     f.requests.set(`${sessionId}:${input.requestId}`, { requestId: input.requestId, state: "submitted", runId: acceptedRun });
     return { runId: acceptedRun };
   };
-  Object.assign(f.f.platform, { localFolders: {
+  Object.assign(f.f.platform, { hostSupport: { state: "reported", contractVersion: "1.0", operations: ["localFolders.workspaceSourceFileEffectV1"] }, localFolders: {
     async status(folderKey: string) { return { folderKey, configured: true, healthy: true, readable: true, writable: true }; },
     async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) {
       return { folderKey, workspaceSourceId, match: "same_root" };
     }, async readWorkspaceSourceTextV1() { return ""; }, async writeWorkspaceSourceTextAtomicV1() {},
     async deleteWorkspaceSourceFileV1() {},
+    async workspaceSourceFileEffectV1() { assert.fail("Dispatch observation does not perform file I/O"); },
   } });
   return { ...f, packetStore, board, dev, taskWorker, requestId, sessions, get sends() { return sends; }, originalSend };
 }

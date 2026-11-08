@@ -81,7 +81,8 @@ async function taskFixture(sourceBound = true) {
     assert.equal(relativePath, "src/feature.ts");
   }
   let onMatch = async () => {};
-  Object.assign(f.platform, { localFolders: {
+  let onEffect = async () => {};
+  Object.assign(f.platform, { hostSupport: { state: "reported", contractVersion: "1.0", operations: ["localFolders.workspaceSourceFileEffectV1"] }, localFolders: {
     async status(folderKey: string) { return { folderKey, configured: true, access: "readWrite", readable: true, writable: true, healthy: true,
       requiredDirectories: [], requiredFiles: [], missingDirectories: [], missingFiles: [], checkedAt: now }; },
     async matchWorkspaceSourceV1(folderKey: string, workspaceSourceId: string) { await onMatch(); return { folderKey, workspaceSourceId, match: "same_root" }; },
@@ -93,6 +94,21 @@ async function taskFixture(sourceBound = true) {
     async writeTextAtomic() { assert.fail("Legacy writes must not be used for a Task Source"); },
     async deleteFile() { assert.fail("Legacy deletes must not be used for a Task Source"); },
     ...(sourceBound ? {
+      async workspaceSourceFileEffectV1(input: { sourceId: string; folderKey: string; relativePath: string;
+        operation: "read" | "write" | "delete"; contents?: string;
+        guards: readonly { namespace?: string; stateKey: string; expectedValue: unknown }[] }) {
+        assertSource(input.sourceId, input.folderKey, input.relativePath);
+        await onEffect();
+        assert.ok(input.guards.length >= 5);
+        assert.ok(input.guards.every(guard => !guard.stateKey.includes("-revision.v1.")));
+        for (const guard of input.guards) {
+          assert.deepEqual(await f.state.get({ scopeKind: "company", scopeId: W,
+            ...(guard.namespace === undefined ? {} : { namespace: guard.namespace }), stateKey: guard.stateKey }), guard.expectedValue);
+        }
+        if (input.operation === "read") { effects.reads++; return { status: "read", text: files.get(input.relativePath) }; }
+        if (input.operation === "write") { effects.writes++; files.set(input.relativePath, input.contents!); return { status: "written" }; }
+        effects.deletes++; files.delete(input.relativePath); return { status: "deleted" };
+      },
       async readWorkspaceSourceTextV1(sourceId: string, folderKey: string, relativePath: string) {
         assertSource(sourceId, folderKey, relativePath); effects.reads++; return files.get(relativePath);
       },
@@ -107,10 +123,11 @@ async function taskFixture(sourceBound = true) {
   return { f, ensureContext, effects, files, packets, record, ctoContext: ctx(C, ctoRun),
     context: { companyId: W, agentId: AGENT, sessionId: SESSION, runId: RUN },
     setOnMatch(callback: typeof onMatch) { onMatch = callback; },
+    setOnEffect(callback: typeof onEffect) { onEffect = callback; },
     cancel() { cancellationRequested = true; }, changeReceipt() { receiptRunId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"; } };
 }
 
-test("Workspace-only Worker context prepares without a Core Project and passes exact Source identity to V1 file handlers", async () => {
+test("Workspace-only Worker context passes exact Source and observed mutable authority guards to Core", async () => {
   const f = await taskFixture();
   assert.equal(f.ensureContext, undefined);
   const read = await readTaskWorkerFile({ relativePath: "src/feature.ts" }, f.context, f.f.platform);
@@ -121,6 +138,20 @@ test("Workspace-only Worker context prepares without a Core Project and passes e
   const deleted = await deleteTaskWorkerFile({ relativePath: "src/feature.ts" }, f.context, f.f.platform);
   assert.equal((deleted.data as { status: string }).status, "deleted");
   assert.deepEqual(f.effects, { reads: 1, writes: 1, deletes: 1 });
+});
+
+test("Task revision drift between Builder observation and Core effect cannot mutate a file", async () => {
+  const f = await taskFixture();
+  f.setOnEffect(async () => {
+    const published = await f.packets.publish({ expectedBaseRevisionId: "qa-file-board-1", revision: { projectId: W, ctoId: CTO,
+      workstreamId: "ws-1", revisionId: "qa-file-board-2", packets: [{ ...f.record, packet: { ...f.record.packet, revision: 2 } }] } });
+    assert.equal(published.status, "published");
+  });
+  const result = await writeTaskWorkerFile({ relativePath: "src/feature.ts", contents: "must not change" }, f.context, f.f.platform);
+  assert.deepEqual(result.data, { status: "unknown", reason: "task-source-file-effect-outcome-uncertain",
+    completion: "not-established", qaVerdict: "not-established" });
+  assert.equal(f.files.get("src/feature.ts"), "original");
+  assert.deepEqual(f.effects, { reads: 0, writes: 0, deletes: 0 });
 });
 
 test("registered Worker file tools accept optional Host timing without borrowing execution authority", async () => {
