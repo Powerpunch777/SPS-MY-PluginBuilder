@@ -655,6 +655,22 @@
   연결해야 하며, 단순 Run 정상 종료를 업무 완료로 바꾸지 않는다. 공식 Goal 실행과
   이 상향 인계, 실제 두 CTO/AI/자동 Manager/납품 흐름은 계속 미인수다.
 
+- 이 공백의 범용 선행 경계는 Core 후보 `c54c658`과 공개 SDK 후보 `465417b`에 추가했다.
+  선택적 `dispatchSessionTerminalEventV1`는 저장된 세션 종료 이벤트에서만 입력을 만들고,
+  같은 Plugin/Workspace의 원본 Run·영수증·결과 해시와 별도 대상 세션의 이전 Run을 확인한다.
+  원본과 대상의 Node 종료 근거, 현재 권한 및 기존 Workspace state guard를 재사용한다.
+  Builder의 상하위 관계나 Task 완료를 Core가 결정하지 않는다. 새 DB·Agent·스케줄러는 없다.
+- Core 후보의 타입 검사와 새 경로/기존 보호 경로 검사 52개가 통과했다. DB 검사에는
+  실제 임시 PostgreSQL을 썼고, Run·Node 종료 자료·wake는 합성이다. 원본 포인터를 바꾼
+  재전달이 기존 영수증을 돌려주던 실패 2건과 Host 입력 변동 실패는 수정 전 로그로 보존했다.
+  수정 후에는 저장된 Core 입력과 정확한 포인터가 일치해야 같은 영수증을 재생한다.
+- SDK 후보는 빠진 검사 의존성을 별도 사본에 오프라인 캐시로 설치한 뒤 기본 검사 263개가
+  통과했다. 해당 환경은 Node 26.4.0, SDK 선언 버전인 TypeScript 5.7.3·esbuild 0.25.8이다.
+  앞선 의존성 누락/목록 기대값 실패를 덮어쓰지 않는다. Builder 전체 회귀 1,299개와
+  `f617313`의 추가/정정 범위 29개도 Node 26.4.0 검사이며 Node 22/24 재검증은 아니다.
+  이 개별 경계의 성공은 실제 Builder의 Worker→CTO 연결이나 모델/Goal 실행, 설치·출시 인수가
+  아니다. 제품 SDK pin은 그대로이며 해당 Builder 소비 경로는 후속 구현 중이다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)

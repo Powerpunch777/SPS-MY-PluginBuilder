@@ -44,6 +44,12 @@
   재사용한다. 후보 구현과 오프라인 검사는 설치 Host의 지원이나 실제 모델 성공이 아니다.
 - 이 경계는 보호 QA/CI/E2E 완료 이후의 일반 세션 후속 실행용이다. Pool 계정 전환,
   Capacity 복구 또는 Goal의 공식 연속 실행 전체가 구현됐다는 뜻이 아니다.
+- 후속 Core 후보 `c54c658`·SDK 후보 `465417b`의 `dispatchSessionTerminalEventV1`는
+  같은 Plugin/Workspace의 저장된 Agent 세션 종료 사실을 별도 기존 세션에 전달하는
+  범용 경계다. 원본/대상 Run·영수증·Node 종료·현재 권한·state guard를 확인하며,
+  상하위 역할·Task 인수는 Builder가 검증해야 한다. 후보 코드와 DB/Worker 검사는
+  설치본 지원이나 실제 AI/Goal 재개의 증거가 아니다. 상세 검증은
+  [구현 기록](../implementation/README.md)을 따른다.
 - [공식 Goal 계약](https://learn.chatgpt.com/docs/app-server#manage-a-thread-goal)은
   같은 Thread의 `thread/goal/set`, `get`, `clear`를 사용한다. 현재 확인한 어댑터의
   상태 파서와 일시 정지 진단 경로는 실제 Goal 배정·활성화·자동 연속 실행 경로가 아니다.
