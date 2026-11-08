@@ -21,6 +21,7 @@ import { submitTaskSourceFiles, type TaskSourceSubmissionBinding } from "./task-
 import { assertSessionExecutionPolicySupport } from "./session-execution-policy.ts";
 import { createCurrentBaselineAssuranceProvider } from "./spec-assurance/current-baseline-provider.ts";
 import { hasUndecidedTaskRequirement } from "./builder-gates/task-decision-scope.ts";
+import { resolveTaskQaContinuationAuthority, type TaskQaContinuationAuthority } from "./task-qa-continuation-authority.ts";
 
 const asJson = (value: unknown) => value as JsonValue;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -73,7 +74,7 @@ function dependenciesMatchCurrent(record: TaskPacketRecord, packets: readonly Ta
 type TaskWorkerToolContext = Readonly<{ companyId: string; agentId: string; runId: string; sessionId: string; projectId: string }>;
 export type CurrentTaskWorkerBinding = Readonly<{ context: TaskWorkerToolContext; ctoId: string; worker: TaskWorkerRecord;
   packet: TaskPacketRecord; currentPackets: readonly TaskPacketRecord[]; workerRecords: readonly TaskWorkerRecord[];
-  binding: TaskWorkerFileBinding }>;
+  binding: TaskWorkerFileBinding; protectedContinuation?: TaskQaContinuationAuthority }>;
 
 function parseTaskWorkerToolContext(value: unknown): TaskWorkerToolContext {
   const row = exactToolRecord(value, ["companyId", "agentId", "runId", "sessionId"], ["projectId"]);
@@ -114,9 +115,10 @@ async function assertTaskDecisionScopeCurrent(context: TaskWorkerToolContext, pa
 }
 
 function currentActiveRun(value: unknown, context: TaskWorkerToolContext) {
-  const row = exactToolRecord(value, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing"]);
+  const row = exactToolRecord(value, ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing", "systemEvent"]);
   if (row.runId !== context.runId || row.status !== "running" || row.cancellationRequested !== false
     || row.termination !== "not_applicable") throw new Error("Task file tools require the active uncancelled Worker/QA Run.");
+  return row;
 }
 
 async function assertOtherRoleContext(context: TaskWorkerToolContext, ctos: Awaited<ReturnType<typeof readProjectCtos>>,
@@ -173,7 +175,7 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
   }
   try { await assertSessionExecutionPolicySupport(platform, context.sessionId, context.companyId); }
   catch { throw new Error("unsupported:restricted-task-worker-session-policy-unavailable"); }
-  currentActiveRun(await sessions.getRun(context.sessionId, context.companyId, context.runId), context);
+  const activeRun = currentActiveRun(await sessions.getRun(context.sessionId, context.companyId, context.runId), context);
 
   const ctos = await readProjectCtos(context.companyId, context.projectId, platform);
   await assertOtherRoleContext(context, ctos, platform, owned);
@@ -234,11 +236,15 @@ async function readCurrentTaskWorkerBinding(context: TaskWorkerToolContext, plat
     packet, currentPackets: board!.revision.packets, worker });
   const requestId = taskWorkerRequestId(binding);
   const request = await sessions.getRequest(context.sessionId, context.companyId, requestId);
-  if (!request || request.requestId !== requestId || request.state !== "submitted" || request.runId !== context.runId) {
+  if (!request || request.requestId !== requestId || request.state !== "submitted" || !request.runId
+    || worker.role !== "qa" && request.runId !== context.runId) {
     throw new Error("The active Run is not the exact current Task dispatch request for this Worker identity.");
   }
+  const protectedContinuation = request.runId !== context.runId
+    ? await resolveTaskQaContinuationAuthority({ binding, packet, packets: board!.revision.packets,
+      originalRunId: request.runId, activeRunId: context.runId, activeRun, platform }) : undefined;
   return Object.freeze({ context, ctoId, worker, packet, currentPackets: board!.revision.packets,
-    workerRecords: matches[0]!.workerRecords, binding });
+    workerRecords: matches[0]!.workerRecords, binding, ...(protectedContinuation ? { protectedContinuation } : {}) });
 }
 
 export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, platform: SpsPlatformInvocationContext) {

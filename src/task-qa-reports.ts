@@ -123,6 +123,10 @@ export async function publishTaskQaReport(params: unknown, runContext: unknown, 
     "processExitCode", "timedOut", "cancelled", "outputLimit", "appContainerVerified", "capabilitiesCount",
     "childTerminationConfirmed", "jobEmpty", "profileCleanupSucceeded", "sandboxCleanupSucceeded", "fixtureMustBeRetained"], PROTECTED_OUTPUT_RECEIPT_FIELDS);
   assertProtectedOutputMetadata(receipt);
+  if (target.protectedContinuation && (target.protectedContinuation.protectedRunId !== input.runId
+    || target.protectedContinuation.receiptDigest !== receipt.digest)) {
+    throw new Error("The current Core receipt differs from the exact QA continuation event.");
+  }
   if (typeof receipt.digest !== "string" || !sha.test(receipt.digest) || receipt.appContainerVerified !== true
     || receipt.capabilitiesCount !== 0 || receipt.childTerminationConfirmed !== true || receipt.jobEmpty !== true
     || receipt.profileCleanupSucceeded !== true || receipt.sandboxCleanupSucceeded !== true || receipt.fixtureMustBeRetained !== false

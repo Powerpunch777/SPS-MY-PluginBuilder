@@ -82,12 +82,14 @@ async function setup() {
 
   const requests = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
   const runStates = new Map<string, string>([[ctoRunId, "running"], [DEV_RUN, "running"], [QA_RUN, "running"]]);
+  const systemEvents = new Map<string, Record<string, unknown>>();
   const sessions = f.platform.agents.sessions as typeof f.platform.agents.sessions;
   const originalGetRequest = sessions.getRequest.bind(sessions), originalGetRun = sessions.getRun.bind(sessions);
   (sessions as any).getRequest = async (sessionId: string, companyId: string, requestId: string) =>
     requests.get(`${sessionId}:${requestId}`) ?? originalGetRequest(sessionId, companyId, requestId);
   (sessions as any).getRun = async (sessionId: string, companyId: string, runId: string) => {
-    if (runStates.has(runId)) return { ...runKey(runId), status: runStates.get(runId) };
+    if (runStates.has(runId)) return { ...runKey(runId), status: runStates.get(runId),
+      ...(systemEvents.has(runId) ? { systemEvent: systemEvents.get(runId) } : {}) };
     return originalGetRun(sessionId, companyId, runId);
   };
   const hostPlatform = f.platform as typeof f.platform & { localFolders: Record<string, (...args: any[]) => any> };
@@ -176,7 +178,23 @@ async function setup() {
     hostPlatform.localFolders.readWorkspaceSourceGitTipV1 = async (sourceId: string, folderKey: string, branch: string) =>
       ({ status: "current", sourceId, folderKey, branch, commitSha, treeSha: TREE, observedAt: now });
   }, enqueueCalls: () => enqueueCalls, setGuarded(value: typeof guarded) { revisionState.guardedCompareAndSet = value as never; },
-    registered: createBuilderPlatform().tools.find(tool => tool.name === "builder.publish-task-qa-report"), };
+    registered: createBuilderPlatform().tools.find(tool => tool.name === "builder.publish-task-qa-report"),
+    resumeQa(overrides: Record<string, unknown> = {}) {
+      const runId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      const requestId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+      const subjectKeySha256 = (coreRows.get(CORE_RUN) as { pins: { subjectKeySha256: string } }).pins.subjectKeySha256;
+      const receiptDigest = String(coreReceipt!.digest);
+      const eventReceiptDigest = Object.hasOwn(overrides, "receiptDigest") ? overrides.receiptDigest : receiptDigest;
+      const eventSubjectHash = Object.hasOwn(overrides, "subjectKeySha256") ? overrides.subjectKeySha256 : subjectKeySha256;
+      const eventId = Object.hasOwn(overrides, "eventId") ? overrides.eventId
+        : `sps-protected-test-terminal-v1:${CORE_RUN}:${String(eventReceiptDigest)}:${String(eventSubjectHash)}:dddddddd-dddd-4ddd-8ddd-dddddddddddd`;
+      runStates.set(QA_RUN, "succeeded"); runStates.set(runId, "running");
+      systemEvents.set(runId, { schemaVersion: 1, kind: "protected-test-terminal-event", requestId,
+        previousRunId: QA_RUN, eventId, protectedRunId: CORE_RUN, receiptDigest, subjectKeySha256, ...overrides });
+      requests.set(`${QA_SESSION}:${requestId}`, { requestId, state: "submitted", runId });
+      return { ...qaContext, runId };
+    },
+  };
 }
 
 test("registered report author publishes only the full exact current QA assessment; mocked Core DTO is not an execution claim", async () => {
@@ -203,6 +221,69 @@ test("Workspace UUID is the authenticated single-project scope; another UUID can
   const otherProject = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";
   await assert.rejects(publishTaskQaReport(f.params, { ...f.qaContext, projectId: otherProject }, f.f.platform));
   assert.equal((await f.reportStore().current())!.revision.verdict, "passed");
+});
+
+test("registered QA report accepts one exact Core event continuation, not the closed original author Run", async () => {
+  const f = await setup();
+  const resumed = f.resumeQa();
+  const result = await f.registered!.handler(f.params, resumed, f.f.platform) as unknown as {
+    data: { status: string; report: { author: { runId: string }; coreReceiptDigest: string } } };
+  assert.equal(result.data.status, "published");
+  assert.equal(result.data.report.author.runId, resumed.runId);
+  assert.equal(result.data.report.coreReceiptDigest, "4".repeat(64));
+  await assert.rejects(publishTaskQaReport(f.params, f.qaContext, f.f.platform));
+  assert.equal(f.enqueueCalls(), 1, "a continuation report must not enqueue another protected test");
+});
+
+test("continuation cannot borrow another Run, event, protected reference or cancelled QA author", async t => {
+  for (const [name, override] of [
+    ["wrong previous Run", { previousRunId: DEV_RUN }],
+    ["unaccepted request", { requestId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }],
+    ["wrong protected Run", { protectedRunId: DEV_RUN }],
+    ["wrong event subject", { subjectKeySha256: "0".repeat(64) }],
+    ["missing Core receipt", { receiptDigest: null }],
+  ] as const) await t.test(name, async () => {
+    const f = await setup();
+    const resumed = f.resumeQa(override);
+    await assert.rejects(publishTaskQaReport(f.params, resumed, f.f.platform));
+    assert.equal(await f.reportStore().current(), null);
+  });
+  await t.test("cancelled previous author", async () => {
+    const f = await setup(); const resumed = f.resumeQa(); f.runStates.set(QA_RUN, "cancelled");
+    await assert.rejects(publishTaskQaReport(f.params, resumed, f.f.platform));
+    assert.equal(await f.reportStore().current(), null);
+  });
+  await t.test("changed source after continuation", async () => {
+    const f = await setup(); const resumed = f.resumeQa(); f.setTip("e".repeat(40));
+    const result = await publishTaskQaReport(f.params, resumed, f.f.platform);
+    assert.equal(result.status, "stale");
+    assert.equal(await f.reportStore().current(), null);
+  });
+  await t.test("well-formed event digest and event ID cannot disagree with the actual Core receipt", async () => {
+    const f = await setup();
+    const wrongDigest = "f".repeat(64);
+    const resumed = f.resumeQa({ receiptDigest: wrongDigest });
+    await assert.rejects(async () => f.registered!.handler(f.params, resumed, f.f.platform));
+    assert.equal(await f.reportStore().current(), null);
+  });
+  await t.test("source root identity changing while the Core receipt read is pending cannot publish", async () => {
+    const f = await setup(); const resumed = f.resumeQa();
+    const api = (f.f.platform as any).protectedTests;
+    const read = api.getRunV1.bind(api);
+    api.getRunV1 = async (...args: unknown[]) => {
+      const result = await read(...args);
+      (f.f.platform as any).localFolders.matchWorkspaceSourceV1 = async (folderKey: string, sourceId: string) =>
+        ({ folderKey, workspaceSourceId: sourceId, match: "different_root" });
+      return result;
+    };
+    await assert.rejects(async () => f.registered!.handler(f.params, resumed, f.f.platform));
+    assert.equal(await f.reportStore().current(), null);
+  });
+  await t.test("a newly closed continuation QA Run cannot be borrowed for reporting", async () => {
+    const f = await setup(); const resumed = f.resumeQa(); f.runStates.set(resumed.runId, "succeeded");
+    await assert.rejects(async () => f.registered!.handler(f.params, resumed, f.f.platform));
+    assert.equal(await f.reportStore().current(), null);
+  });
 });
 
 test("not-tested remains incomplete and an all-passed checklist cannot override failed Core execution", async () => {

@@ -10,6 +10,7 @@ import { createTaskQaRunReferenceStore, recordTaskQaRunReference, type TaskQaRun
 import { deriveTaskWorkerFileBinding, taskWorkerRequestId } from "./task-worker-runtime.ts";
 import { taskQaCriteria } from "./task-qa-criteria.ts";
 import { readWorkspaceSourceGitTipProof } from "./workspace-source-git-tip.ts";
+import type { TaskQaContinuationAuthority } from "./task-qa-continuation-authority.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
@@ -49,6 +50,7 @@ type Target = Readonly<{ workspaceId: string; projectId: string; ctoId: string; 
   qaWorker: TaskWorkerRecord; qaRequestId: string; qaRunId: string; source: Readonly<{ sourceId: string; folderKey: string; branch: string }>;
   commitSha: string; treeSha: string; acceptanceId: string; submissionId: string; subjectKey: string; subjectKeySha256: string;
   requestId: string; approvalId: string; planSha256: string; tipCurrent: boolean; allowTerminalQaRun: boolean;
+  protectedContinuation?: TaskQaContinuationAuthority;
   assertCurrent(): Promise<void> }>;
 export type ProtectedTaskQaTarget = Target;
 
@@ -251,12 +253,17 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
     || typeof requestRow.runId !== "string" || !UUID.test(requestRow.runId)) {
     throw new Error("The prepared QA Worker has no exact authoritative dispatch request and Run.");
   }
-  const qaRun = exactToolRecord(await sessions.getRun(qaWorker.sessionId, context.companyId, requestRow.runId),
-    ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing"]);
+  const qaExecutionRunId = qaActor?.current.protectedContinuation?.runId ?? requestRow.runId;
+  const protectedContinuation = qaActor?.current.protectedContinuation;
+  if (protectedContinuation && input.runId && protectedContinuation.protectedRunId !== input.runId) {
+    throw new Error("The QA continuation belongs to a different protected execution.");
+  }
+  const qaRun = exactToolRecord(await sessions.getRun(qaWorker.sessionId, context.companyId, qaExecutionRunId as string),
+    ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing", "systemEvent"]);
   const allowTerminalQaRun = !qaActor && !!input.runId;
   const activeQaRun = qaRun.status === "running" && qaRun.cancellationRequested === false && qaRun.termination === "not_applicable";
   const closedQaRun = allowTerminalQaRun && ["succeeded", "failed", "cancelled", "interrupted", "timed_out"].includes(qaRun.status as string);
-  if (qaRun.runId !== requestRow.runId || (!activeQaRun && !closedQaRun)) {
+  if (qaRun.runId !== qaExecutionRunId || (!activeQaRun && !closedQaRun)) {
     throw new Error("The exact prepared QA Worker Run is no longer current or readable.");
   }
 
@@ -324,13 +331,13 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
     const currentReceipt = currentRequest === null ? null : exactToolRecord(currentRequest, ["requestId", "state", "runId"]);
     if (!currentReceipt || currentReceipt.requestId !== qaRequestId || currentReceipt.state !== "submitted"
       || currentReceipt.runId !== requestRow.runId) throw new Error("The exact QA Worker dispatch request changed during protected QA preparation.");
-    const currentRun = exactToolRecord(await sessions.getRun!(qaWorker.sessionId, context.companyId, requestRow.runId as string),
-      ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing"]);
+    const currentRun = exactToolRecord(await sessions.getRun!(qaWorker.sessionId, context.companyId, qaExecutionRunId as string),
+      ["runId", "status", "cancellationRequested", "termination", "errorCode", "error"], ["execution", "output", "timing", "systemEvent"]);
     const currentRunActive = currentRun.status === "running" && currentRun.cancellationRequested === false
       && currentRun.termination === "not_applicable";
     const currentRunClosed = allowTerminalQaRun && ["succeeded", "failed", "cancelled", "interrupted", "timed_out"]
       .includes(currentRun.status as string);
-    if (currentRun.runId !== requestRow.runId || (!currentRunActive && !currentRunClosed)) {
+    if (currentRun.runId !== qaExecutionRunId || (!currentRunActive && !currentRunClosed)) {
       throw new Error("The exact QA Worker Run is no longer active/readable.");
     }
     const currentProfileRaw = await owned.get!({ companyId: context.companyId, pluginAgentKey: qaWorker.pluginAgentKey });
@@ -356,9 +363,10 @@ async function resolveTarget(input: Input, runContext: unknown, platform: SpsPla
   };
   const target: Target = Object.freeze({ workspaceId: context.companyId, projectId, ctoId,
     workstreamId, implementation, implementationDigest, qa, qaDigest, qaWorker, qaRequestId,
-    qaRunId: requestRow.runId as string, source: Object.freeze({ sourceId: source.sourceId, folderKey: source.folderKey, branch }),
+    qaRunId: qaExecutionRunId as string, source: Object.freeze({ sourceId: source.sourceId, folderKey: source.folderKey, branch }),
     commitSha: receipt.commitSha, treeSha: receipt.treeSha, acceptanceId: receipt.acceptanceId, submissionId: receipt.submissionId,
-    ...identity, approvalId: input.approvalId, planSha256: input.planSha256, tipCurrent, allowTerminalQaRun, assertCurrent });
+    ...identity, approvalId: input.approvalId, planSha256: input.planSha256, tipCurrent, allowTerminalQaRun,
+    ...(protectedContinuation ? { protectedContinuation } : {}), assertCurrent });
   return target;
 }
 
