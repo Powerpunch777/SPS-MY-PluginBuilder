@@ -323,7 +323,7 @@ test("lost protected-dispatch reply reuses only the same event and previous Run"
   assert.equal(f.sends.length, 0);
 });
 
-test("terminal event retries an exact pending protected dispatch after process interruption", async () => {
+test("registered Manager terminal event reconciles an exact pending protected dispatch after process interruption", async () => {
   const f = await preparedTerminalFixture();
   const scope = { workspaceId: WORKSPACE, projectId: WORKSPACE, workstreamId: "ws-1", verifiedEventId: f.eventId };
   const identity = { terminalEventId: f.terminalEventId, protectedRunId: f.payload.runId,
@@ -333,13 +333,13 @@ test("terminal event retries an exact pending protected dispatch after process i
   const pending = await startProtectedContinuation(scope, identity, FIXTURE_MANAGER_RUN, f.fixture.state as any);
   assert.equal(pending.status, "updated");
   const original = f.fixture.values.get(mapKey(requestKey)) as { events: Array<{ requestId: string }> };
-  const terminal = await consumeManagerSessionTerminalJob({ jobKey: MANAGER_SESSION_TERMINAL_JOB,
-    runId: "88888888-8888-4888-8888-888888888888", trigger: "event", eventId: "manager-terminal-pending-replay",
+  const job = createBuilderPlatform().jobs.find(item => item.jobKey === MANAGER_SESSION_TERMINAL_JOB)!;
+  await job.handler({ jobKey: MANAGER_SESSION_TERMINAL_JOB,
+    runId: "88888888-8888-4888-8888-888888888888", trigger: "event", eventId: `agent-session-terminal-v1:${"a".repeat(64)}`,
     companyId: WORKSPACE, event: { eventType: "agent.session.run.terminal", payload: { schemaVersion: 1,
       runId: FIXTURE_MANAGER_RUN, sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       requestId: managerRequestUuidForLedgerKey(original.events[0]!.requestId), status: "succeeded",
-      resultSha256: "c".repeat(64), finishedAt: "2026-11-07T01:00:00.000Z" } } }, f.fixture.platform);
-  assert.equal(terminal.status, "accepted", JSON.stringify(terminal));
+      resultSha256: "c".repeat(64), finishedAt: "2026-11-07T01:00:00.000Z" } } } as never, f.fixture.platform);
   assert.equal(f.dispatches.length, 1);
   assert.equal(f.dispatches[0]!.input.previousRunId, FIXTURE_MANAGER_RUN);
   assert.equal(f.sends.length, 0);

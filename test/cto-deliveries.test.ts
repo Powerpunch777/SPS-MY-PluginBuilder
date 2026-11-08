@@ -77,6 +77,26 @@ test("parses an exact scoped delivery into a detached deeply frozen snapshot", (
   assert.deepEqual(parsed.instruction.spec.scopeNodeIds, ["auth-api"]);
 });
 
+test("preserves legacy delivery shape and validates terminal handoff reservation receipts", () => {
+  const legacy = parseCtoDelivery(delivery(), workspaceId, projectId, ctoId);
+  assert.equal(Object.hasOwn(legacy, "taskResultHandoffs"), false);
+  const handoff = { eventId: `agent-session-terminal-v1:${digest}`, sourceSessionId: sessionId, sourceRunId: runId,
+    sourceRequestId: "44444444-4444-4444-8444-444444444444", workstreamId: "WS-001", taskId: "TASK-001", role: "worker",
+    packetRevision: 1, packetRecordSha256: digest, sourceCommitSha: "c".repeat(40), sourceSubmissionId: digest, qaReportRevisionId: null,
+    sourceStatus: "succeeded", sourceFinishedAt: timestamp, resultSha256: "d".repeat(64), ctoSessionId: sessionId,
+    previousCtoRunId: runId, previousCtoRequestId: "55555555-5555-4555-8555-555555555555",
+    phase: "pending", requestId: null, runId: null, replayed: null };
+  const parsed = parseCtoDelivery(delivery({ taskResultHandoffs: [handoff] }), workspaceId, projectId, ctoId);
+  assert.deepEqual(parsed.taskResultHandoffs, [handoff]);
+  assert(Object.isFrozen(parsed.taskResultHandoffs));
+  assert(Object.isFrozen(parsed.taskResultHandoffs![0]));
+  assert.throws(() => parseCtoDelivery(delivery({ taskResultHandoffs: [{ ...handoff, sourceFinishedAt: "not-a-time" }] }),
+    workspaceId, projectId, ctoId), /malformed/);
+  assert.throws(() => parseCtoDelivery(delivery({ taskResultHandoffs: [handoff, handoff] }), workspaceId, projectId, ctoId), /unique/);
+  assert.throws(() => parseCtoDelivery(delivery({ taskResultHandoffs: [{ ...handoff, phase: "accepted", requestId: null }] }),
+    workspaceId, projectId, ctoId), /malformed/);
+});
+
 test("requires exact scope, canonical request identity and a receipt-free assigned instruction", () => {
   assert.throws(() => parseCtoDelivery(delivery(), "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", projectId, ctoId), /match the expected scope/);
   assert.throws(() => parseCtoDelivery(delivery(), "not-a-uuid", projectId, ctoId), /workspaceId must be a canonical UUID/);

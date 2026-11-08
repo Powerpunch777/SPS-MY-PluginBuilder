@@ -69,6 +69,46 @@ test("successful unrelated Main DONE is not a generic wake; duplicate terminal d
   assert.equal(f.f.sends, 0);
 });
 
+test("manual and scheduled jobs cannot turn a copied terminal payload into a handoff", async () => {
+  const f = await terminalFixture("succeeded");
+  const before = structuredClone([...f.f.values.entries()]);
+  f.sessionApi.getRequest = async () => { throw new Error("A non-event job must not inspect a session request."); };
+  f.sessionApi.getRun = async () => { throw new Error("A non-event job must not inspect or dispatch a Run."); };
+  const job = createBuilderPlatform().jobs.find(item => item.jobKey === MANAGER_SESSION_TERMINAL_JOB)!;
+  for (const trigger of ["manual", "schedule"]) {
+    await job.handler({ ...terminalJob("succeeded"), trigger } as never, f.f.platform);
+  }
+  assert.deepEqual([...f.f.values.entries()], before);
+  assert.equal(f.f.sends, 0);
+});
+
+test("a terminal payload without an authenticated job identity is rejected before authority reads", async () => {
+  const f = await terminalFixture("succeeded");
+  let reads = 0;
+  f.f.platform.state.get = async () => { reads += 1; throw new Error("Unexpected authority read."); };
+  const job = createBuilderPlatform().jobs.find(item => item.jobKey === MANAGER_SESSION_TERMINAL_JOB)!;
+  for (const context of [{ runId: undefined }, { companyId: "foreign" }, { eventId: "uncorrelated" }]) {
+    await assert.rejects(async () => job.handler({ ...terminalJob("succeeded"), ...context } as never, f.f.platform),
+      /agent-session-terminal-job-context-invalid/u);
+  }
+  assert.equal(reads, 0);
+  assert.equal(f.f.sends, 0);
+});
+
+test("a known Main terminal event does not depend on the Task handoff inventory", async () => {
+  const f = await terminalFixture("failed");
+  const get = f.f.platform.state.get.bind(f.f.platform.state);
+  f.f.platform.state.get = async address => {
+    if (address.stateKey.startsWith("workstreams-")) throw new Error("Unrelated Workstream state is unavailable.");
+    return get(address);
+  };
+  const job = createBuilderPlatform().jobs.find(item => item.jobKey === MANAGER_SESSION_TERMINAL_JOB)!;
+  await job.handler(terminalJob("failed") as never, f.f.platform);
+  const turn = f.f.values.get(mapKey(key(`lead-chat.turn.v1.${REQUEST}`))) as { state: string };
+  assert.equal(turn.state, "failed");
+  assert.equal(f.f.sends, 0);
+});
+
 test("late terminal event cannot override a still-running authoritative Main Run", async () => {
   const f = await terminalFixture("succeeded");
   f.sessionApi.getRun = async (_sessionId: string, _companyId: string, runId: string) => ({ runId,

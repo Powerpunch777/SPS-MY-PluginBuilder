@@ -48,7 +48,7 @@ export default defineSpsPluginManifest({
   jobs: [{ jobKey: "builder.integrate-verified-workstream", displayName: "Integrate a verified Workstream", scope: "workspace",
     description: "Event-driven consumption of current guarded Workstream verification. No periodic schedule or AI wake is implied." },
   { jobKey: "agent-session-terminal", displayName: "Reconcile owned session terminal handoffs", scope: "workspace",
-    description: "Consumes exact QA, Main, Integration Review and Manager terminal events. A normal Run end is not task completion; failures never create replacement sessions." },
+    description: "Reconciles exact Worker, QA, CTO, Main, Integration Review and Manager terminal events. A normal Run end is not task completion; failures never create replacement sessions." },
   { jobKey: "builder.review-integration-packet", displayName: "Review an exact integration packet", scope: "workspace",
     description: "A persisted Manager packet requests the current Main's G7 review once through the existing keyed conversation." },
   { jobKey: "builder.request-packet-user-review", displayName: "Prepare the exact user package review", scope: "workspace",

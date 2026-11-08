@@ -11,6 +11,9 @@ const FIELDS = [
   "instruction", "requestedBy", "createdAt", "phase", "runId", "cancellationRequested", "termination",
   "outputState", "answer", "executionPolicy",
 ] as const;
+const HANDOFF_FIELDS = ["eventId", "sourceSessionId", "sourceRunId", "sourceRequestId", "workstreamId", "taskId", "role",
+  "packetRevision", "packetRecordSha256", "sourceCommitSha", "sourceSubmissionId", "qaReportRevisionId", "sourceStatus", "sourceFinishedAt", "resultSha256", "ctoSessionId",
+  "previousCtoRunId", "previousCtoRequestId", "phase", "requestId", "runId", "replayed"] as const;
 const LEGACY_POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-workstream"] as const;
 const MEMORY_POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.update-cto-memory"] as const;
 const POLICY_TOOLS = ["builder.acknowledge-workstream", "builder.read-cto-memory", "builder.read-cto-workstream", "builder.read-own-cto-question", "builder.submit-cto-question", "builder.update-cto-memory"] as const;
@@ -53,6 +56,15 @@ export type CtoDelivery = Readonly<{
   termination: "not_applicable" | "pending" | "confirmed";
   outputState: "not_ready" | "available" | "withheld" | "unsupported";
   answer: string | null;
+  taskResultHandoffs?: readonly CtoTaskResultHandoff[];
+}>;
+export type CtoTaskResultHandoff = Readonly<{
+  eventId: string; sourceSessionId: string; sourceRunId: string; sourceRequestId: string;
+  workstreamId: string; taskId: string; role: "worker" | "qa"; packetRevision: number; packetRecordSha256: string;
+  sourceCommitSha: string | null; sourceSubmissionId: string | null; qaReportRevisionId: string | null; resultSha256: string; ctoSessionId: string;
+  sourceStatus: "succeeded" | "failed" | "cancelled"; sourceFinishedAt: string;
+  previousCtoRunId: string; previousCtoRequestId: string; phase: "pending" | "uncertain" | "accepted";
+  requestId: string | null; runId: string | null; replayed: boolean | null;
 }>;
 
 function record(value: unknown, fields: readonly string[], label: string): Record<string, unknown> {
@@ -180,7 +192,8 @@ export function parseCtoDelivery(value: unknown, workspaceId: string, projectId:
   const expectedWorkspaceId = uuid(workspaceId, "workspaceId");
   const expectedProjectId = identifier(projectId, "projectId");
   const expectedCtoId = identifier(ctoId, "ctoId");
-  const row = record(value, FIELDS, "ctoDelivery");
+  const hasHandoffs = value !== null && typeof value === "object" && Object.hasOwn(value, "taskResultHandoffs");
+  const row = record(value, hasHandoffs ? [...FIELDS, "taskResultHandoffs"] : FIELDS, "ctoDelivery");
   if (row.schemaVersion !== 1) throw new TypeError("schemaVersion must be 1.");
   const actualWorkspaceId = uuid(row.workspaceId, "workspaceId");
   const actualProjectId = identifier(row.projectId, "projectId");
@@ -223,6 +236,40 @@ export function parseCtoDelivery(value: unknown, workspaceId: string, projectId:
     || outputState !== "not_ready" || answer !== null)) {
     throw new TypeError("prepared delivery phases require cancellation=false, termination=not_applicable, outputState=not_ready, and no answer.");
   }
+  let taskResultHandoffs: readonly CtoTaskResultHandoff[] | undefined;
+  if (hasHandoffs) {
+    if (!Array.isArray(row.taskResultHandoffs) || row.taskResultHandoffs.length > 128
+      || Reflect.ownKeys(row.taskResultHandoffs).length !== row.taskResultHandoffs.length + 1) throw new TypeError("taskResultHandoffs must be a bounded dense array.");
+    const parsed = row.taskResultHandoffs.map((value, index) => {
+      const handoff = record(value, HANDOFF_FIELDS, `taskResultHandoffs[${index}]`);
+      for (const field of ["eventId", "sourceSessionId", "sourceRunId", "sourceRequestId", "workstreamId", "taskId", "ctoSessionId", "previousCtoRunId", "previousCtoRequestId"] as const) {
+        identifier(handoff[field], `taskResultHandoffs[${index}].${field}`);
+      }
+      for (const field of ["sourceSessionId", "sourceRunId", "ctoSessionId", "previousCtoRunId", "previousCtoRequestId"] as const) uuid(handoff[field], `taskResultHandoffs[${index}].${field}`);
+      if (typeof handoff.eventId !== "string" || !/^agent-session-terminal-v1:[a-f0-9]{64}$/u.test(handoff.eventId)
+        || (handoff.role !== "worker" && handoff.role !== "qa")
+        || !Number.isSafeInteger(handoff.packetRevision) || (handoff.packetRevision as number) < 1
+        || typeof handoff.packetRecordSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(handoff.packetRecordSha256)
+        || handoff.sourceCommitSha !== null && (typeof handoff.sourceCommitSha !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(handoff.sourceCommitSha))
+        || handoff.sourceSubmissionId !== null && (typeof handoff.sourceSubmissionId !== "string" || !/^[a-f0-9]{64}$/u.test(handoff.sourceSubmissionId))
+        || handoff.qaReportRevisionId !== null && (typeof handoff.qaReportRevisionId !== "string" || !handoff.qaReportRevisionId.startsWith("task-qa-report-v1:"))
+        || !["succeeded", "failed", "cancelled"].includes(String(handoff.sourceStatus))
+        || typeof handoff.sourceFinishedAt !== "string" || !Number.isFinite(Date.parse(handoff.sourceFinishedAt))
+        || new Date(handoff.sourceFinishedAt).toISOString() !== handoff.sourceFinishedAt
+        || typeof handoff.resultSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(handoff.resultSha256)
+        || !["pending", "uncertain", "accepted"].includes(String(handoff.phase))
+        || (handoff.requestId === null) !== (handoff.runId === null)
+        || handoff.requestId !== null && (typeof handoff.requestId !== "string" || !UUID.test(handoff.requestId))
+        || handoff.runId !== null && (typeof handoff.runId !== "string" || !UUID.test(handoff.runId))
+        || handoff.replayed !== null && typeof handoff.replayed !== "boolean"
+        || (handoff.phase === "accepted") !== (handoff.requestId !== null && handoff.replayed !== null)) {
+        throw new TypeError(`taskResultHandoffs[${index}] is malformed.`);
+      }
+      return Object.freeze({ ...handoff }) as CtoTaskResultHandoff;
+    });
+    if (new Set(parsed.map(item => item.eventId)).size !== parsed.length) throw new TypeError("Task result terminal events must be unique.");
+    taskResultHandoffs = Object.freeze(parsed);
+  }
   const delivery: CtoDelivery = Object.freeze({
     schemaVersion: 1,
     workspaceId: actualWorkspaceId,
@@ -241,6 +288,7 @@ export function parseCtoDelivery(value: unknown, workspaceId: string, projectId:
     termination: row.termination,
     outputState,
     answer,
+    ...(taskResultHandoffs === undefined ? {} : { taskResultHandoffs }),
   });
   assertSafeStrings(delivery, "delivery");
   if (delivery.requestId !== requestIdForInstruction(expectedWorkspaceId, expectedProjectId, expectedCtoId, instruction)) {

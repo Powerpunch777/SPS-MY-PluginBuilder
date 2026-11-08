@@ -39,6 +39,7 @@ import { publishTaskQaReport } from "./task-qa-reports.ts";
 import { verifyCurrentWorkstream } from "./builder-gates/current-workstream-verification.ts";
 import { WORKSTREAM_VERIFIED_JOB } from "./builder-gates/workstream-verification-publication.ts";
 import { consumeTaskQaOriginTerminal } from "./task-qa-event-job.ts";
+import { consumeCtoTaskResultTerminal } from "./cto-task-result-handoff.ts";
 import { consumeManagerSessionTerminalJob, consumeVerifiedWorkstreamJob,
   MANAGER_SESSION_TERMINAL_JOB } from "./builder-gates/integration-manager-job.ts";
 import { readVerifiedWorkstreamForManager } from "./builder-gates/integration-manager-job.ts";
@@ -952,7 +953,7 @@ async function notifyFinalReview(job: { companyId?: string; eventId?: string; tr
 }
 
 const AGENT_SESSION_TERMINAL_EVENT = "agent.session.run.terminal";
-type AgentSessionTerminal = Readonly<{ runId: string; sessionId: string; requestId: string;
+type AgentSessionTerminal = Readonly<{ schemaVersion: 1; runId: string; sessionId: string; requestId: string;
   status: "succeeded" | "failed" | "cancelled"; resultSha256: string; finishedAt: string }>;
 
 function parseAgentSessionTerminal(job: unknown): AgentSessionTerminal | null {
@@ -1060,13 +1061,13 @@ async function consumeWorkspaceSessionTerminalJob(job: {
   jobKey: string; companyId?: string; runId?: string; eventId?: string; trigger: string; event?: unknown },
   platform: SpsPlatformInvocationContext) {
   if (job.jobKey !== MANAGER_SESSION_TERMINAL_JOB) return { status: "ignored" as const, reason: "unrelated-job-key" };
+  if (job.trigger !== "event") return { status: "ignored" as const, reason: "terminal-handoff-requires-event-trigger" };
   const payload = parseAgentSessionTerminal(job);
-  if (payload && (!job.eventId || !/^agent-session-terminal-v1:[a-f0-9]{64}$/u.test(job.eventId))) {
-    return { status: "unknown" as const, reason: "agent-session-terminal-event-id-invalid" };
+  if (payload && (!job.companyId || !UUID.test(job.companyId) || !job.runId || !UUID.test(job.runId)
+    || !job.eventId || !/^agent-session-terminal-v1:[a-f0-9]{64}$/u.test(job.eventId))) {
+    return { status: "unknown" as const, reason: "agent-session-terminal-job-context-invalid" };
   }
   if (!payload || !job.companyId) return consumeManagerSessionTerminalJob(job as never, platform);
-  const qa = await consumeTaskQaOriginTerminal(job.companyId, payload, platform);
-  if (qa.status !== "not-applicable") return qa;
   try {
     const binding = await readLeadAgentBinding(job.companyId, platform);
     const sessions = await leadSessionsFor(job.companyId, binding, platform);
@@ -1074,7 +1075,14 @@ async function consumeWorkspaceSessionTerminalJob(job: {
     if (payload.sessionId === sessions.sessions["integration-review"]) {
       return recordLeadSessionTerminal("integration-review", job, payload, binding, sessions, platform);
     }
-  } catch { /* A non-Lead owned session is resolved by the Manager authority consumer. */ }
+    if (Object.values(sessions.sessions).includes(payload.sessionId)) {
+      return { status: "ignored" as const, reason: "lead-session-has-no-terminal-handoff" };
+    }
+  } catch { /* Resolve non-Lead sessions against their own current bindings. */ }
+  const qa = await consumeTaskQaOriginTerminal(job.companyId, payload, platform);
+  if (qa.status !== "not-applicable") return qa;
+  const cto = await consumeCtoTaskResultTerminal(job.companyId, job.eventId!, payload, platform);
+  if (cto.status !== "not-applicable") return cto;
   return consumeManagerSessionTerminalJob(job as never, platform);
 }
 

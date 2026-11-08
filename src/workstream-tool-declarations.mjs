@@ -43,7 +43,7 @@ export const READ_WORKSTREAMS_TOOL = Object.freeze({
 });
 export const READ_CTO_WORKSTREAM_TOOL = Object.freeze({
   name: "builder.read-cto-workstream", displayName: "Read this CTO's assigned Workstream and pinned sources",
-  description: "Only the registered CTO's exact Agent/session can read its assigned instruction with published design/technology sources. Pass the received Workstream ID and read the board revision before acknowledging. Sources stay pinned, not silently upgraded. This is not another CTO's private memory, a dispatch or code execution authority.",
+  description: "Only the registered CTO's exact Agent/session can read its assigned instruction with published design/technology sources. Pass the received Workstream ID and read the board revision before acknowledging. On an exact Core-bound child-result turn, currentTaskResult identifies the Task, submitted Commit or QA report being handed off; it is not source acceptance, QA PASS or Workstream verification. Sources stay pinned, not silently upgraded. This is not another CTO's private memory, a dispatch or code execution authority.",
   parametersSchema: { type: "object", additionalProperties: false, required: ["projectId", "ctoId", "workstreamId"],
     properties: { projectId: id, ctoId: id, workstreamId: id } },
 });

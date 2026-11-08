@@ -277,6 +277,100 @@ test("registered QA report accepts one exact Core event continuation, not the cl
   assert.equal(f.enqueueCalls(), 1, "a continuation report must not enqueue another protected test");
 });
 
+async function terminalAssessmentFixture(protectedStatus: "succeeded" | "failed") {
+  const f = await setup();
+  if (protectedStatus === "failed") f.setCore("failed", { digest: "4".repeat(64), status: "failed",
+    stdoutSha256: null, stderrSha256: null, stdoutBytes: 0, stderrBytes: 0, processExitCode: 1,
+    timedOut: false, cancelled: false, outputLimit: false, appContainerVerified: true, capabilitiesCount: 0,
+    childTerminationConfirmed: true, jobEmpty: true, profileCleanupSucceeded: true,
+    sandboxCleanupSucceeded: true, fixtureMustBeRetained: false });
+  const author = f.resumeQa();
+  const published = await publishTaskQaReport(f.params, author, f.f.platform);
+  assert.equal(published.status, "published");
+  const report = (await f.reportStore().current())!.revision;
+  assert.equal(report.verdict, protectedStatus === "succeeded" ? "passed" : "failed");
+  f.runStates.set(author.runId, "succeeded");
+  f.runStates.set(DEV_RUN, "succeeded");
+  const parent = (await f.f.deliveryStore().current())!.revision;
+  f.runStates.set(parent.runId!, "succeeded");
+  const sessions = f.f.platform.agents.sessions as typeof f.f.platform.agents.sessions & Record<string, any>;
+  sessions.list = async (agentId: string, workspaceId: string) => {
+    assert.equal(workspaceId, W);
+    return agentId === A ? [{ sessionId: C, agentId: A, companyId: W, status: "active",
+      closedAt: null, lastRunId: parent.runId }] : agentId === QA_AGENT ? [{
+      sessionId: QA_SESSION, agentId: QA_AGENT, companyId: W, status: "active", closedAt: null,
+      lastRunId: author.runId, taskKey: `plugin:com.sonparkserver.my-plugin-builder:session:${f.workers[1]!.pluginAgentKey}`,
+    }] : [];
+  };
+  const dispatches: Array<Record<string, unknown>> = [];
+  let beforeTaskHandoff = async () => {};
+  sessions.dispatchSessionTerminalEventV1 = async (sessionId: string, workspaceId: string, input: Record<string, unknown>) => {
+    assert.equal(sessionId, C); assert.equal(workspaceId, W);
+    await beforeTaskHandoff();
+    const guards = input.guards as Array<{ stateKey: string; namespace?: string; expectedValue: unknown }>;
+    for (const guard of guards) assert.deepEqual(await f.f.state.get({ scopeKind: "company", scopeId: W,
+      namespace: guard.namespace, stateKey: guard.stateKey }), guard.expectedValue);
+    dispatches.push(structuredClone(input));
+    return { requestId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      runId: "ffffffff-ffff-4fff-8fff-ffffffffffff", replayed: false };
+  };
+  const terminal = { jobKey: MANAGER_SESSION_TERMINAL_JOB, trigger: "event",
+    companyId: W, runId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    eventId: `agent-session-terminal-v1:${"a".repeat(64)}`,
+    event: { eventType: "agent.session.run.terminal", payload: { schemaVersion: 1, runId: author.runId,
+      sessionId: QA_SESSION, requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      status: "succeeded", resultSha256: "b".repeat(64), finishedAt: now } } };
+  return { ...f, author, report, dispatches, terminal,
+    setBeforeTaskHandoff(hook: typeof beforeTaskHandoff) { beforeTaskHandoff = hook; } };
+}
+
+for (const protectedStatus of ["succeeded", "failed"] as const) {
+  test(`registered QA author terminal hands off its exact ${protectedStatus} protected assessment without conflating Run IDs`, async () => {
+    const f = await terminalAssessmentFixture(protectedStatus);
+    assert.notEqual(f.report.reference.binding.requestId, f.terminal.event.payload.requestId);
+    assert.notEqual(f.report.reference.binding.runId, f.author.runId);
+    await runRegisteredSessionTerminalJob(f.terminal, f.f.platform);
+    assert.equal(f.dispatches.length, 1);
+    assert.equal(f.dispatches[0]!.sourceRunId, f.author.runId);
+    const handoff = (await f.f.deliveryStore().current())!.revision.taskResultHandoffs![0]!;
+    assert.equal(handoff.qaReportRevisionId, f.report.revisionId);
+    assert.equal(handoff.sourceStatus, "succeeded");
+    assert.equal(handoff.sourceCommitSha, COMMIT);
+    assert.equal((await f.reportStore().current())!.revision.verdict,
+      protectedStatus === "succeeded" ? "passed" : "failed");
+    await runRegisteredSessionTerminalJob(f.terminal, f.f.platform);
+    assert.equal(f.dispatches.length, 1, "a duplicate author terminal cannot create a second child");
+  });
+}
+
+test("registered QA terminal refuses a changed Source instead of forwarding an old assessment", async () => {
+  const f = await terminalAssessmentFixture("succeeded");
+  f.setTip("e".repeat(40));
+  await assert.rejects(runRegisteredSessionTerminalJob(f.terminal, f.f.platform), /handoff unresolved/u);
+  assert.equal(f.dispatches.length, 0);
+  assert.equal((await f.reportStore().current())!.revision.revisionId, f.report.revisionId);
+});
+
+for (const prefix of ["task-packets-head.v1.", "task-qa-reports-head.v1.",
+  "task-protected-qa-runs-head.v1.", "task-source-acceptance.v1."]) {
+  test(`registered QA handoff atomically guards the actual ${prefix} producer key`, async () => {
+    const f = await terminalAssessmentFixture("succeeded");
+    const entry = [...f.f.values.entries()].find(([key]) => key.includes(prefix));
+    assert.ok(entry, "use the key from the real fixture producer, not a reimplemented key hash");
+    const [key, value] = entry;
+    f.setBeforeTaskHandoff(async () => {
+      f.f.values.set(key, { ...(value as object), changedAtAdmission: true } as never);
+    });
+    try {
+      await assert.rejects(runRegisteredSessionTerminalJob(f.terminal, f.f.platform), /handoff unresolved/u);
+      assert.equal(f.dispatches.length, 0);
+    } finally {
+      f.f.values.set(key, value);
+    }
+    assert.equal((await f.reportStore().current())!.revision.revisionId, f.report.revisionId);
+  });
+}
+
 test("continuation cannot borrow another Run, event, protected reference or cancelled QA author", async t => {
   for (const [name, override] of [
     ["wrong previous Run", { previousRunId: DEV_RUN }],

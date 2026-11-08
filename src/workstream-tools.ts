@@ -202,7 +202,8 @@ export async function readCtoWorkstream(params: unknown, runContext: unknown, pl
   await authority.check();
   return { content: "Assigned versioned Workstream and published design/technology facts. Historical revisions are not automatically current. No other CTO private memory/transcript or execution permission is included.",
     data: asJson({ projectId, boardRevisionId: board!.revision.revisionId, workstream: record, sources,
-      ...(delivery ? { delivery: { requestId: delivery.requestId, currentInstruction: workstreamInstructionDigest(latest) === workstreamInstructionDigest(record) } } : {}) }) };
+      ...(delivery ? { delivery: { requestId: delivery.requestId, currentInstruction: workstreamInstructionDigest(latest) === workstreamInstructionDigest(record) },
+        ...(delivery.currentTaskResult ? { currentTaskResult: delivery.currentTaskResult } : {}) } : {}) }) };
 }
 export async function acknowledgeWorkstream(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const input = exactToolRecord(params, ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "specRevision", "readiness", "note"]);
