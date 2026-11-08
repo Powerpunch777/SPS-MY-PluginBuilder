@@ -13,7 +13,7 @@
 | Lead 6세션 | 여섯 독립 Session ID와 채널별 도구 정책, Main 공식 발행 제한, Lead 영역 탐색 연결. 격리된 소스 Desktop/Host에서 준비·재확인·재시작 뒤 동일 6개 ID와 Run 미생성을 확인. Core가 반환한 실패 코드·메시지는 기존 대화 기록에 크기를 제한해 보존하고 화면에는 시스템 메시지로 표시하며 자동 재전송하지 않음. 모델 실행 실패 시 논리 세션 등록까지 삭제되던 경로의 수정과 실제 임시 Host의 등록·Run 연결 보존을 확인함. 시험본 MCP 실행 파일 누락을 해소한 뒤 실제 Main AI가 도구로 설계 초안을 한 번 저장했고 Host 재시작 후 같은 초안을 확인함. 후속 첫 검토의 도구 호출은 실패했으며 원본 실패를 보존함. 다음 시험은 실제 사용량 제한으로 종료되어 D3 승인·발행·조회 전체 AI 흐름과 계정 전환은 미검증. |
 | 기준선 문서 | Main 발행 후 결정적 본문·해시·source pin을 기존 Revision journal에 저장하고 문서센터에서 조회. stale/unavailable, 별도 journal 실패와 명시 재생을 구분. 전체 납품 inventory와 독립 승인 증거는 아님. |
 | 문서센터 | 현재 상담 원문·설계·기술 선정·Workstream 등 실제 연결 자료를 기존 화면에 투영. 제목·본문 검색, 분류·유형·승인·최신성·연관 ID 필터와 기록 시각 정렬을 연결. 미확인 상태를 보존하며 전체 Artifact 목록의 완전성은 주장하지 않음. |
-| D3 | 첫 설계의 Main 제안과 인증 사용자 검토를 분리함. 첫 Baseline은 정확한 초안·원문 핀·규칙 팩을 담은 승인 Revision과 해시를 같은 발행에 고정하며, 일반 대화만으로 발행할 수 없음. 기존 검토 묶음에 선택적인 정적 설계 모델을 함께 승인하며, 등록된 D3 조회는 원문 AC 인용·사실·시나리오·항목별 결정과 정확한 요구·규칙 관계를 다시 검증하고 기존 유한 검사기를 실행함. 응답은 승인 Revision과 모델 해시를 표시하며 caller 입력으로 승인 모델을 교체할 수 없음. 모델 없는 과거 승인, 누락된 검사·실행·QA 증거는 계속 `UNKNOWN`. 후속 규칙팩 제안은 같은 승인·원문 핀을 검증하지만 후속 변경의 모델 승인·발행 경로는 미완료. codec·등록 handler의 fixture 독립 QA와 검토 화면의 데스크톱/모바일 검사는 통과했으며, 실제 Host·AI 승인 흐름이나 CTO VERIFIED의 근거는 아님. |
+| D3 | 첫 설계의 Main 제안과 인증 사용자 검토를 분리함. 첫 Baseline은 정확한 초안·원문 핀·규칙 팩을 담은 승인 Revision과 해시를 같은 발행에 고정하며, 일반 대화만으로 발행할 수 없음. 기존 검토 묶음에 선택적인 정적 설계 모델을 함께 승인하며, 등록된 D3 조회는 원문 AC 인용·사실·시나리오·항목별 결정과 정확한 요구·규칙 관계를 다시 검증하고 기존 유한 검사기를 실행함. 응답은 승인 Revision과 모델 해시를 표시하며 caller 입력으로 승인 모델을 교체할 수 없음. 모델 없는 과거 승인, 누락된 검사·실행·QA 증거는 계속 `UNKNOWN`. 후속 모델도 정확한 이전 Baseline 핀, 사용자 승인과 Main 공식 발행 이후에만 현재 조회에 반영하며 제안·초안 변경만으로 기존 모델을 교체하지 않음. 이 경로의 전용 fixture 검사 2개와 codec·등록 handler의 독립 QA, 검토 화면의 데스크톱/모바일 검사는 통과했으며 실제 Host·AI 승인 흐름이나 CTO VERIFIED의 근거는 아님. |
 | UI Contract | 정확한 HTML과 시안·사용자 승인·Main 공식 발행을 연결. 접수 미확인 시 같은 요청 ID를 조회하고 이미 시도한 실행을 재전송하지 않음. 데스크톱/모바일 미리보기 통과. 자동 알림 복구에는 동일 Workspace Worker 경로가 필요하며 실제 AI 승인 흐름은 미검증. |
 | G5 변경 영향 | 설계 시각화의 인증 사용자와 Main·Integration Review 도구에서 기존 Workspace 저널의 정확한 게시 Baseline 및 공식 UI 쌍을 읽기 전용으로 비교. 기존 `builder.read-change-impact`는 생략 기본값에서 기존 비교 결과를 유지하고, 선택적 `projection: "revalidation"`은 명시된 과거 G5·Workstream·Task 게시 쌍의 후보와 현재 지시사항을 투영함. CTO 준비 receipt는 readiness 참고일 뿐 G5 ACK가 아니며, 실행·독립 QA 증거와 불완전 inventory는 계속 `UNKNOWN`; 조회는 재승인·dispatch·실행을 허가하지 않음. 실제 자동 실행·승인 경로와 전체 원본 inventory는 미연결. 사용자 화면은 게시 Baseline과 그에 연결된 승인 UI를 명시 선택하며, 이전·신규 순서와 늦은 응답을 검사함. 격리된 소스 Desktop/Host에서 인증 사용자 조회·Workspace별 빈 목록·다른 Workspace 접근 거부를 확인했으며 실제 승인 쌍 생성이나 AI 실행 검증은 아님. 최근 이력 범위·누락된 승인 연결을 구분하고 현재 쌍을 자동 추정하지 않음. 요구·UI·Graph 후보 및 확인 범위를 구분. 기술·Workstream·Task의 실제 원본 쌍도 부분 범위이며, 일정·상품 및 전체 영향은 미확인. ACK·영향 범위 재승인과 실행 Gate는 별도 연결 필요. |
 | CTO 프로필 | 지원 SDK/Host에서는 동일 CTO ID를 같은 plugin-owned Agent 및 Session ID로 준비함. 신규 프로필 요청은 현재 Lead에서 확인된 실행 어댑터만 초기 선호값으로 전달하며, 관측 불가 시 생성하지 않음. 이 연결은 fixture 독립 QA 완료. 등록은 Run을 시작하지 않으며 비활성·소유권 변경을 관측하면 전송을 차단함. 후보 공개 SDK의 범용 API를 사용한 별도 no-AI 플러그인으로 실제 소스 Host에서 전용 프로필 2개·세션·재시작·Workspace 분리와 Run 0개를 확인. 현재 고정 SDK의 논리 세션은 독립 Agent가 아니며, Builder Main 도구·동시 실행·전송 경쟁의 Core admission은 별도 미검증. |
@@ -638,6 +638,22 @@
   알림과 deferred event 저장 순서의 경합을 찾았다. 이 두 경계의 수정·회귀는 별도 후속
   작업이다. 위 1,269개 통과를 이 경합이나 실제 Core/Node/모델 전체 흐름의 인수로 쓰지 않는다.
   보호 실행 기술 성공, 독립 QA 판정, VERIFIED, 자동 통합, 최종 사용자 승인은 계속 구분한다.
+
+- `862ef21`은 deferred event 저장 직후 QA origin과 기존 보고서를 다시 읽어 알림 순서의
+  경합을 처리한다. `f4b8d65`는 접수된 Core 요청/Run의 정확한 이벤트 연결이 있을 때만
+  pending Manager continuation의 도구 읽기를 허용하고, 현재 역할·검증·인수 기록을 다시
+  확인한다. 읽기가 인수 기록을 승인 상태로 승격하지 않는다. 이 소스의 고정 SDK 물리
+  사본에서 타입·빌드와 전체 회귀 1,299개가 통과했다. 후속 `830bae5`는 새 Manager 검사에
+  실제 Core 형태의 이벤트 ID를 사용하도록 fixture만 정정했다.
+- 별도 Core 후보의 임시 PostgreSQL 검사 7개는 동일 이벤트의 동시 접수에서 요청/Run 하나,
+  응답 유실 후 같은 영수증 재생, 변경 guard·철회·다른 Workspace의 새 접수 차단을 확인했다.
+  DB는 실제이며 상류 Run·보호 영수증·Host 계획과 wake는 합성이다. 실제 모델이나 Node
+  실행 증거로 계산하지 않는다. Builder의 두 경합 검사 역시 fixture 기반이다.
+- 다음 연결 공백은 Worker/QA 종료 결과의 담당 CTO 인계다. 현재 제출/보고 저널과 CTO의
+  명시적 조회·인수는 있으나, 기존 terminal Job에 이를 자동 전달하는 CTO 분기는 없다.
+  Workstream/Task·정확한 Commit·독립 QA와 소비자 인수를 기존 이벤트/세션 계약에
+  연결해야 하며, 단순 Run 정상 종료를 업무 완료로 바꾸지 않는다. 공식 Goal 실행과
+  이 상향 인계, 실제 두 CTO/AI/자동 Manager/납품 흐름은 계속 미인수다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
