@@ -720,6 +720,38 @@
   1,342개 검사는 `1056a25` 근거이며 후속 변경의 전체 재실행 결과로 재표기하지 않는다.
   실제 Core/모델 실행·Goal·원자적 파일 권한 결속과 두 CTO 전체 납품 인수는 여전히 남는다.
 
+### 2026-11-08 Task 파일 효과와 현재 권한 조건
+
+- Builder `e679237`은 Worker/QA 파일 도구의 실제 현재 Task Packet·Workstream·CTO delivery·
+  CTO 등록·Worker 등록을 읽어 mutable head 조건을 구성한다. 불변 Revision 본문은 기존
+  저널의 digest 검증을 재사용하고, 현재 head/역할 조건을 새 Core 파일 API에 전달한다.
+  QA의 읽기 전용 경로와 정확한 Task 경로 제한은 유지한다.
+- Core 후보 `b019a0a`는 기존 Source·폴더·Plugin 설정·실행 제어와 Plugin state 조건을
+  검사하고, 기존 DB 행의 잠금을 실제 파일 I/O가 끝날 때까지 유지한다. 별도 Builder 역할,
+  상태 저장소나 실행 엔진은 추가하지 않았다. 파일 효과 이후 오류·권한 불확실성은 고정
+  `unknown`이며 재시도하지 않는다. 읽은 내용도 권한 불확실 시 반환하지 않는다.
+- 공개 SDK 후보 `a4cd0cb`는 선택적 `localFolders.workspaceSourceFileEffectV1` 전송을 제공한다.
+  Builder는 함수 존재뿐 아니라 현재 Host의 정확한 지원 광고도 요구한다. 미지원 Host에서
+  새 Worker를 시작하거나 구형 Source/별칭 I/O로 우회하지 않는다. 제품 SDK pin `c69915a`,
+  설치본과 배포 상태는 변경하지 않았다.
+- 고정 SDK의 물리 QA 사본에서 전체 1,348개, 별도 독립 신규 11개와 타입·빌드가 통과했다.
+  전체 회귀 당시 실행 소스 383개는 정규화 해시로 현재 소스와 일치했다. 독립 신규 파일은
+  전체 회귀 이후 별도로 실행했으므로 전체 1,359개 재실행으로 표기하지 않는다.
+  Node 26.4.0·TypeScript 6.0.3이며 기존 SDK 32도구 경계 경고는 유지했다.
+- SDK 후보는 설치 없는 기본 검사 293개와 독립 검사를 포함한 집중 47개가 통과했다.
+  설치를 호출하는 consumer smoke 3개는 이번 기본 검사에서 제외했다. Core의 자체
+  PG/파일 검사 11개와 별도 독립 7개도 통과했다. 독립 검사는 실제 공개 SDK Worker JSONL→
+  Workspace Host→임시 PostgreSQL/파일까지 연결하며, 동시 철회가 실제 행 잠금에 대기하고
+  파일 작업 종료 뒤 반영되는 것을 확인했다. 합성 invocation과 in-process Worker를 쓰므로
+  실제 Agent/CLI·모델·설치본·OS 격리 또는 전체 업무 인수의 증거는 아니다.
+- DB 연결 단절/프로세스 crash와 파일 시스템의 완전한 원자성, 새 metadata 행의 phantom,
+  외부 동일 사용자 파일 변경은 이 잠금만으로 보장하지 않는다. 기존 실패 로그와 별도 WIP는
+  보존했다. POLICY-EXEC-03/11/16과 범용 권한의 부분 구현 근거이며 원문 216개 AC와
+  42개 정책의 전체 인수 판정을 승격하지 않는다.
+- 다음 의존성은 실행 중 Worker의 파일 효과에 대한 G5 변경 범위 재검증, 실제 완료·권한/
+  통합 대기·재작업 계측, 공식 Goal 실행·재개와 실제 두 CTO→QA→Manager→Main/G7→
+  사용자 승인이다. 영향 없는 검증 이력 보존과 실제 앱·AI 인수는 계속 별도로 확인한다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)
