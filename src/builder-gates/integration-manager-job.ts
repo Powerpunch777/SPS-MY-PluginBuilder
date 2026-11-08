@@ -908,7 +908,11 @@ export function createVerifiedWorkstreamManagerReadHandler(
   const authority = await resolveAuthority(workspaceId, platform);
   if (runContext.agentId !== authority.agentId || runContext.sessionId !== authority.sessionId) throw new Error("Only the current Manager session may read verified Workstream evidence.");
   const current = await readCurrent(workspaceId, params.eventId, platform);
-  if (current.status !== "current" || current.workstreamId !== params.workstreamId) throw new Error("This verified Workstream event is not current.");
+  if (current.status !== "current" || current.workstreamId !== params.workstreamId || current.snapshot.eventId !== params.eventId
+    || current.snapshot.workspaceId !== workspaceId || current.snapshot.projectId !== workspaceId
+    || current.snapshot.workstreamId !== params.workstreamId || current.snapshot.verificationStatus !== "VERIFIED") {
+    throw new Error("This verified Workstream event is not current.");
+  }
   const row = await readVerifiedWorkstreamReservation({ workspaceId, projectId: workspaceId,
     workstreamId: current.workstreamId, verifiedEventId: params.eventId }, platform.state);
   if (!row || !["pending", "accepted"].includes(String(row.status)) || typeof row.requestId !== "string"
@@ -916,8 +920,13 @@ export function createVerifiedWorkstreamManagerReadHandler(
     throw new Error("This verification event has no current effect-bound Manager request.");
   }
   let ledgerRequestId: string | null = null, requestId: string | null = null, storedReceipt: unknown = null;
+  let pendingContinuation: ProtectedContinuation | null = null;
+  let acceptedContinuation: ProtectedContinuation | null = null;
+  let initialPendingRequest = false;
+  let pendingLineage: NonNullable<ReturnType<typeof parseProtectedContinuationLineage>> | null = null;
   const initialUuid = managerRequestUuidForLedgerKey(row.requestId);
   if (row.status === "pending") {
+    initialPendingRequest = true;
     ledgerRequestId = row.requestId; requestId = initialUuid;
   } else if (row.status === "accepted" && row.receipt?.receiptId === initialUuid && row.receipt.runId === runContext.runId) {
     ledgerRequestId = row.requestId; requestId = row.receipt.receiptId; storedReceipt = row.receipt;
@@ -927,7 +936,23 @@ export function createVerifiedWorkstreamManagerReadHandler(
       return item.status === "accepted" && item.receipt !== null && item.receipt.runId === runContext.runId
         && REQUEST_ID.test(item.receipt.receiptId);
     });
-    if (continuation) { ledgerRequestId = continuation.requestId; requestId = continuation.receipt!.receiptId; storedReceipt = continuation.receipt; }
+    if (continuation) { acceptedContinuation = continuation; ledgerRequestId = continuation.requestId;
+      requestId = continuation.receipt!.receiptId; storedReceipt = continuation.receipt; }
+    else if (row.status === "accepted") {
+      const observedRun = await platform.agents.sessions.getRun(authority.sessionId, workspaceId, runContext.runId as string);
+      if (!exactActiveManagerRun(observedRun, runContext.runId as string)) {
+        throw new Error("Manager tool requires the exact active, non-cancelling Core run.");
+      }
+      const lineage = parseProtectedContinuationLineage(runSystemEvent(observedRun));
+      const candidates = lineage ? (row.continuations ?? []).filter(item => item.status === "pending"
+        && continuationMatchesLineage(item, lineage)) : [];
+      if (candidates.length === 1) {
+        pendingContinuation = candidates[0]!;
+        pendingLineage = lineage!;
+        ledgerRequestId = pendingContinuation.requestId;
+        requestId = pendingLineage.requestId;
+      }
+    }
   }
   if (!ledgerRequestId || !requestId) throw new Error("Manager run is not authorized by an exact Core request receipt or accepted ledger receipt.");
   if (storedReceipt !== null && (!exactObject(storedReceipt) || storedReceipt.receiptId !== requestId || storedReceipt.runId !== runContext.runId)) {
@@ -937,21 +962,107 @@ export function createVerifiedWorkstreamManagerReadHandler(
   if (!exactObject(requestReceipt) || requestReceipt.requestId !== requestId || requestReceipt.state !== "submitted"
     || requestReceipt.runId !== runContext.runId) throw new Error("Manager tool run does not match the exact Core request receipt.");
   const run = await platform.agents.sessions.getRun(authority.sessionId, workspaceId, runContext.runId as string);
-  if (!exactObject(run) || run.runId !== runContext.runId || run.status !== "running"
-    || run.cancellationRequested !== false || run.termination !== "not_applicable") {
+  if (!exactActiveManagerRun(run, runContext.runId as string)) {
     throw new Error("Manager tool requires the exact active, non-cancelling Core run.");
   }
+  if (pendingLineage && !sameProtectedContinuationLineage(parseProtectedContinuationLineage(runSystemEvent(run)), pendingLineage)) {
+    throw new Error("Pending Manager continuation Core lineage changed during evidence read.");
+  }
   const latest = await resolveAuthority(workspaceId, platform);
-  if (latest.agentId !== authority.agentId || latest.sessionId !== authority.sessionId) throw new Error("Manager authority changed during evidence read.");
+  if (latest.agentId !== authority.agentId || latest.sessionId !== authority.sessionId || latest.taskKey !== authority.taskKey) {
+    throw new Error("Manager authority changed during evidence read.");
+  }
   const latestEvent = await readCurrent(workspaceId, params.eventId, platform);
   if (latestEvent.status !== "current" || latestEvent.workstreamId !== params.workstreamId
     || sha256Json(latestEvent.snapshot) !== sha256Json(current.snapshot)) throw new Error("Verified event changed during Manager evidence read.");
+  const latestRow = await readVerifiedWorkstreamReservation({ workspaceId, projectId: workspaceId,
+    workstreamId: current.workstreamId, verifiedEventId: params.eventId }, platform.state);
+  if (!sameManagerReservationBase(row, latestRow, { allowInitialAcceptance: initialPendingRequest, requestId, runId: runContext.runId as string })
+    || acceptedContinuation && !acceptedContinuationStillCurrent(latestRow, acceptedContinuation, requestId, runContext.runId as string)
+    || pendingContinuation && !pendingContinuationStillCurrent(latestRow, pendingContinuation, pendingLineage!, runContext.runId as string, initialUuid)) {
+    throw new Error("Manager verification reservation changed during evidence read.");
+  }
   const data = { eventId: current.snapshot.eventId, workspaceId, projectId: workspaceId, workstreamId: current.workstreamId,
     verificationStatus: "VERIFIED", evidence: current.snapshot };
   if (Buffer.byteLength(JSON.stringify(data), "utf8") > MAX_MANAGER_TOOL_RESPONSE_BYTES) throw new Error("verified-evidence-exceeds-bounded-tool-response");
   return { content: "Current guarded verification facts only. This is not Git integration or completion evidence.",
     data: data as unknown as JsonValue };
   };
+}
+
+function exactActiveManagerRun(value: unknown, runId: string) {
+  return exactObject(value) && value.runId === runId && value.status === "running"
+    && value.cancellationRequested === false && value.termination === "not_applicable";
+}
+
+function runSystemEvent(value: unknown): unknown {
+  return exactObject(value) ? value.systemEvent : undefined;
+}
+
+function parseProtectedContinuationLineage(value: unknown) {
+  if (!exactObject(value) || Reflect.ownKeys(value).length !== 8
+    || value.schemaVersion !== 1 || value.kind !== "protected-test-terminal-event"
+    || typeof value.requestId !== "string" || !REQUEST_ID.test(value.requestId)
+    || typeof value.previousRunId !== "string" || !REQUEST_ID.test(value.previousRunId)
+    || typeof value.eventId !== "string" || !EVENT_ID.test(value.eventId)
+    || typeof value.protectedRunId !== "string" || !REQUEST_ID.test(value.protectedRunId)
+    || typeof value.receiptDigest !== "string" || !/^[a-f0-9]{64}$/u.test(value.receiptDigest)
+    || typeof value.subjectKeySha256 !== "string" || !/^[a-f0-9]{64}$/u.test(value.subjectKeySha256)) return null;
+  return value as Readonly<{ schemaVersion: 1; kind: "protected-test-terminal-event"; requestId: string;
+    previousRunId: string; eventId: string; protectedRunId: string; receiptDigest: string; subjectKeySha256: string }>;
+}
+
+function continuationMatchesLineage(continuation: ProtectedContinuation,
+  lineage: NonNullable<ReturnType<typeof parseProtectedContinuationLineage>>) {
+  return continuation.status === "pending" && continuation.dispatchAttempts === 1 && continuation.receipt === null
+    && continuation.terminalEventId === lineage.eventId && continuation.protectedRunId === lineage.protectedRunId
+    && continuation.receiptDigest === lineage.receiptDigest && continuation.subjectKeySha256 === lineage.subjectKeySha256
+    && continuation.previousRunId === lineage.previousRunId;
+}
+
+function sameProtectedContinuationLineage(left: ReturnType<typeof parseProtectedContinuationLineage>,
+  right: NonNullable<ReturnType<typeof parseProtectedContinuationLineage>>) {
+  return left !== null && left !== undefined && left.schemaVersion === right.schemaVersion && left.kind === right.kind
+    && left.requestId === right.requestId && left.previousRunId === right.previousRunId && left.eventId === right.eventId
+    && left.protectedRunId === right.protectedRunId && left.receiptDigest === right.receiptDigest
+    && left.subjectKeySha256 === right.subjectKeySha256;
+}
+
+function sameManagerReservationBase(before: Awaited<ReturnType<typeof readVerifiedWorkstreamReservation>>,
+  after: Awaited<ReturnType<typeof readVerifiedWorkstreamReservation>>,
+  options: Readonly<{ allowInitialAcceptance: boolean; requestId: string; runId: string }>) {
+  if (!before || !after || before.eventId !== after.eventId || before.evidenceDigest !== after.evidenceDigest
+    || before.requestId !== after.requestId) return false;
+  if (before.status === after.status) return JSON.stringify(before.receipt) === JSON.stringify(after.receipt);
+  return options.allowInitialAcceptance && before.status === "pending" && before.receipt === null
+    && after.status === "accepted" && after.receipt?.receiptId === options.requestId && after.receipt.runId === options.runId;
+}
+
+function continuationIdentityMatches(current: ProtectedContinuation, before: ProtectedContinuation) {
+  return current.requestId === before.requestId && current.terminalEventId === before.terminalEventId
+    && current.protectedRunId === before.protectedRunId && current.receiptDigest === before.receiptDigest
+    && current.subjectKeySha256 === before.subjectKeySha256 && current.phase === before.phase
+    && current.previousRunId === before.previousRunId && current.dispatchAttempts === before.dispatchAttempts
+    && current.recoveryWakeCount === before.recoveryWakeCount;
+}
+
+function acceptedContinuationStillCurrent(row: Awaited<ReturnType<typeof readVerifiedWorkstreamReservation>>,
+  before: ProtectedContinuation, requestId: string, runId: string) {
+  if (!row) return false;
+  const matches = row.continuations?.filter(item => continuationIdentityMatches(item, before)) ?? [];
+  return matches.length === 1 && matches[0]!.status === "accepted"
+    && matches[0]!.receipt?.receiptId === requestId && matches[0]!.receipt.runId === runId;
+}
+
+function pendingContinuationStillCurrent(row: Awaited<ReturnType<typeof readVerifiedWorkstreamReservation>>,
+  before: ProtectedContinuation, lineage: NonNullable<ReturnType<typeof parseProtectedContinuationLineage>>,
+  runId: string, initialUuid: string) {
+  if (!row || row.status !== "accepted" || row.receipt?.receiptId !== initialUuid) return false;
+  const matches = row.continuations?.filter(item => continuationIdentityMatches(item, before)) ?? [];
+  if (matches.length !== 1) return false;
+  const current = matches[0]!;
+  return current.status === "pending" && current.receipt === null
+    || current.status === "accepted" && current.receipt?.receiptId === lineage.requestId && current.receipt.runId === runId;
 }
 
 export const readVerifiedWorkstreamForManager = createVerifiedWorkstreamManagerReadHandler();
