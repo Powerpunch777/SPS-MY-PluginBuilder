@@ -752,6 +752,16 @@
   통합 대기·재작업 계측, 공식 Goal 실행·재개와 실제 두 CTO→QA→Manager→Main/G7→
   사용자 승인이다. 영향 없는 검증 이력 보존과 실제 앱·AI 인수는 계속 별도로 확인한다.
 
+- 후속 `8de2d17`은 테스트 fixture의 이벤트 타입을 기존/후보 SDK의 system-event union과
+  호환되게 했다. 제품의 정확한 CTO 인계 lineage 검증은 바꾸지 않았다. 고정 SDK의 관련
+  23개 검사와 타입 검사, 후보 SDK `a4cd0cb`의 전체 1,359개·타입·빌드·SDK CLI validate/test가
+  통과했다. 별도 물리 QA 사본의 Builder 실행 파일 384개와 SDK 파일 96개는 각 커밋의
+  정규화 Git blob과 모두 일치했다. 후보 SDK 내부 의존성은 TypeScript 5.7.3·esbuild 0.25.8·
+  yazl 3.3.1, Builder 컴파일러는 TypeScript 6.0.3이다. 첫 후보 타입 실패도 보존했다.
+  같은 사본의 desktop/mobile 개발 UI 11개 view·Lead 6개 context·overflow 및 입력 보존
+  browser 검사가 통과했고 화면을 확인했다. Core/AI 미연결 UI 검사이며 Core Preview나
+  설치·실제 모델·SDK 배포 인수가 아니다. 제품 SDK pin과 설치본은 여전히 변경하지 않았다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)
