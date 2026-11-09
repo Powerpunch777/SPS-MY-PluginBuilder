@@ -882,6 +882,21 @@
   재발행은 별도 선행 의존성이다. `null` 조회나 timeout을 미접수로 추정하지 않으며,
   이 변경을 모든 재시작·다중 Worker 경합의 자동 복구 완료로 해석하지 않는다.
 
+### 검사한 입력 브랜치의 원자적 통합
+
+- Manager의 새 Git 효과는 선택 API `integrateWorkspaceSourceCommitV2`를 요구한다.
+  검사받은 Source·입력 브랜치·Commit·Tree를 같은 저장 QA 보고서 guard에서 대조하며,
+  Core는 입력 ref 확인과 통합 대상 ref 변경을 같은 Git ref 트랜잭션으로 처리한다.
+  입력 ref의 이동·삭제는 별도 `incoming_branch_changed` 충돌로 보존하고 자동 재시도하지 않는다.
+  기존 대상 head 경합의 제한된 재시도와 응답 유실 시 같은 예약의 조회는 유지한다.
+- 예전 통합 이력은 읽을 수 있지만 입력 브랜치 증거를 소급 부여하지 않는다. 새 실행과
+  최종 후보에는 해당 증거가 필요하다. V2가 없는 SDK/Host는 쓰기 전에 `unsupported`이며,
+  V1로 우회하지 않는다. 현재 Builder 의존성 pin `c69915a`는 그대로이고 설치본 연결은 미검증이다.
+- 독립 QA가 찾은 미지원 Host의 예약과 과거 기록의 새 CI 실행 경로를 차단했다.
+  고정 SDK `c69915a` 물리 사본의 관련 40개·타입·빌드 검사를 확인했다. 여기의 Core/Git 응답은 fixture다.
+  별도 Core 후보의 실제 임시 PG/Git 검사와 공개 SDK 연결은 독립 증거로 다루며,
+  이 변경을 실제 AI·OS·설치본 또는 최종 납품 인수 완료로 표시하지 않는다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)

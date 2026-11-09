@@ -17,6 +17,7 @@ import { verifyTaskQaReportForSnapshot } from "./verified-task-qa-report.ts";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const textHash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
+const BRANCH = /^(?!\/)(?!.*(?:\.\.|\.lock(?:\/|$)|\/\.|\/\/|@\{))[A-Za-z0-9._/-]{1,240}(?<!\.)$/u;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const bounded = (value: unknown): string => {
   if (typeof value !== "string" || !value.trim() || value.length > 160 || /[\u0000-\u001f\u007f]/u.test(value)) throw new TypeError("A bounded integration scope is required.");
@@ -42,10 +43,11 @@ function validationReference(value: unknown): IntegrationValidationReference | n
   return Object.freeze(row as unknown as IntegrationValidationReference);
 }
 type EffectInput = Readonly<{ sourceId: string; folderKey: string; branch: string; expectedHead: string;
-  incomingCommit: string; incomingTree: string; initializeIfMissing?: true }>;
+  incomingBranch?: string; incomingCommit: string; incomingTree: string; initializeIfMissing?: true }>;
 type GitResult = Readonly<{ status: "integrated" | "replayed"; commitSha: string; treeSha: string; changedPaths: readonly string[] }>
   | Readonly<{ status: "unchanged"; headSha: string }>
-  | Readonly<{ status: "conflict"; reason: "branch_changed" | "head_changed" | "merge_conflict"; actualHead: string | null }>;
+  | Readonly<{ status: "conflict"; reason: "branch_changed" | "head_changed" | "merge_conflict"; actualHead: string | null }>
+  | Readonly<{ status: "conflict"; reason: "incoming_branch_changed"; actualHead: string | null; actualIncoming: string | null }>;
 export type IntegrationAttempt = Readonly<{ schemaVersion: 1; revisionId: string; scope: Scope; planRevisionId: string;
   reportRevisionId: string; stage: "reserved" | "git-observed"; effect: EffectInput; git: GitResult | null;
   validation: "not-executed"; validationRuns?: IntegrationValidationReferences;
@@ -54,12 +56,14 @@ export type IntegrationAttempt = Readonly<{ schemaVersion: 1; revisionId: string
 function parseAttempt(value: unknown): IntegrationAttempt {
   const row = exactToolRecord(value, ["schemaVersion", "revisionId", "scope", "planRevisionId", "reportRevisionId", "stage", "effect", "git", "validation", "author"], ["validationRuns"]);
   const scope = exactToolRecord(row.scope, ["workspaceId", "workstreamId", "eventId", "taskId"]);
-  const effect = exactToolRecord(row.effect, ["sourceId", "folderKey", "branch", "expectedHead", "incomingCommit", "incomingTree"], ["initializeIfMissing"]);
+  const effect = exactToolRecord(row.effect, ["sourceId", "folderKey", "branch", "expectedHead", "incomingCommit", "incomingTree"], ["initializeIfMissing", "incomingBranch"]);
   const author = exactToolRecord(row.author, ["agentId", "sessionId", "runId"]);
   if (row.schemaVersion !== 1 || row.validation !== "not-executed" || !["reserved", "git-observed"].includes(String(row.stage))
     || [scope.workspaceId, effect.sourceId, author.agentId, author.sessionId, author.runId].some(item => typeof item !== "string" || !UUID.test(item))
     || Object.values(scope).some(item => bounded(item) !== item)
     || [effect.expectedHead, effect.incomingCommit, effect.incomingTree].some(item => typeof item !== "string" || !OID.test(item))
+    || Object.hasOwn(effect, "incomingBranch") && (typeof effect.incomingBranch !== "string" || !BRANCH.test(effect.incomingBranch)
+      || effect.incomingBranch === effect.branch)
     || Object.hasOwn(effect, "initializeIfMissing") && effect.initializeIfMissing !== true
     || (row.stage === "reserved") !== (row.git === null)) throw new TypeError("Invalid integration attempt.");
   let git: GitResult | null = null;
@@ -76,9 +80,11 @@ function parseAttempt(value: unknown): IntegrationAttempt {
       if (typeof observed.headSha !== "string" || !OID.test(observed.headSha)) throw new TypeError("Invalid unchanged Git receipt.");
       git = observed as unknown as GitResult;
     } else {
-      const observed = exactToolRecord(raw, ["status", "reason", "actualHead"]);
-      if (observed.status !== "conflict" || !["branch_changed", "head_changed", "merge_conflict"].includes(String(observed.reason))
-        || observed.actualHead !== null && (typeof observed.actualHead !== "string" || !OID.test(observed.actualHead))) throw new TypeError("Invalid Git conflict receipt.");
+      const incomingChanged = raw.reason === "incoming_branch_changed";
+      const observed = exactToolRecord(raw, ["status", "reason", "actualHead", ...(incomingChanged ? ["actualIncoming"] : [])]);
+      if (observed.status !== "conflict" || !["branch_changed", "head_changed", "merge_conflict", "incoming_branch_changed"].includes(String(observed.reason))
+        || [observed.actualHead, ...(incomingChanged ? [observed.actualIncoming] : [])].some(item => item !== null && (typeof item !== "string" || !OID.test(item)))
+        || incomingChanged && !effect.incomingBranch) throw new TypeError("Invalid Git conflict receipt.");
       git = observed as unknown as GitResult;
     }
   }
@@ -183,23 +189,30 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   const binding = report.revision.reference.binding;
   if (binding.implementationTaskId !== taskId || (!qaEvidence?.carryForward && binding.implementationDigest !== digest)
     || binding.sourceId !== plan.revision.sourceId
-    || binding.folderKey !== plan.revision.folderKey) throw new Error("Incoming object pins do not match the verified Task and plan.");
+    || binding.folderKey !== plan.revision.folderKey
+    || binding.branch !== task.packet.sourceAccess.branch) throw new Error("Incoming object pins do not match the verified Task and plan.");
   const scope = { workspaceId: context.companyId, workstreamId, eventId, taskId };
   const store = createIntegrationAttemptStore(scope, state), prior = await store.current();
   let attempt = prior?.revision;
   if (attempt && (attempt.planRevisionId !== plan.revision.revisionId || attempt.reportRevisionId !== report.revision.revisionId)) {
     return { status: "stale", reason: "integration-reservation-source-or-plan-changed" };
   }
+  if (attempt && !attempt.effect.incomingBranch) return { status: "unsupported", reason: "integration-incoming-branch-proof-unavailable" };
+  if (attempt && attempt.effect.incomingBranch !== binding.branch) return { status: "stale", reason: "integration-incoming-branch-changed" };
   const retryHead = prior ? retryableHead(prior.revision, prior.sequence) : null;
   if (prior?.revision.stage === "git-observed" && retryHead === null) return { status: "existing", attempt: prior.revision,
     integrationStatus: prior.revision.git?.status === "conflict" ? "INTEGRATION_HOLD" : "INTEGRATING",
     reason: "git-result-preserved-required-ci-and-e2e-not-executed" };
   const api = (platform as typeof platform & { localFolders?: {
     readWorkspaceSourceGitTipV1?: (source: string, folder: string, branch: string) => Promise<unknown>;
-    integrateWorkspaceSourceCommitV1?: (input: unknown) => Promise<unknown>;
+    integrateWorkspaceSourceCommitV2?: (input: unknown) => Promise<unknown>;
   } }).localFolders;
-  if (typeof api?.readWorkspaceSourceGitTipV1 !== "function" || typeof api.integrateWorkspaceSourceCommitV1 !== "function") {
-    return { status: "unsupported", reason: "guarded-git-integration-api-unavailable" };
+  const support = (platform as SpsPlatformInvocationContext & { hostSupport?: Readonly<{
+    state: string; contractVersion: string | null; operations: readonly string[] }> }).hostSupport;
+  if (typeof api?.readWorkspaceSourceGitTipV1 !== "function" || typeof api.integrateWorkspaceSourceCommitV2 !== "function"
+    || support?.state !== "reported" || support.contractVersion !== "1.0" || !Array.isArray(support.operations)
+    || !support.operations.includes("localFolders.integrateWorkspaceSourceCommitV2")) {
+    return { status: "unsupported", reason: "guarded-incoming-branch-git-integration-v2-unavailable" };
   }
   const base = readWorkspaceSourceGitTipProof(await api.readWorkspaceSourceGitTipV1(plan.revision.sourceId,
     plan.revision.folderKey, plan.revision.baseBranch));
@@ -223,7 +236,8 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
     attempt = stored({ schemaVersion: 1, scope, planRevisionId: plan.revision.revisionId, reportRevisionId: report.revision.revisionId,
       stage: "reserved", effect: { sourceId: plan.revision.sourceId, folderKey: plan.revision.folderKey,
         branch: plan.revision.candidateBranch, expectedHead: missing ? plan.revision.baseCommit : tip.commitSha as string,
-        incomingCommit: binding.commitSha, incomingTree: binding.treeSha, ...(missing ? { initializeIfMissing: true as const } : {}) },
+        incomingBranch: binding.branch, incomingCommit: binding.commitSha, incomingTree: binding.treeSha,
+        ...(missing ? { initializeIfMissing: true as const } : {}) },
       git: null, validation: "not-executed", author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId } });
     const guards = mergeEffectGuards(currentEffects.guards, [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1.")));
     if (guards.length > 64) return { status: "unsupported", reason: "integration-authority-guard-bound" };
@@ -249,9 +263,10 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   guards.push(reportGuard);
   if (guards.length > 64 || Buffer.byteLength(JSON.stringify(guards), "utf8") > 200_000) return { status: "unsupported", reason: "integration-effect-guard-bound" };
   let raw: unknown;
-  try { raw = await api.integrateWorkspaceSourceCommitV1({ ...selected.effect,
+  try { raw = await api.integrateWorkspaceSourceCommitV2({ ...selected.effect,
     reservation: { namespace: reservationKey.namespace, stateKey: reservationKey.stateKey, expectedValue: head }, guards,
     incomingProof: { guardIndex: guards.length - 1, sourceIdPath: ["revision", "reference", "binding", "sourceId"],
+      branchPath: ["revision", "reference", "binding", "branch"],
       commitShaPath: ["revision", "reference", "binding", "commitSha"], treeShaPath: ["revision", "reference", "binding", "treeSha"] } }); }
   catch { return { status: "uncertain", reason: "git-effect-outcome-unknown-reconcile-same-reservation", attemptRevisionId: selected.revisionId }; }
   const result = exactToolRecord(raw, ["status"], ["git", "reason"]);

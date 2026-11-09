@@ -143,6 +143,8 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
         if (!attempt || attempt.stage !== "git-observed") return unavailable("pending", "workstream-task-integration-not-observed");
         if (attempt.planRevisionId !== plan.revisionId || attempt.effect.sourceId !== candidate.sourceId
           || attempt.effect.folderKey !== candidate.folderKey || attempt.effect.branch !== candidate.branch
+          || !attempt.effect.incomingBranch || attempt.effect.incomingBranch !== report.reference.binding.branch
+          || attempt.effect.incomingBranch !== task.packet.sourceAccess?.branch
           || attempt.reportRevisionId !== report.revisionId || attempt.effect.incomingCommit !== report.reference.binding.commitSha
           || attempt.effect.incomingTree !== report.reference.binding.treeSha) {
           return unavailable("stale", "workstream-task-integration-pins-changed");

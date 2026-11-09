@@ -9,6 +9,12 @@ import { checkIntegrationPrerequisites, INTEGRATION_VALIDATION_PHASES, readCurre
 import { readVerifiedWorkstreamForManager } from "./integration-manager-job.ts";
 import { createIntegrationAttemptStore, withIntegrationValidationReferences,
   type IntegrationAttempt, type IntegrationAttemptScope, type IntegrationValidationReference } from "./integration-progress.ts";
+import { readWorkstreams } from "../workstream-tools.ts";
+import { createTaskPacketStore } from "../task-packet-tools.ts";
+import { taskPacketRecordDigest } from "../domain/task-packets.ts";
+import { createTaskQaReportStore } from "../task-qa-reports.ts";
+import { verifyTaskQaReportForSnapshot } from "./verified-task-qa-report.ts";
+import type { VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const textHash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -126,11 +132,35 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
   const scope = { workspaceId: context.companyId, workstreamId, eventId, taskId };
   const api = (platform as Host).protectedTests, folders = (platform as Host).localFolders;
   const check = async () => {
-    await readVerifiedWorkstreamForManager({ workstreamId, eventId }, runContext, platform);
+    const result = await readVerifiedWorkstreamForManager({ workstreamId, eventId }, runContext, platform);
     const ready = await checkIntegrationPrerequisites(context.companyId, workstreamId, platform);
     if (ready.status !== "ready") throw new Error("Integration validation authority or dependencies are not current.");
+    return (result.data as unknown as { evidence: VerifiedWorkstreamSnapshot }).evidence;
   };
-  await check();
+  const snapshot = await check();
+  const currentQaBranchProof = async (attempt: IntegrationAttempt, evidence: VerifiedWorkstreamSnapshot) => {
+    const workstream = (await readWorkstreams(context.companyId, context.companyId, platform))?.revision.workstreams.find(item => item.spec.id === workstreamId);
+    if (!workstream || !attempt.effect.incomingBranch) return false;
+    const ctoId = workstream.spec.assignedCtoId;
+    const board = (await createTaskPacketStore(context.companyId, context.companyId, ctoId, workstreamId, platform.state).current())?.revision;
+    const task = board?.packets.find(item => item.packet.taskId === taskId && item.packet.kind === "development");
+    if (!task || task.packet.sourceAccess?.branch !== attempt.effect.incomingBranch) return false;
+    const digest = taskPacketRecordDigest(task, context.companyId, ctoId, workstreamId);
+    const qaTasks = board!.packets.filter(item => item.packet.kind === "qa" && item.dependencyPins.some(pin =>
+      pin.taskId === taskId && pin.revision === task.packet.revision && pin.recordSha256 === digest));
+    if (qaTasks.length !== 1) return false;
+    const qa = qaTasks[0]!;
+    const report = (await createTaskQaReportStore({ workspaceId: context.companyId, projectId: context.companyId,
+      ctoId, workstreamId, qaTaskId: qa.packet.taskId }, platform.state).current())?.revision;
+    const pin = evidence.qaEvidence.find(item => item.report.sourceId === `builder-v1:task-qa-report:${qa.packet.taskId}`)?.report;
+    const binding = report?.reference.binding;
+    return !!report && !!pin && report.revisionId === attempt.reportRevisionId && binding?.branch === attempt.effect.incomingBranch
+      && binding.sourceId === attempt.effect.sourceId && binding.folderKey === attempt.effect.folderKey
+      && binding.commitSha === attempt.effect.incomingCommit && binding.treeSha === attempt.effect.incomingTree
+      && verifyTaskQaReportForSnapshot({ snapshot: evidence, task, taskDigest: digest, qaTask: qa,
+        qaDigest: taskPacketRecordDigest(qa, context.companyId, ctoId, workstreamId), taskBoardRevisionId: board!.revisionId,
+        workstream, report, reportPin: pin });
+  };
   const plan = await readCurrentIntegrationPlan(context.companyId, platform), selected = plan?.revision.validationPlans?.[phase];
   if (!plan || !selected) return { status: "unsupported", reason: "main-validation-plan-reference-unavailable", executionStarted: false };
   if (api?.delegatedBranchInputVersion !== 1 || typeof api.enqueueApprovedV1 !== "function" || typeof api.getRunV1 !== "function"
@@ -142,6 +172,8 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
     throw new Error("The exact observed integration candidate and current plan are required.");
   }
   let attempt = current.revision;
+  if (!attempt.effect.incomingBranch) return { status: "unsupported", reason: "integration-incoming-branch-proof-unavailable", executionStarted: false };
+  if (!await currentQaBranchProof(attempt, snapshot)) return { status: "stale", reason: "integration-task-qa-branch-proof-changed", executionStarted: false };
   const git = current.revision.git!;
   const readTip = async () => exactToolRecord(await folders.readWorkspaceSourceGitTipV1!(plan.revision.sourceId, plan.revision.folderKey, plan.revision.candidateBranch),
     ["status"], ["sourceId", "folderKey", "branch", "commitSha", "treeSha", "observedAt", "reason"]);
@@ -162,7 +194,8 @@ export async function requestIntegrationValidation(params: unknown, runContext: 
     if (saved.status !== "published") return { status: "conflict", reason: "validation-reservation-cas-conflict", executionStarted: false };
     attempt = reserved;
   }
-  await check();
+  const currentEvidence = await check();
+  if (!await currentQaBranchProof(attempt, currentEvidence)) return { status: "stale", reason: "integration-task-qa-branch-proof-changed", executionStarted: false };
   if ((await readCurrentIntegrationPlan(context.companyId, platform))?.revision.revisionId !== plan.revision.revisionId
     || (await store.current())?.revision.revisionId !== attempt.revisionId) return { status: "stale", reason: "validation-authority-changed-before-enqueue", executionStarted: false };
   const latestTip = await readTip();

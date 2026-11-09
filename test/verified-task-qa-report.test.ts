@@ -86,7 +86,7 @@ test("registered Manager integration fails closed when the Workstream head moves
       }
       return { status: "current", sourceId, folderKey, branch, commitSha: BASE_COMMIT, treeSha: BASE_TREE, observedAt: "fixture" };
     },
-    async integrateWorkspaceSourceCommitV1() { gitCalls++; return { status: "unknown" }; },
+    async integrateWorkspaceSourceCommitV2() { gitCalls++; return { status: "unknown" }; },
   } });
   const tool = integrationTool(); assert.ok(tool);
   const run = () => tool.handler({ workstreamId: "ws-1", eventId: fixture.eventId, taskId: "task-dev" },
@@ -140,11 +140,13 @@ test("registered Manager integrates a publication-verified carried QA report wit
         commitSha: plan.baseCommit, treeSha: plan.baseTree, observedAt: now };
       return { status: "denied", reason: "branch_unavailable" };
     },
-    async integrateWorkspaceSourceCommitV1(input: unknown) {
+    async integrateWorkspaceSourceCommitV2(input: unknown) {
       gitCalls++; received = structuredClone(input);
       return { status: "observed", git: { status: "integrated", commitSha: "b".repeat(40), treeSha: "c".repeat(40), changedPaths: ["src/feature.ts"] } };
     },
   } });
+  Object.assign(f.f.platform, { hostSupport: { state: "reported", contractVersion: "1.0",
+    operations: ["localFolders.integrateWorkspaceSourceCommitV2"] } });
   const tool = integrationTool(); assert.ok(tool);
   const result = await tool.handler({ workstreamId: "ws-1", eventId, taskId: "task-dev" },
     { companyId: W, projectId: W, agentId: MANAGER, sessionId: MANAGER_SESSION, runId: MANAGER_RUN }, f.f.platform) as any;
@@ -152,6 +154,8 @@ test("registered Manager integrates a publication-verified carried QA report wit
   assert.equal(gitCalls, 1);
   assert.equal(received.incomingCommit, "d".repeat(40));
   assert.equal(received.incomingTree, "e".repeat(40));
+  assert.equal(received.incomingBranch, "feature/verify");
+  assert.deepEqual(received.incomingProof.branchPath, ["revision", "reference", "binding", "branch"]);
   assert.equal(received.guards.some((guard: any) => guard.stateKey.startsWith("workstream-verification-head.v1.")
     && guard.expectedValue.revisionId === eventId), true);
   assert.equal(received.guards[received.incomingProof.guardIndex].stateKey.startsWith("task-qa-reports-revision.v1."), true);

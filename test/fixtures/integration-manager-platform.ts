@@ -27,6 +27,8 @@ export async function preparedFixture(withValidation = false, withRegression = f
   candidateRequests = false, deliveryInventoryPath?: string, leadReviewSession?: string) {
   const setup = await setupVerifiedWorkstreamPlatform(withUnmappedRequirement);
   const f = setup.f;
+  Object.assign(f.platform, { hostSupport: { state: "reported", contractVersion: "1.0",
+    operations: ["localFolders.integrateWorkspaceSourceCommitV2"] } });
   if (leadReviewSession) {
     const key = { scopeKind: "company" as const, scopeId: W, namespace: "sonpark.my-builder", stateKey: "lead-sessions.v1.1" };
     const current = f.values.get(mapKey(key)) as any;
@@ -99,7 +101,7 @@ export async function preparedFixture(withValidation = false, withRegression = f
     async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
       return { status: "current", sourceId, folderKey, branch, commitSha: BASE_COMMIT, treeSha: BASE_TREE, observedAt: "fixture" };
     },
-    async integrateWorkspaceSourceCommitV1() { return { status: "unknown", reason: "not-used-in-dispatch-test" }; },
+    async integrateWorkspaceSourceCommitV2() { return { status: "unknown", reason: "not-used-in-dispatch-test" }; },
   } });
 
   const job = await consumeVerifiedWorkstreamJob({ jobKey: WORKSTREAM_VERIFIED_JOB, trigger: "event", eventId,
@@ -119,7 +121,7 @@ export async function validationFixture(withRegression = false, withUnmappedRequ
     return { status: "current", sourceId, folderKey, branch,
       commitSha: branch === fixture.plan.baseBranch ? BASE_COMMIT : candidateMoved ? "9".repeat(40) : candidateCommit,
       treeSha: branch === fixture.plan.baseBranch ? BASE_TREE : candidateTree, observedAt: now };
-  }, async integrateWorkspaceSourceCommitV1() {
+  }, async integrateWorkspaceSourceCommitV2() {
     integrated = true;
     return { status: "observed", git: { status: "integrated", commitSha: candidateCommit, treeSha: candidateTree, changedPaths: ["src/feature.ts"] } };
   } };

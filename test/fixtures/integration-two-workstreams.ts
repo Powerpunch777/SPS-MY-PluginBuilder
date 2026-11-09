@@ -185,7 +185,7 @@ export async function setupTwoWorkstreamCandidate(options: { omitSecondEffect?: 
         commitSha: branch === "main" ? "f".repeat(40) : candidateHead.commitSha,
         treeSha: branch === "main" ? "a".repeat(40) : candidateHead.treeSha, observedAt: "2026-11-07T12:00:00.000Z" };
     },
-    async integrateWorkspaceSourceCommitV1(input: any) {
+    async integrateWorkspaceSourceCommitV2(input: any) {
       assert.equal(input.expectedHead, candidateHead.commitSha);
       candidateHead = { commitSha: "d".repeat(40), treeSha: "e".repeat(40) };
       return { status: "observed", git: { status: "integrated", commitSha: candidateHead.commitSha,
