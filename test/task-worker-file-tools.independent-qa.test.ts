@@ -241,6 +241,11 @@ test("two distinct registered Tasks sharing a read path can both be admitted on 
   assert.deepEqual(new Set(started), new Set([SESSION, PEER_SESSION]));
   assert.deepEqual(new Set([...receipts.values()].map(row => row.runId)), new Set([RUN, PEER_RUN]));
   assert.deepEqual(f.effects, { reads: 0, writes: 0, deletes: 0 }, "Core DTO receipts are admission, not actual execution");
+  const readers = [f.context, { companyId: W, agentId: PEER_AGENT, sessionId: PEER_SESSION, runId: PEER_RUN }];
+  const read = createBuilderPlatform().tools.find(item => item.name === "builder.read-task-source-file")!;
+  const replies = await Promise.all(readers.map(context => read.handler({ relativePath: "src/feature.ts" }, context as never, f.f.platform)));
+  assert.deepEqual(replies.map(result => (result.data as { text: string }).text), ["original", "original"]);
+  assert.deepEqual(f.effects, { reads: 2, writes: 0, deletes: 0 });
 });
 
 test("ordered overlapping writes wait for the exact accepted predecessor and its closed Run", async () => {
