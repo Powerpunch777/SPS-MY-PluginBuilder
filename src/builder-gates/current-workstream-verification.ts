@@ -15,6 +15,8 @@ import type { EvidencePin } from "./workstream-verification-consumer.ts";
 import type { GateProofScope, GateProtectedTaskQaProof, GateSourceInventory } from "./workstream-verification.ts";
 import { createWorkstreamVerificationPublication, type AuthorityReader, type GuardBinding } from "./workstream-verification-publication.ts";
 import { readCurrentProtectedTaskQaEvidence } from "./protected-task-qa-evidence.ts";
+import { readCarriedTaskQaEvidence } from "./carried-task-qa-evidence.ts";
+import { qaCarryForwardPin } from "./qa-carry-forward.ts";
 import { hasUndecidedTaskRequirement } from "./task-decision-scope.ts";
 
 export const VERIFY_WORKSTREAM_TOOL_NAME = "builder.verify-workstream";
@@ -87,10 +89,14 @@ export function createCurrentWorkstreamVerificationAuthority(input: Readonly<{
       };
       for (const task of development) {
         const taskScope: GateProofScope = { ...scope, taskId: task.packet.taskId };
-        const evidence = await readCurrentProtectedTaskQaEvidence({ scope: taskScope, ctoId: input.ctoId,
-          runContext: input.runContext, platform });
+        const evidenceInput = { scope: taskScope, ctoId: input.ctoId, runContext: input.runContext, platform };
+        const currentEvidence = await readCurrentProtectedTaskQaEvidence(evidenceInput);
+        const carriedEvidence = currentEvidence.status === "available" || !workstream.change.g5Handoff
+          ? null : await readCarriedTaskQaEvidence(evidenceInput);
+        const evidence = carriedEvidence ?? currentEvidence;
         if (evidence.status !== "available") return { status: "unavailable", reason: evidence.reason };
         const { report, qaRecord, coreRun, implementationRecord } = evidence.value;
+        const carryForward = carriedEvidence?.status === "available" ? carriedEvidence.value.carryForward : undefined;
         if (digest(implementationRecord) !== digest(task)) return { status: "unavailable", reason: "verification-implementation-task-mismatch" };
         checks.push(evidence.check);
         const qaId = qaRecord.packet.taskId, reference = report.reference, binding = reference.binding;
@@ -119,6 +125,7 @@ export function createCurrentWorkstreamVerificationAuthority(input: Readonly<{
         "task-packets", board.revision.revisionId);
         add(referencePin, "task-protected-qa-runs", reference.revisionId);
         add(reportPin, "task-qa-reports", report.revisionId);
+        if (carryForward) add(qaCarryForwardPin(carryForward.proof, reportPin), "task-packets", board.revision.revisionId);
         // A terminal Core receipt is immutable. Its exact digest and run/source
         // binding are attested by the current authenticated QA report/reference.
         add(runPin, "task-qa-reports", report.revisionId);
@@ -127,9 +134,9 @@ export function createCurrentWorkstreamVerificationAuthority(input: Readonly<{
           sha256: document.revision.bodySha256 };
         sourceBindings.set(baselineBodyPin.sourceId, headBinding("project-document-baseline", document.revision.documentRevisionId));
         const proof: GateProtectedTaskQaProof = { provenance: { adapter: "builder.protected-task-qa-proof.v1", operation: "readCurrent" },
-          scope: taskScope, status: "passed", taskRecordSha256: binding.implementationDigest, qaRecord, report,
+          scope: taskScope, status: "passed", taskRecordSha256: taskPacketRecordDigest(task, scope.projectId, input.ctoId, scope.workstreamId), qaRecord, report,
           authorRun: { runId: report.author.runId, status: "succeeded", cancellationRequested: false },
-          runPin, receiptPin, referencePin, reportPin };
+          runPin, receiptPin, referencePin, reportPin, ...(carryForward ? { carryForward } : {}) };
         const material = await assurance({ identity: { workspaceId: scope.workspaceId, projectId: scope.projectId,
           specRevisionId: baseline.revision.specification.revisionId, specDigest: digest(baseline.revision.specification) },
         requirementIds: task.packet.requirementIds });

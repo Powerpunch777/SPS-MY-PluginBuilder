@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import type { JsonValue, SpsStateKey } from "@sonparkserver/plugin-sdk/platform";
+import { exactToolRecord } from "../lead-tool-authority.ts";
+import { parseQaCarryForward, QA_CARRY_FORWARD_SOURCE_PREFIX, qaCarryForwardPin, type QaCarryForward } from "./qa-carry-forward.ts";
 
 export type EvidencePin = Readonly<{ sourceId: string; revisionId: string; sha256: string }>;
 export type VerifiedWorkstreamSnapshot = Readonly<{
@@ -10,7 +12,7 @@ export type VerifiedWorkstreamSnapshot = Readonly<{
   verificationStatus: "VERIFIED";
   sourcePins: readonly EvidencePin[];
   gateDecisions: readonly Readonly<{ gateId: "G4" | "G6"; verdict: "PASS"; evidenceRefs: readonly EvidencePin[] }>[];
-  qaEvidence: readonly Readonly<{ result: "passed"; report: EvidencePin }>[];
+  qaEvidence: readonly Readonly<{ result: "passed"; report: EvidencePin; carryForward?: QaCarryForward }>[];
 }>;
 export type VerifiedSnapshotRead =
   | Readonly<{ status: "current"; snapshot: VerifiedWorkstreamSnapshot }>
@@ -109,11 +111,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
+function ownData(value: object, key: string) {
+  const field = Object.getOwnPropertyDescriptor(value, key);
+  return field?.enumerable && Object.hasOwn(field, "value") ? field.value as unknown : undefined;
+}
 function validPin(value: unknown): value is EvidencePin {
   if (!isRecord(value)) return false;
-  return typeof value.sourceId === "string" && ID.test(value.sourceId)
-    && typeof value.revisionId === "string" && ID.test(value.revisionId)
-    && typeof value.sha256 === "string" && HASH.test(value.sha256);
+  const sourceId = ownData(value, "sourceId"), revisionId = ownData(value, "revisionId"), sha256 = ownData(value, "sha256");
+  return typeof sourceId === "string" && ID.test(sourceId) && typeof revisionId === "string" && ID.test(revisionId)
+    && typeof sha256 === "string" && HASH.test(sha256);
+}
+
+function hasCurrentTaskPin(pins: readonly EvidencePin[], taskId: string, sha256: string) {
+  const revisionPrefix = `${taskId}:`;
+  return pins.some(pin => pin.sourceId === `builder-v1:task-packet:${taskId}` && pin.sha256 === sha256
+    && pin.revisionId.startsWith(revisionPrefix) && /^[1-9][0-9]*$/u.test(pin.revisionId.slice(revisionPrefix.length))
+    && Number.isSafeInteger(Number(pin.revisionId.slice(revisionPrefix.length))));
 }
 
 export function validVerifiedWorkstreamSnapshot(value: unknown, expected: { workspaceId: string; projectId: string; workstreamId: string; eventId: string }): value is VerifiedWorkstreamSnapshot {
@@ -141,14 +154,26 @@ export function validVerifiedWorkstreamSnapshot(value: unknown, expected: { work
       const refs = gate.evidenceRefs as EvidencePin[];
       if (refs.some(ref => !sourcePins.some(pin => samePin(pin, ref)))) return false;
     }
-    const qaEvidence = row.qaEvidence as unknown[];
-    if (qaEvidence.some(candidate => !isRecord(candidate) || candidate.result !== "passed" || !validPin(candidate.report)
-      || !sourcePins.some(pin => samePin(pin, candidate.report as EvidencePin))
-      || !(gates.get("G6")!.evidenceRefs as EvidencePin[]).some(pin => samePin(pin, candidate.report as EvidencePin)))) return false;
-    return new Set(qaEvidence.map(candidate => {
-      const report = (candidate as Record<string, unknown>).report as EvidencePin;
-      return `${report.sourceId}\0${report.revisionId}\0${report.sha256}`;
-    })).size === qaEvidence.length;
+    const g6 = gates.get("G6")!.evidenceRefs as EvidencePin[];
+    const reports = new Set<string>(), carriedTasks = new Set<string>(), carryPins = new Set<string>();
+    for (let index = 0; index < row.qaEvidence.length; index++) {
+      const candidate = ownData(row.qaEvidence, String(index));
+      if (!isRecord(candidate) || ownData(candidate, "result") !== "passed") return false;
+      const report = ownData(candidate, "report");
+      if (!validPin(report) || !sourcePins.some(pin => samePin(pin, report)) || !g6.some(pin => samePin(pin, report))) return false;
+      const reportKey = `${report.sourceId}\0${report.revisionId}\0${report.sha256}`;
+      if (reports.has(reportKey)) return false;
+      reports.add(reportKey);
+      if (!Object.hasOwn(candidate, "carryForward")) continue;
+      const proof = parseQaCarryForward(exactToolRecord(candidate, ["result", "report", "carryForward"]).carryForward);
+      if (carriedTasks.has(proof.taskId) || carriedTasks.has(proof.qaTaskId)
+        || !hasCurrentTaskPin(sourcePins, proof.taskId, proof.task.current)
+        || !hasCurrentTaskPin(sourcePins, proof.qaTaskId, proof.qa.current)) return false;
+      const carry = qaCarryForwardPin(proof, report);
+      if (!sourcePins.some(pin => samePin(pin, carry)) || !g6.some(pin => samePin(pin, carry))) return false;
+      carriedTasks.add(proof.taskId); carriedTasks.add(proof.qaTaskId); carryPins.add(carry.sourceId);
+    }
+    return sourcePins.every(pin => !pin.sourceId.startsWith(QA_CARRY_FORWARD_SOURCE_PREFIX) || carryPins.has(pin.sourceId));
   } catch { return false; }
 }
 
@@ -169,7 +194,8 @@ export function normalizeVerifiedWorkstreamSnapshot(snapshot: VerifiedWorkstream
       verdict: gate.verdict,
       evidenceRefs: [...gate.evidenceRefs].sort(pinOrder).map(pin),
     })),
-    qaEvidence: [...snapshot.qaEvidence].sort((a, b) => pinOrder(a.report, b.report)).map(item => ({ result: item.result, report: pin(item.report) })),
+    qaEvidence: [...snapshot.qaEvidence].sort((a, b) => pinOrder(a.report, b.report)).map(item => ({ result: item.result, report: pin(item.report),
+      ...(Object.hasOwn(item, "carryForward") ? { carryForward: parseQaCarryForward(ownData(item, "carryForward")) } : {}) })),
   };
 }
 

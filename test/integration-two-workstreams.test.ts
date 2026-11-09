@@ -19,7 +19,7 @@ test("one Workstream without its registered integration effect remains required"
 
 test("registered integration rejects a QA run reference pinned to a different Source", async () => {
   await assert.rejects(() => setupTwoWorkstreamCandidate({ mismatchSecondQaSource: true }),
-    /Incoming object pins do not match the verified Task and plan/u);
+    /The exact current or publication-verified carried QA binding is unavailable/u);
 });
 
 test("candidate requires both independent Workstream Task+QA chains and aggregates their sequential Git effects", async () => {

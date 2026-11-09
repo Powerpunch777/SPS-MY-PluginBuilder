@@ -6,8 +6,9 @@ import type { WorkstreamRecord } from "./domain/workstreams.ts";
 import type { RevisionState } from "./solution-revision-store.ts";
 import { readFirstDesignApprovalRevision } from "./spec-assurance/review-first-design.ts";
 import type { UiRevision } from "./ui-contracts/domain.ts";
+import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
 
-type Side = Readonly<{ baseline: DesignBaseline; ui: UiRevision; technology: AuthoredTechnologyDecisions;
+export type G5TaskInputSide = Readonly<{ baseline: DesignBaseline; ui: UiRevision; technology: AuthoredTechnologyDecisions;
   workstream: WorkstreamRecord; tasks: TaskPacketBoard }>;
 type Review = NonNullable<Awaited<ReturnType<typeof readFirstDesignApprovalRevision>>>;
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -28,7 +29,8 @@ async function approvedReview(workspaceId: string, baseline: DesignBaseline, sta
       [graph.entities, graph.relations, graph.viewLayoutRef]) ? review : null;
 }
 
-function scopedInputs(side: Side, review: Review, task: TaskPacketRecord) {
+function scopedInputs(side: G5TaskInputSide, review: Review, task: TaskPacketRecord,
+  requiredSource?: Readonly<{ requestId: string; instructionSha256: string }>) {
   const { projectId, ctoId, workstreamId, packets } = side.tasks;
   const byId = new Map(packets.map(record => [record.packet.taskId, record]));
   const closure = new Map<string, TaskPacketRecord>();
@@ -36,6 +38,11 @@ function scopedInputs(side: Side, review: Review, task: TaskPacketRecord) {
   while (pending.length) {
     const record = pending.pop()!;
     if (closure.has(record.packet.taskId)) continue;
+    if (requiredSource && (record.source.requestId !== requiredSource.requestId
+      || record.source.specRevision !== side.workstream.spec.revision
+      || record.source.instructionSha256 !== requiredSource.instructionSha256
+      || record.author.agentId !== side.workstream.ctoAgentId || record.author.sessionId !== side.workstream.ctoSessionId
+      || record.packet.scopeNodeIds.some(id => !side.workstream.spec.scopeNodeIds.includes(id)))) return null;
     closure.set(record.packet.taskId, record);
     for (const pin of record.dependencyPins) {
       const dependency = byId.get(pin.taskId);
@@ -111,7 +118,7 @@ function scopedInputs(side: Side, review: Review, task: TaskPacketRecord) {
 
 /** Server-owned projection from already matched published G5 pairs. It compares
  * recorded inputs, not QA outcomes, product-wide schedule, or live execution authority. */
-export async function comparePublishedG5TaskInputs(workspaceId: string, before: Side, after: Side, state: RevisionState) {
+export async function comparePublishedG5TaskInputs(workspaceId: string, before: G5TaskInputSide, after: G5TaskInputSide, state: RevisionState) {
   const [oldReview, newReview] = await Promise.all([
     approvedReview(workspaceId, before.baseline, state).catch(() => null),
     approvedReview(workspaceId, after.baseline, state).catch(() => null),
@@ -135,4 +142,40 @@ export async function comparePublishedG5TaskInputs(workspaceId: string, before: 
     return same(oldInputs, newInputs) ? result("unchanged-recorded-inputs", null, digest(newInputs))
       : result("changed", "recorded-qa-inputs-differ");
   });
+}
+
+/** Compare the selected development/QA pair across the three already-resolved
+ * journal stages. Packet provenance is checked but is not a semantic input. */
+export async function compareG5TaskInputChain(workspaceId: string, previous: G5TaskInputSide, compared: G5TaskInputSide,
+  current: G5TaskInputSide, taskId: string, qaTaskId: string, currentRequestId: string, state: RevisionState) {
+  const { projectId, ctoId, workstreamId } = current.tasks;
+  const recordDigest = (record: TaskPacketRecord) => taskPacketRecordDigest(record, projectId, ctoId, workstreamId);
+  const stages = [previous, compared, current] as const;
+  const [oldReview, nextReview] = await Promise.all([
+    approvedReview(workspaceId, previous.baseline, state), approvedReview(workspaceId, compared.baseline, state),
+  ]);
+  if (!oldReview || !nextReview || !same(current.baseline, compared.baseline)) return null;
+  const resolve = (side: G5TaskInputSide, review: Review, requestId?: string) => {
+    if (side.tasks.projectId !== projectId || side.tasks.ctoId !== ctoId || side.tasks.workstreamId !== workstreamId
+      || side.workstream.spec.dependencies.length || side.workstream.spec.interfaceContracts.length) return null;
+    const task = side.tasks.packets.find(row => row.packet.taskId === taskId);
+    const qa = side.tasks.packets.find(row => row.packet.taskId === qaTaskId);
+    if (task?.packet.kind !== "development" || qa?.packet.kind !== "qa" || !qa.packet.testPlan) return null;
+    const implementationDigest = recordDigest(task), qaDigest = recordDigest(qa);
+    if (!qa.dependencyPins.some(pin => pin.taskId === taskId && pin.revision === task.packet.revision
+      && pin.recordSha256 === implementationDigest)) return null;
+    const source = { requestId: requestId ?? task.source.requestId, instructionSha256: workstreamInstructionDigest(side.workstream) };
+    const taskInputs = scopedInputs(side, review, task, source), qaInputs = scopedInputs(side, review, qa, source);
+    if (!taskInputs || !qaInputs) return null;
+    return Object.freeze({ implementationDigest, qaDigest, implementationRevision: task.packet.revision, qaRevision: qa.packet.revision,
+      implementationInputsSha256: digest(taskInputs), qaInputsSha256: digest(qaInputs),
+      implementationSource: Object.freeze({ ...task.source }), qaSource: Object.freeze({ ...qa.source }) });
+  };
+  const first = resolve(stages[0], oldReview), second = resolve(stages[1], nextReview), third = resolve(stages[2], nextReview, currentRequestId);
+  if (!first || !second || !third
+    || first.implementationRevision >= second.implementationRevision || second.implementationRevision >= third.implementationRevision
+    || first.qaRevision >= second.qaRevision || second.qaRevision >= third.qaRevision
+    || first.implementationInputsSha256 !== second.implementationInputsSha256 || second.implementationInputsSha256 !== third.implementationInputsSha256
+    || first.qaInputsSha256 !== second.qaInputsSha256 || second.qaInputsSha256 !== third.qaInputsSha256) return null;
+  return Object.freeze({ previous: first, compared: second, current: third });
 }

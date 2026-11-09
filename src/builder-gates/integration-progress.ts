@@ -10,6 +10,9 @@ import { readCurrentIntegrationPlan, checkIntegrationPrerequisites } from "./int
 import { readVerifiedWorkstreamForManager } from "./integration-manager-job.ts";
 import type { VerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
 import { readWorkspaceSourceGitTipProof } from "../workspace-source-git-tip.ts";
+import { normalizeVerifiedWorkstreamSnapshot } from "./workstream-verification-consumer.ts";
+import { createWorkstreamVerificationPublication } from "./workstream-verification-publication.ts";
+import { verifyTaskQaReportForSnapshot } from "./verified-task-qa-report.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 const textHash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -143,6 +146,13 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   } };
   const currentPlatform = { ...platform, state: tracked as typeof platform.state };
   const snapshot = await managerEvent({ workstreamId, eventId }, runContext, currentPlatform);
+  const publication = createWorkstreamVerificationPublication(tracked);
+  const verifyScope = { workspaceId: context.companyId, projectId: context.companyId, workstreamId, eventId };
+  const currentEffects = await publication.readCurrentEffectGuards(verifyScope);
+  if (currentEffects.status !== "current") return currentEffects;
+  if (hash(normalizeVerifiedWorkstreamSnapshot(snapshot)) !== hash(normalizeVerifiedWorkstreamSnapshot(currentEffects.snapshot))) {
+    return { status: "stale", reason: "verified-snapshot-changed-before-integration" };
+  }
   const prerequisite = await checkIntegrationPrerequisites(context.companyId, workstreamId, currentPlatform);
   if (prerequisite.status !== "ready") return prerequisite;
   const plan = await readCurrentIntegrationPlan(context.companyId, currentPlatform);
@@ -163,11 +173,16 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   const reports = createTaskQaReportStore({ workspaceId: context.companyId, projectId: context.companyId,
     ctoId: workstream.spec.assignedCtoId, workstreamId, qaTaskId: qaTasks[0]!.packet.taskId }, tracked);
   const report = await reports.current();
-  if (!report || report.revision.verdict !== "passed" || !snapshot.sourcePins.some(pin =>
-    pin.sourceId === `builder-v1:task-qa-report:${qaTasks[0]!.packet.taskId}` && pin.revisionId === report.revision.revisionId
-    && pin.sha256 === hash(report.revision))) throw new Error("The exact current independent QA report is unavailable.");
+  if (!report || report.revision.verdict !== "passed") throw new Error("The exact independent QA report is unavailable.");
+  const qaEvidence = snapshot.qaEvidence.find(item => item.report.sourceId === `builder-v1:task-qa-report:${qaTasks[0]!.packet.taskId}`);
+  const qaDigest = taskPacketRecordDigest(qaTasks[0]!, context.companyId, workstream.spec.assignedCtoId, workstreamId);
+  if (!qaEvidence || !verifyTaskQaReportForSnapshot({ snapshot, task, taskDigest: digest, qaTask: qaTasks[0]!, qaDigest,
+    taskBoardRevisionId: board!.revision.revisionId, workstream, report: report.revision, reportPin: qaEvidence.report })) {
+    throw new Error("The exact current or publication-verified carried QA binding is unavailable.");
+  }
   const binding = report.revision.reference.binding;
-  if (binding.implementationTaskId !== taskId || binding.implementationDigest !== digest || binding.sourceId !== plan.revision.sourceId
+  if (binding.implementationTaskId !== taskId || (!qaEvidence?.carryForward && binding.implementationDigest !== digest)
+    || binding.sourceId !== plan.revision.sourceId
     || binding.folderKey !== plan.revision.folderKey) throw new Error("Incoming object pins do not match the verified Task and plan.");
   const scope = { workspaceId: context.companyId, workstreamId, eventId, taskId };
   const store = createIntegrationAttemptStore(scope, state), prior = await store.current();
@@ -210,7 +225,7 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
         branch: plan.revision.candidateBranch, expectedHead: missing ? plan.revision.baseCommit : tip.commitSha as string,
         incomingCommit: binding.commitSha, incomingTree: binding.treeSha, ...(missing ? { initializeIfMissing: true as const } : {}) },
       git: null, validation: "not-executed", author: { agentId: context.agentId, sessionId: context.sessionId, runId: context.runId } });
-    const guards = [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1."));
+    const guards = mergeEffectGuards(currentEffects.guards, [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1.")));
     if (guards.length > 64) return { status: "unsupported", reason: "integration-authority-guard-bound" };
     const reserved = await store.publishGuarded({ expectedBaseRevisionId: prior?.revision.revisionId ?? null, revision: attempt }, guards);
     if (reserved.status !== "published") return { status: "conflict", reason: "integration-reservation-cas-conflict" };
@@ -225,8 +240,13 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   const reportEntries = [...captured.values()].filter(guard => guard.stateKey.includes("task-qa-reports-revision.v1.")
     && (guard.expectedValue as { revision?: { revisionId?: unknown } })?.revision?.revisionId === report.revision.revisionId);
   if (reportEntries.length !== 1) return { status: "unknown", reason: "integration-persisted-source-proof-unavailable" };
-  const guards = [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1."));
-  guards.push(reportEntries[0]!);
+  const refreshed = await publication.readCurrentEffectGuards(verifyScope);
+  if (refreshed.status !== "current" || hash(normalizeVerifiedWorkstreamSnapshot(refreshed.snapshot))
+    !== hash(normalizeVerifiedWorkstreamSnapshot(currentEffects.snapshot))) return { status: "stale", reason: "verified-snapshot-changed-before-git-effect" };
+  const effectGuards = mergeEffectGuards(refreshed.guards, [...captured.values()].filter(guard => !guard.stateKey.includes("-revision.v1.")));
+  const reportGuard = reportEntries[0]!;
+  const guards = effectGuards.filter(guard => guard.stateKey !== reportGuard.stateKey || guard.namespace !== reportGuard.namespace);
+  guards.push(reportGuard);
   if (guards.length > 64 || Buffer.byteLength(JSON.stringify(guards), "utf8") > 200_000) return { status: "unsupported", reason: "integration-effect-guard-bound" };
   let raw: unknown;
   try { raw = await api.integrateWorkspaceSourceCommitV1({ ...selected.effect,
@@ -245,6 +265,17 @@ export async function integrateVerifiedTask(params: unknown, runContext: unknown
   }
   return { status: saved.status, attempt: completed, integrationStatus: completed.git?.status === "conflict" ? "INTEGRATION_HOLD" : "INTEGRATING",
     reason: "git-observed-required-ci-and-e2e-not-executed" };
+}
+
+function mergeEffectGuards(...sets: readonly (readonly RevisionPublicationGuard[])[]): RevisionPublicationGuard[] {
+  const merged = new Map<string, RevisionPublicationGuard>();
+  for (const guard of sets.flat()) {
+    const key = `${guard.namespace ?? "default"}\0${guard.stateKey}`;
+    const prior = merged.get(key);
+    if (prior && hash(prior.expectedValue) !== hash(guard.expectedValue)) throw new Error("Conflicting integration effect guards.");
+    merged.set(key, guard);
+  }
+  return [...merged.values()];
 }
 
 export async function readIntegrationProgress(params: unknown, runContext: unknown, platform: SpsPlatformInvocationContext) {

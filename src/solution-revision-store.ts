@@ -381,7 +381,8 @@ export function createRevisionJournal<T>(workspaceId: string, projectId: string,
       if (receipt.status === "unsupported" && receipt.reason === "missing-guard") return Object.freeze({ status: "unsupported" as const });
       if (receipt.status === "conflict") return Object.freeze({ status: "stale" as const });
       if (receipt.status !== "committed") throw new TypeError("Invalid guarded current receipt.");
-      return Object.freeze({ status: "current" as const, sequence: captured.entry.sequence, revision: captured.entry.revision });
+      return Object.freeze({ status: "current" as const, sequence: captured.entry.sequence, revision: captured.entry.revision,
+        headGuard: Object.freeze({ stateKey: headKey.stateKey, namespace: headKey.namespace, expectedValue: structuredClone(captured.raw) }) });
     },
 
     // Follow the published chain, not a raw revision key: failed head writes can

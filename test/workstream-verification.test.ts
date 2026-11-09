@@ -15,6 +15,7 @@ import type { RevisionState, RevisionJobWake } from "../src/solution-revision-st
 import { recordTaskQaRunReference } from "../src/task-qa-run-references.ts";
 import { parseTaskQaReport, taskQaCriteria } from "../src/task-qa-reports.ts";
 import type { GateProtectedTaskQaProof } from "../src/builder-gates/workstream-verification.ts";
+import { qaCarryForwardPin, type QaCarryForward } from "../src/builder-gates/qa-carry-forward.ts";
 
 const scope: GateProofScope = {
   workspaceId: "11111111-1111-4111-8111-111111111111", projectId: "project-1", workstreamId: "ws-1", taskId: "task-1",
@@ -174,7 +175,7 @@ async function protectedProofFixture() {
     ...readers, sourceInventory: async () => ({ status: "available", value: current }),
     runtimeProof: async () => ({ status: "available", value: candidate }),
   }).verify({ ...request, taskRecord: development });
-  return { proof, verify };
+  return { proof, verify, development, inventory: current };
 }
 
 test("protected execution and a completed independent Builder QA report establish G6 without fictional Core QA or artifact IDs", async () => {
@@ -197,6 +198,71 @@ test("protected Gate evidence rejects unfinished authors, wrong receipt, changed
     { ...f.proof, report: { ...f.proof.report, checks: f.proof.report.checks.slice(1) } },
   ];
   for (const candidate of candidates) assert.equal((await f.verify(candidate as GateProtectedTaskQaProof)).status, "UNKNOWN");
+});
+
+async function carriedProofFixture() {
+  // TEST_FIXTURE_ONLY: exercises the Gate's trusted-reader shape, not G5 authority.
+  const f = await protectedProofFixture();
+  const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const nextWorkstream: WorkstreamRecord = { ...workstream, spec: { ...workstream.spec, revision: 3 },
+    change: { ...workstream.change, previousRevision: 2, g5Handoff: {
+      oldBaselineRevisionId: "base-old", newBaselineRevisionId: "base-1", oldUiRevisionId: "ui-old", newUiRevisionId: "ui-new",
+      technology: null, workstreams: { oldRevisionId: "ws-old", newRevisionId: "ws-compared" },
+      tasks: { ctoId, workstreamId: scope.workstreamId, oldRevisionId: "tasks-old", newRevisionId: "tasks-compared" },
+      workstreamImpactStatus: "CANDIDATES", taskImpactStatus: "NO_CANDIDATE_OBSERVED", affectedTaskIds: [], impactSha256: "d".repeat(64),
+    } } };
+  const source = { ...f.development.source, specRevision: 3, instructionSha256: workstreamInstructionDigest(nextWorkstream) };
+  const development = { ...f.development, source, packet: { ...f.development.packet, revision: 3 } };
+  const developmentDigest = taskPacketRecordDigest(development, scope.projectId, ctoId, scope.workstreamId);
+  const qaRecord = { ...f.proof.qaRecord, source, packet: { ...f.proof.qaRecord.packet, revision: 3 },
+    dependencyPins: [{ taskId: scope.taskId, revision: 3, recordSha256: developmentDigest }] };
+  const qaDigest = taskPacketRecordDigest(qaRecord, scope.projectId, ctoId, scope.workstreamId);
+  const carry: QaCarryForward = { kind: "g5-task-qa-carry-forward-v1", taskId: scope.taskId, qaTaskId: qaRecord.packet.taskId,
+    handoffSha256: hash(nextWorkstream.change.g5Handoff), priorTaskBoardRevisionId: "tasks-old",
+    comparedTaskBoardRevisionId: "tasks-compared", currentTaskBoardRevisionId: "tasks-current",
+    task: { prior: f.proof.taskRecordSha256, compared: "b".repeat(64), current: developmentDigest, inputsSha256: "e".repeat(64) },
+    qa: { prior: f.proof.report.reference.binding.qaDigest, compared: "c".repeat(64), current: qaDigest, inputsSha256: "f".repeat(64) } };
+  const proof: GateProtectedTaskQaProof = { ...f.proof, taskRecordSha256: developmentDigest, qaRecord,
+    carryForward: { proof: carry, implementationRecord: f.development, qaRecord: f.proof.qaRecord } };
+  const carryPin = qaCarryForwardPin(carry, proof.reportPin);
+  const pins = f.inventory.pins.map(item => item.sourceId === workstreamPin.sourceId
+    ? pin(item.sourceId, "ws-current", hash(nextWorkstream)) : item.sourceId === taskPin.sourceId
+    ? pin(item.sourceId, "task-current", developmentDigest) : item.sourceId === "builder-v1:task-packet:qa-1"
+    ? pin(item.sourceId, "qa-current", qaDigest) : item).concat(carryPin);
+  const current: GateSourceInventory = { ...f.inventory, pins,
+    heads: pins.map(item => ({ sourceId: item.sourceId, revisionId: item.revisionId, digest: item.sha256, sequence: 3 })) };
+  const verify = (candidate = proof, candidateInventory = current) => createWorkstreamVerificationProducer({ ...readers,
+    sourceInventory: async () => ({ status: "available", value: candidateInventory }),
+    runtimeProof: async () => ({ status: "available", value: candidate }),
+  }).verify({ ...request, workstream: nextWorkstream, taskRecord: development });
+  return { proof, current, carryPin, verify };
+}
+
+test("protected Gate preserves original QA while binding the current Task and exact carry pin", async () => {
+  const f = await carriedProofFixture(), result = await f.verify();
+  assert.equal(result.status, "VERIFIED", JSON.stringify(result));
+  const evidence = result.snapshot!.qaEvidence[0]!;
+  assert.deepEqual(evidence.carryForward, f.proof.carryForward!.proof);
+  assert.equal(evidence.report.revisionId, f.proof.report.revisionId);
+  assert.equal(f.proof.report.reference.binding.implementationRevision, 1);
+  assert(result.snapshot!.sourcePins.some(item => item.sha256 === f.proof.taskRecordSha256));
+  assert(result.snapshot!.gateDecisions.find(gate => gate.gateId === "G6")!.evidenceRefs
+    .some(item => item.sourceId === f.carryPin.sourceId && item.sha256 === f.carryPin.sha256));
+});
+
+test("protected Gate rejects stale current, old assessment, handoff and missing carry pin", async () => {
+  const f = await carriedProofFixture(), carry = f.proof.carryForward!;
+  const variants = [
+    { ...f.proof, carryForward: { ...carry, proof: { ...carry.proof, handoffSha256: "0".repeat(64) } } },
+    { ...f.proof, carryForward: { ...carry, proof: { ...carry.proof, task: { ...carry.proof.task, current: "0".repeat(64) } } } },
+    { ...f.proof, carryForward: { ...carry, implementationRecord: { ...carry.implementationRecord,
+      packet: { ...carry.implementationRecord.packet, revision: 2 } } } },
+    { ...f.proof, carryForward: undefined },
+  ];
+  for (const candidate of variants) assert.equal((await f.verify(candidate)).status, "UNKNOWN");
+  assert.equal((await f.verify(f.proof, { ...f.current,
+    pins: f.current.pins.filter(item => item.sourceId !== f.carryPin.sourceId),
+    heads: f.current.heads.filter(item => item.sourceId !== f.carryPin.sourceId) })).status, "UNKNOWN");
 });
 
 function publicationFixture() {
@@ -257,6 +323,25 @@ test("a guarded verification journal publishes a minimal durable wake and reads 
   assert.equal(f.calls, 1);
   f.drift();
   assert.equal((await restarted.readCurrent(readScope)).status, "stale");
+});
+
+test("current effect guards include the exact publication head and all observed source guards", async () => {
+  const f = publicationFixture(), publisher = createWorkstreamVerificationPublication(f.state, f.authority);
+  const result = await publisher.publish(scope);
+  assert.equal(result.status, "published");
+  const readScope = { ...scope, eventId: result.eventId! }, before = structuredClone(f.values);
+  const current = await publisher.readCurrentEffectGuards(readScope);
+  assert.equal(current.status, "current");
+  if (current.status !== "current") return;
+  assert.equal(current.guards.length, 2);
+  assert(current.guards.some(guard => guard.stateKey === "fixture-source-head"));
+  const publication = current.guards.find(guard => guard.stateKey.startsWith("workstream-verification-head.v1."));
+  assert(publication, JSON.stringify(current.guards));
+  for (const guard of current.guards) assert.deepEqual(guard.expectedValue,
+    await f.state.get({ scopeKind: "company", scopeId: scope.workspaceId, namespace: guard.namespace, stateKey: guard.stateKey }));
+  assert.deepEqual(f.values, before, "guard observation writes no state or execution");
+  f.drift();
+  assert.equal((await publisher.readCurrentEffectGuards(readScope)).status, "stale");
 });
 
 test("additional authority-only guards need no invented content pin and still revoke the published snapshot", async () => {

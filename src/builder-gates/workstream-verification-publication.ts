@@ -122,7 +122,9 @@ async function currentScopeGuards(scope: WorkstreamScope, stored: Stored, state:
  * evidence and bind every source to its actual guard. No route accepts these
  * readers, expected values, or a caller-supplied verification result. */
 export function createWorkstreamVerificationPublication(state: RevisionState, readAuthority?: AuthorityReader) {
-  const readCurrent: VerifiedSnapshotReader = async ({ workspaceId, projectId, workstreamId, eventId }) => {
+  const readCurrentEffectGuards = async ({ workspaceId, projectId, workstreamId, eventId }: Parameters<VerifiedSnapshotReader>[0]): Promise<
+    Exclude<Awaited<ReturnType<VerifiedSnapshotReader>>, { status: "current" }>
+    | Readonly<{ status: "current"; snapshot: VerifiedWorkstreamSnapshot; guards: readonly RevisionPublicationGuard[] }>> => {
     try {
       const store = journal(workspaceId, projectId, workstreamId, state);
       const head = await store.current();
@@ -135,9 +137,13 @@ export function createWorkstreamVerificationPublication(state: RevisionState, re
       if (!guards) return { status: "stale" };
       const after = await store.currentGuarded(guards);
       if (after.status === "unsupported") return { status: "unknown", reason: "atomic-current-verification-unavailable" };
-      if (after.status !== "current" || after.revision.eventId !== eventId) return { status: "stale" };
-      return { status: "current", snapshot: after.revision.snapshot };
+      if (after.status !== "current" || after.revision.eventId !== eventId || hash(after.revision) !== hash(head.revision)) return { status: "stale" };
+      return { status: "current", snapshot: after.revision.snapshot, guards: Object.freeze([after.headGuard, ...guards]) };
     } catch { return { status: "unknown", reason: "verified-head-or-guard-read-failed" }; }
+  };
+  const readCurrent: VerifiedSnapshotReader = async scope => {
+    const result = await readCurrentEffectGuards(scope);
+    return result.status === "current" ? { status: "current", snapshot: result.snapshot } : result;
   };
 
   async function publish(scope: WorkstreamScope) {
@@ -232,5 +238,5 @@ export function createWorkstreamVerificationPublication(state: RevisionState, re
       return readCurrent({ ...scope, eventId: current.revision.eventId });
     } catch { return { status: "unknown", reason: "verified-head-or-guard-read-failed" }; }
   }
-  return Object.freeze({ publish, readCurrent, readLatestCurrent });
+  return Object.freeze({ publish, readCurrent, readLatestCurrent, readCurrentEffectGuards });
 }

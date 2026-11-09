@@ -845,6 +845,24 @@
   현재 G6를 만들거나 실행을 시작하지 않는다. 정확한 비교 pair, ACK 뒤 현재 Task와 이
   원본 증거를 새 VERIFIED·Manager에 결속하는 작업은 남아 있다.
 
+### 영향 없는 Task의 QA 증거 승계
+
+- 현재 담당 CTO의 권한 아래 G5 비교 전·후와 ACK 뒤 실제 Task 보드의 개발·QA 입력을
+  각각 확인한다. 세 보드의 출처와 digest는 별도로 보존한다. 승인된 입력·QA 계획·현재
+  Source의 Commit/Tree가 같고 최신 QA 보고서와 실행 참조가 일치할 때만 승계한다.
+  필요한 근거가 없거나 권한이 철회되면 승계하지 않는다.
+- 새 VERIFIED에는 현재 Task/QA 핀과 별도 승계 근거를 넣되 옛 보고서·Core 영수증은
+  다시 작성하지 않는다. Manager는 CTO 권한을 재사용하지 않고, 권위 있는 VERIFIED와
+  현재 Task·보고서를 검증한다. 실제 Git 효과 요청에는 해당 발행 head·소스/권한 가드와
+  정확한 수신 Commit/Tree의 보고서 참조를 함께 넘긴다. 최종 후보도 이 바인딩을 확인한다.
+- 등록 생산자 체인에서 QA 승계와 조회·발행 경합 차단을 독립 검사했다. 초기 전체 회귀의
+  4개 실패는 보존했다. 두 번째 Workstream의 합성 스냅샷이 첫 번째 QA Task/실행 참조를
+  담던 문제를 고쳐 자기 근거를 사용하도록 했고, 다른 Source의 보고서는 계속 거부된다.
+  고정 SDK `c69915a` 사본의 관련 136개와 타입 검사가 통과했다. 실행 관련 406개 소스와
+  후보 SDK `8a389d8`의 98개 파일을 물리 QA 사본과 일치시켜 전체 회귀 1,581개·타입·빌드를
+  확인했다. 여기서 Core·Git 응답은 합성이며 실제 모델·OS·설치본 인수 또는 G7·최종 승인
+  완료가 아니다. 입력 브랜치 변경을 Git 쓰기와 같은 트랜잭션에서 막는 검증은 남아 있다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)

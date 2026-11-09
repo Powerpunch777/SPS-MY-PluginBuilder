@@ -11,6 +11,7 @@ import { taskPacketRecordDigest } from "../domain/task-packets.ts";
 import { createTaskPacketStore } from "../task-packet-tools.ts";
 import { createTaskQaReportStore } from "../task-qa-reports.ts";
 import { readWorkstreams } from "../workstream-tools.ts";
+import { verifyTaskQaReportForSnapshot } from "../builder-gates/verified-task-qa-report.ts";
 
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const TASK_PREFIX = "builder-v1:task-packet:";
@@ -130,8 +131,11 @@ export async function readIntegrationCandidate(workspaceId: string, platform: Sp
         const qaTaskId = qaTasks[0]!.packet.taskId;
         const report = (await createTaskQaReportStore({ ...scope, ctoId, qaTaskId }, platform.state).current())?.revision;
         const reportSha256 = hash(report ?? null);
-        if (report?.verdict !== "passed" || !snapshot.qaEvidence.some(qa => qa.report.sourceId === `builder-v1:task-qa-report:${qaTaskId}`
-          && qa.report.revisionId === report.revisionId && qa.report.sha256 === reportSha256)) {
+        const qaEvidence = snapshot.qaEvidence.find(qa => qa.report.sourceId === `builder-v1:task-qa-report:${qaTaskId}`);
+        const qaDigest = taskPacketRecordDigest(qaTasks[0]!, workspaceId, ctoId, spec.id);
+        if (report?.verdict !== "passed" || !qaEvidence || !verifyTaskQaReportForSnapshot({ snapshot, task, taskDigest: digest,
+          qaTask: qaTasks[0]!, qaDigest, taskBoardRevisionId: taskBoard!.revisionId,
+          workstream: board.workstreams.find(item => item.spec.id === spec.id)!, report, reportPin: qaEvidence.report })) {
           return unavailable("stale", "workstream-independent-qa-pins-changed");
         }
         const attempt = (await createIntegrationAttemptStore({ workspaceId, workstreamId: spec.id,

@@ -6,6 +6,7 @@ import type { SpecCoverageResult } from "../spec-coverage/evaluator.ts";
 import type { BaselineBodyRead } from "../project-documents/baseline-body-source.ts";
 import type { EvidencePin } from "./workstream-verification-consumer.ts";
 import { parseTaskQaReport, taskQaCriteria, type TaskQaReport } from "../task-qa-reports.ts";
+import { parseQaCarryForward, qaCarryForwardPin, type QaCarryForward } from "./qa-carry-forward.ts";
 
 export type GateProofScope = Readonly<{ workspaceId: string; projectId: string; workstreamId: string; taskId: string }>;
 // These identifiers serialize Builder adapter payloads; they are not Core API
@@ -65,6 +66,7 @@ export type GateProtectedTaskQaProof = Readonly<{
   receiptPin: EvidencePin;
   referencePin: EvidencePin;
   reportPin: EvidencePin;
+  carryForward?: Readonly<{ proof: QaCarryForward; implementationRecord: TaskPacketRecord; qaRecord: TaskPacketRecord }>;
 }>;
 export type GateRuntimeEvidence = GateRuntimeProof | GateProtectedTaskQaProof;
 export type BaselineRef = Readonly<{ documentId: string; documentRevisionId: string; bodySha256: string }>;
@@ -84,7 +86,7 @@ export type WorkstreamVerificationResult = Readonly<{
     taskRecordSha256: string;
     sourcePins: readonly EvidencePin[];
     gateDecisions: readonly Readonly<{ gateId: "G4" | "G6"; verdict: "PASS"; evidenceRefs: readonly EvidencePin[] }>[];
-    qaEvidence: readonly Readonly<{ result: "passed"; report: EvidencePin }>[];
+    qaEvidence: readonly Readonly<{ result: "passed"; report: EvidencePin; carryForward?: QaCarryForward }>[];
   }>;
 }>;
 
@@ -210,18 +212,43 @@ function protectedProof(value: GateRuntimeEvidence): value is GateProtectedTaskQ
 function validProtectedTaskQaProof(value: GateProtectedTaskQaProof, scope: GateProofScope, task: TaskPacketRecord,
   taskDigest: string, workstream: WorkstreamRecord, inventory: GateSourceInventory): boolean {
   try {
-    if (!exactFields(value, ["provenance", "scope", "status", "taskRecordSha256", "qaRecord", "report", "authorRun",
-      "runPin", "receiptPin", "referencePin", "reportPin"])
+    const fields = ["provenance", "scope", "status", "taskRecordSha256", "qaRecord", "report", "authorRun",
+      "runPin", "receiptPin", "referencePin", "reportPin"];
+    if (!exactFields(value, Object.hasOwn(value, "carryForward") ? [...fields, "carryForward"] : fields)
       || !exactFields(value.provenance, ["adapter", "operation"]) || value.provenance.operation !== "readCurrent"
       || !sameScope(value.scope, scope) || value.status !== "passed" || value.taskRecordSha256 !== taskDigest) return false;
     const report = parseTaskQaReport(value.report), reference = report.reference, binding = reference.binding;
     const qa = parseTaskPacketRecord(value.qaRecord, scope.projectId, task.packet.ctoId, scope.workstreamId);
     const qaDigest = taskPacketRecordDigest(qa, scope.projectId, task.packet.ctoId, scope.workstreamId);
+    let assessedTask = task, assessedQa = qa;
+    if (value.carryForward) {
+      const carry = value.carryForward;
+      if (!exactFields(carry, ["proof", "implementationRecord", "qaRecord"])) return false;
+      const proof = parseQaCarryForward(carry.proof);
+      assessedTask = parseTaskPacketRecord(carry.implementationRecord, scope.projectId, task.packet.ctoId, scope.workstreamId);
+      assessedQa = parseTaskPacketRecord(carry.qaRecord, scope.projectId, task.packet.ctoId, scope.workstreamId);
+      if (proof.taskId !== scope.taskId || proof.qaTaskId !== qa.packet.taskId
+        || proof.task.current !== taskDigest || proof.qa.current !== qaDigest
+        || proof.task.prior !== taskPacketRecordDigest(assessedTask, scope.projectId, task.packet.ctoId, scope.workstreamId)
+        || proof.qa.prior !== taskPacketRecordDigest(assessedQa, scope.projectId, task.packet.ctoId, scope.workstreamId)
+        || proof.handoffSha256 !== digest(workstream.change.g5Handoff ?? null)
+        || assessedTask.packet.taskId !== task.packet.taskId || assessedQa.packet.taskId !== qa.packet.taskId
+        || assessedTask.packet.kind !== "development" || assessedQa.packet.kind !== "qa"
+        || assessedTask.packet.revision >= task.packet.revision || assessedQa.packet.revision >= qa.packet.revision
+        || !assessedQa.dependencyPins.some(pin => pin.taskId === scope.taskId && pin.revision === assessedTask.packet.revision
+          && pin.recordSha256 === proof.task.prior)
+        || report.author.agentId === assessedTask.author.agentId || report.author.sessionId === assessedTask.author.sessionId
+        || report.author.runId === assessedTask.author.runId) return false;
+      const pin = qaCarryForwardPin(proof, value.reportPin);
+      if (!sameAcceptedPin(pin, uniquePin(inventory.pins, pin.sourceId))) return false;
+    }
+    const assessedDigest = taskPacketRecordDigest(assessedTask, scope.projectId, task.packet.ctoId, scope.workstreamId);
+    const assessedQaDigest = taskPacketRecordDigest(assessedQa, scope.projectId, task.packet.ctoId, scope.workstreamId);
     if (reference.scope.workspaceId !== scope.workspaceId || reference.scope.projectId !== scope.projectId
       || reference.scope.ctoId !== task.packet.ctoId || reference.scope.workstreamId !== scope.workstreamId
       || reference.scope.qaTaskId !== qa.packet.taskId || qa.packet.kind !== "qa"
-      || binding.implementationTaskId !== scope.taskId || binding.implementationRevision !== task.packet.revision
-      || binding.implementationDigest !== taskDigest || binding.qaRevision !== qa.packet.revision || binding.qaDigest !== qaDigest
+      || binding.implementationTaskId !== scope.taskId || binding.implementationRevision !== assessedTask.packet.revision
+      || binding.implementationDigest !== assessedDigest || binding.qaRevision !== assessedQa.packet.revision || binding.qaDigest !== assessedQaDigest
       || !qa.dependencyPins.some(pin => pin.taskId === scope.taskId && pin.revision === task.packet.revision && pin.recordSha256 === taskDigest)
       || qa.source.specRevision !== workstream.spec.revision || qa.source.instructionSha256 !== workstreamInstructionDigest(workstream)
       || !task.packet.sourceAccess || binding.sourceId !== task.packet.sourceAccess.sourceId
@@ -360,6 +387,8 @@ export function createWorkstreamVerificationProducer(readers: Readonly<{
         revisionId: baselineDocument.documentRevisionId, sha256: baselineDocument.bodySha256 });
       const g6 = protectedProof(runtime) ? [runtime.runPin, runtime.receiptPin, runtime.reportPin]
         : [runtime.execution.artifactPin, runtime.independentQa.receipt];
+      const carryForward = protectedProof(runtime) && runtime.carryForward ? parseQaCarryForward(runtime.carryForward.proof) : null;
+      if (carryForward) g6.push(qaCarryForwardPin(carryForward, reportPin));
       return Object.freeze({ status: "VERIFIED", reasons: Object.freeze([]), snapshot: Object.freeze({
         eventId: input.eventId,
         workspaceId: input.scope.workspaceId, projectId: input.scope.projectId, workstreamId: input.scope.workstreamId,
@@ -369,7 +398,8 @@ export function createWorkstreamVerificationProducer(readers: Readonly<{
         gateDecisions: Object.freeze([
           Object.freeze({ gateId: "G4" as const, verdict: "PASS" as const, evidenceRefs: Object.freeze([...g4, baselineBodyPin]) }),
           Object.freeze({ gateId: "G6" as const, verdict: "PASS" as const, evidenceRefs: Object.freeze(g6) }),
-        ]), qaEvidence: Object.freeze([Object.freeze({ result: "passed" as const, report: reportPin })]),
+        ]), qaEvidence: Object.freeze([Object.freeze({ result: "passed" as const, report: reportPin,
+          ...(carryForward ? { carryForward } : {}) })]),
       }) });
       } catch { return unknown("workstream-verification-input-or-reader-malformed"); }
     },

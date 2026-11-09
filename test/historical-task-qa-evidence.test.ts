@@ -34,7 +34,7 @@ async function setup(mode: "original" | "failed-head" | "continuation" = "origin
       assert.equal(sessionId, original.author.sessionId);
       return { runId, status: runId === authorRunId ? authorStatus : originStatus, cancellationRequested: runId === authorRunId && cancelled,
         termination: runId === authorRunId ? termination : "not_applicable", errorCode: null, error: null,
-        ...(runId === authorRunId && systemEvent ? { systemEvent: structuredClone(systemEvent) } : {}) };
+        ...(runId === authorRunId && systemEvent ? { systemEvent: structuredClone(systemEvent) } : {}) } as Awaited<ReturnType<typeof sessions.getRun>>;
     }
     const row = await originalGetRun(sessionId, companyId, runId);
     return runId === ctoContext.runId ? { ...row, status: ctoStatus } : row;
@@ -74,7 +74,7 @@ async function setup(mode: "original" | "failed-head" | "continuation" = "origin
   const input: HistoricalTaskQaEvidenceInput = { scope, ctoId: CTO, taskBoardRevisionId: historical.revisionId,
     implementationDigest: digest(implementation), qaTaskId: refScope.qaTaskId, qaDigest: digest(qa),
     runContext: ctoContext, platform: f.platform };
-  const host = f.platform as typeof f.platform & { protectedTests: Record<string, (...args: any[]) => any>;
+  const host = f.platform as unknown as { protectedTests: Record<string, (...args: any[]) => any>;
     localFolders: Record<string, (...args: any[]) => any> };
   host.protectedTests.enqueueApprovedV1 = async () => assert.fail("Historical reads never enqueue protected runs");
   sessions.sendMessage = async () => assert.fail("Historical reads never send messages");

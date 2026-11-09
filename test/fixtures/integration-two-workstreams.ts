@@ -107,17 +107,23 @@ export async function setupTwoWorkstreamCandidate(options: { omitSecondEffect?: 
   assert.equal(firstCurrent.status, "current");
   if (firstCurrent.status !== "current") throw new Error("Expected initial fixture verification.");
   const snapshot = structuredClone(firstCurrent.snapshot) as VerifiedWorkstreamSnapshot;
-  const pins = snapshot.sourcePins.filter(pin => ![
-    "builder-v1:workstream:ws-1", "builder-v1:task-packet:task-dev", "builder-v1:task-qa-report:task-qa",
-  ].includes(pin.sourceId));
-  pins.push({ sourceId: "builder-v1:workstream:ws-two", revisionId: String(second.spec.revision), sha256: hash(second) });
-  pins.push({ sourceId: "builder-v1:task-packet:task-two-dev", revisionId: String(dev.packet.revision), sha256: devDigest });
+  const devPin = { sourceId: "builder-v1:task-packet:task-two-dev", revisionId: `task-two-dev:${dev.packet.revision}`, sha256: devDigest };
+  const qaPin = { sourceId: "builder-v1:task-packet:task-two-qa", revisionId: `task-two-qa:${qa.packet.revision}`, sha256: qaDigest };
   const reportPin = { sourceId: "builder-v1:task-qa-report:task-two-qa", revisionId: report.revisionId, sha256: reportSha };
-  pins.push(reportPin);
+  const referencePin = { sourceId: "builder-v1:task-qa-run:task-two-qa", revisionId: reference.revisionId, sha256: hash(reference) };
+  const oldBinding = firstReport.reference.binding;
+  const replacements = new Map([
+    ["builder-v1:workstream:ws-1", { sourceId: "builder-v1:workstream:ws-two", revisionId: String(second.spec.revision), sha256: hash(second) }],
+    ["builder-v1:task-packet:task-dev", devPin], ["builder-v1:task-packet:task-qa", qaPin],
+    ["builder-v1:task-qa-report:task-qa", reportPin], ["builder-v1:task-qa-run:task-qa", referencePin],
+    [`core:protected-test-run:${oldBinding.runId}`, { sourceId: `core:protected-test-run:${refBinding.runId}`,
+      revisionId: refBinding.runId, sha256: hash(refBinding) }],
+    [`core:protected-test-receipt:${oldBinding.runId}`, { sourceId: `core:protected-test-receipt:${refBinding.runId}`,
+      revisionId: report.coreReceiptDigest, sha256: report.coreReceiptDigest }],
+  ]);
+  const pins = snapshot.sourcePins.map(pin => replacements.get(pin.sourceId) ?? pin);
   const nextSnapshot = { ...snapshot, eventId: "", workstreamId: "ws-two", sourcePins: pins,
-    gateDecisions: snapshot.gateDecisions.map(gate => ({ ...gate, evidenceRefs: gate.evidenceRefs.filter(pin =>
-      !["builder-v1:workstream:ws-1", "builder-v1:task-packet:task-dev", "builder-v1:task-qa-report:task-qa"].includes(pin.sourceId))
-      .concat(gate.gateId === "G6" ? [reportPin] : []) })),
+    gateDecisions: snapshot.gateDecisions.map(gate => ({ ...gate, evidenceRefs: gate.evidenceRefs.map(pin => replacements.get(pin.sourceId) ?? pin) })),
     qaEvidence: [{ result: "passed" as const, report: reportPin }] };
   const snapshotForId = { ...nextSnapshot, eventId: "" };
   const taskPins = [{ taskId: "task-two-dev", taskRevision: dev.packet.revision, taskRecordSha256: devDigest }];
