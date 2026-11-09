@@ -806,6 +806,10 @@
   타입·빌드 및 desktop/mobile 화면 검사가 통과했다. 모듈 집중 검사 37개와 연결 UI/모듈
   42개는 별도 실행이며 전체 결과에 더하지 않는다. 합성 Core 응답의 소스 회귀와 실제
   SDK→Host→임시 PG 증거를 구분하고, 초기 타입/설계 head 변경 실패 원본을 보존했다.
+- `61390b6`의 연결에 대한 별도 독립 검사 10개와 타입 검사도 통과했다. 검증 발행·Manager
+  예약은 Builder 생산 경로를 사용하고 Core 응답은 합성했다. 기존 `c69915a` 물리 사본의
+  집중 69개·타입·빌드 및 실제 Worker facade에서도 선택 API 부재를 확인했다. 미지원 시
+  추가 Host RPC·wake 없이 미측정으로 남는다. 두 SDK의 검사 건수는 서로 합산하지 않는다.
 - Desktop 후보 `ec31c4ed`는 일반 toolOutput wake의 Goal-free 상태를 resume 뒤 재조회하고
   현재 thread의 Goal 변경 알림 및 전송 직전 local gate를 검사한다. 메모리 검사 88개가
   통과했다. 이미 전송된 요청은 되돌릴 수 없고 provider-side 원자 조건이나 공식 Goal 실행은
