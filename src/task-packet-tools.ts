@@ -6,6 +6,7 @@ import { exactToolRecord } from "./lead-tool-authority.ts";
 import { resolveCtoPlanningAuthority } from "./cto-planning-authority.ts";
 import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
 import { readWorkstreams } from "./workstream-tools.ts";
+import { reviewTaskParallelPlan } from "./task-parallel-plan.ts";
 
 const json = (value: unknown) => value as JsonValue;
 function id(value: unknown): string {
@@ -121,9 +122,12 @@ export async function publishCtoTaskPacket(params: unknown, runContext: unknown,
   projectId, ctoId, workstreamId);
   const result = await authority.store.publish({ expectedBaseRevisionId: expected, revision: board });
   await authority.check();
+  const parallelReview = result.status === "published" ? reviewTaskParallelPlan(result.revision.packets
+    .filter(record => record.source.instructionSha256 === authority.source.sha256).map(record => record.packet)) : null;
   return { content: "CTO Task Packet instructions stored with exact Workstream provenance. Reuse/license/compatibility claims are authored planning data, not independent verification. No Worker, code, QA run or completion was created.",
     data: json({ status: result.status, taskId: packet.taskId,
       boardRevisionId: result.status === "published" ? result.revision.revisionId : result.actualBaseRevisionId,
+      ...(parallelReview?.tasks.length ? { parallelReview } : {}),
       executionStarted: false }) };
 }
 
@@ -142,6 +146,9 @@ export async function readCtoTaskPackets(params: unknown, runContext: unknown, p
       return dependency && dependency.packet.revision === pin.revision
         && taskPacketRecordDigest(dependency, projectId, ctoId, workstreamId) === pin.recordSha256;
     }) ? "current" : "changed" }));
-  return { content: "Only this CTO's Workstream Task Packets and their original source revisions. Older instructions stay historical, not evidence of current execution, Worker creation or completion.",
-    data: json({ projectId, ctoId, workstreamId, current, currentSource: authority.source, taskStates }) };
+  const parallelReview = reviewTaskParallelPlan(records.filter((_record, index) => taskStates[index]!.instruction === "current")
+    .map(record => record.packet));
+  return { content: "Only this CTO's Workstream Task Packets and their original source revisions. Resolve unordered write conflicts before dispatch. Similar goals are review hints; inspect requirements, deliverables and shared interfaces. Older instructions stay historical, not evidence of current execution, Worker creation or completion.",
+    data: json({ projectId, ctoId, workstreamId, current, currentSource: authority.source, taskStates,
+      ...(parallelReview.tasks.length ? { parallelReview } : {}) }) };
 }

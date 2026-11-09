@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { createTaskPacketStore } from "../src/task-packet-tools.ts";
+import { createTaskPacketStore, publishCtoTaskPacket } from "../src/task-packet-tools.ts";
 import { dispatchCtoWorkstream } from "../src/cto-workstream-delivery.ts";
 import { workstreamInstructionDigest } from "../src/cto-delivery-store.ts";
 import { prepareTaskWorker, readTaskWorkerFile, writeTaskWorkerFile, deleteTaskWorkerFile } from "../src/task-worker-tools.ts";
@@ -10,6 +10,7 @@ import { parseTaskWorkerRegistry, taskWorkerRegistryKey } from "../src/domain/ta
 import { createBuilderPlatform } from "../src/platform.ts";
 import { fixture, W, A, C, CTO, ctx, now } from "./fixtures/cto-platform.ts";
 import { prepareApprovedTaskFileDesign } from "./fixtures/task-file-approved-design.ts";
+import { createWorkstreamStore } from "../src/workstream-tools.ts";
 
 const AGENT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -17,6 +18,9 @@ const RUN = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const SOURCE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const HEAD = "a".repeat(40), COMMIT = "b".repeat(40), TREE = "c".repeat(40);
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const PEER_AGENT = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const PEER_SESSION = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+const PEER_RUN = "90909090-9090-4090-8090-909090909090";
 
 async function taskFixture(sourceBound = true) {
   const f = await fixture(W);
@@ -142,6 +146,168 @@ test("Workspace-only Worker context passes exact Source and observed mutable aut
   const deleted = await deleteTaskWorkerFile({ relativePath: "src/feature.ts" }, f.context, f.f.platform);
   assert.equal((deleted.data as { status: string }).status, "deleted");
   assert.deepEqual(f.effects, { reads: 1, writes: 1, deletes: 1 });
+});
+
+test("registered planning reports duplicate intent and blocks unordered shared-root writers without blocking reads", async () => {
+  const f = await taskFixture();
+  const peer = { ...f.record.packet, taskId: "task-peer", sourceAccess: { ...f.record.packet.sourceAccess,
+    branch: "feature/peer", writePaths: ["SRC/Feature.ts"] } };
+  const input = { projectId: W, ctoId: CTO, workstreamId: "ws-1" };
+  const plan = await publishCtoTaskPacket({ ...input, expectedBaseRevisionId: "qa-file-board-1", revisionId: "shared-plan",
+    packet: peer }, f.ctoContext, f.f.platform);
+  const reviewed = (plan.data as { parallelReview: { tasks: unknown[] } }).parallelReview.tasks;
+  assert.deepEqual(reviewed, [
+    { taskId: "task-dev", unorderedWriterIds: ["task-peer"], similarGoalIds: ["task-peer"], truncated: false },
+    { taskId: "task-peer", unorderedWriterIds: ["task-dev"], similarGoalIds: ["task-dev"], truncated: false },
+  ]);
+  const tools = createBuilderPlatform().tools;
+  const call = (name: string, params: object, context = f.context) => tools.find(tool => tool.name === name)!
+    .handler(params as never, context as never, f.f.platform);
+  const sessions = f.f.platform.agents.sessions;
+  const getRequest = sessions.getRequest.bind(sessions);
+  Object.assign(sessions, {
+    async getRequest(sessionId: string, companyId: string, requestId: string) {
+      return sessionId === SESSION ? null : getRequest(sessionId, companyId, requestId);
+    },
+    async sendMessage() { assert.fail("A conflicting new plan must not send a Worker Run."); },
+  });
+  const denied = await call("builder.dispatch-task-worker", { ...input, taskId: "task-dev", packetRevision: 1, role: "worker" }, f.ctoContext);
+  assert.equal((denied.data as { status: string }).status, "blocked");
+  assert.equal((denied.data as { reason: string }).reason, "unordered-source-writers");
+  sessions.getRequest = getRequest;
+  assert.equal(((await call("builder.read-task-source-file", { relativePath: "src/feature.ts" })).data as { status: string }).status, "read");
+  await assert.rejects(async () => call("builder.write-task-source-file", { relativePath: "src/feature.ts", contents: "blocked" }),
+    /unordered writers/u);
+  await assert.rejects(async () => call("builder.submit-task-source", { paths: ["src/feature.ts"] }), /unordered writers/u);
+  assert.deepEqual(f.effects, { reads: 1, writes: 0, deletes: 0 });
+});
+
+function supportSecondTask(f: Awaited<ReturnType<typeof taskFixture>>, replayFirst = false) {
+  const sessions = f.f.platform.agents.sessions;
+  const { getRequest, getRun } = sessions;
+  const owned = (f.f.platform.agents as unknown as { owned: { get(input: unknown): Promise<unknown> } }).owned;
+  const profile = owned.get.bind(owned);
+  owned.get = async (input: unknown) => (input as { pluginAgentKey: string }).pluginAgentKey === `builder-task-worker:${hash([W, "ws-1", "task-peer", "worker"])}`
+    ? { status: "resolved", revision: 1, agent: { agentId: PEER_AGENT, status: "idle" } } : profile(input);
+  const list = f.f.platform.agents.list.bind(f.f.platform.agents);
+  Object.assign(f.f.platform.agents, { async list(input: Parameters<typeof list>[0]) {
+    return [...await list(input), { id: PEER_AGENT, companyId: W, status: "idle" }];
+  } });
+  const receipts = new Map<string, { requestId: string; state: "submitted"; runId: string }>();
+  const started: string[] = [];
+  let firstSucceeded = false;
+  Object.assign(sessions, {
+    async ensure(agentId: string) { return { sessionId: agentId === PEER_AGENT ? PEER_SESSION : SESSION, created: agentId === PEER_AGENT }; },
+    async getRequest(sessionId: string, companyId: string, requestId: string) {
+      return sessionId === C || (sessionId === SESSION && replayFirst) ? getRequest(sessionId, companyId, requestId) : receipts.get(sessionId) ?? null;
+    },
+    async getRun(sessionId: string, companyId: string, runId: string) {
+      return sessionId === C ? getRun(sessionId, companyId, runId)
+        : { runId, status: sessionId === SESSION && firstSucceeded ? "succeeded" : "running",
+          cancellationRequested: false, termination: "not_applicable", error: null, errorCode: null };
+    },
+    async sendMessage(sessionId: string, companyId: string, { requestId, prompt }: { requestId: string; prompt: string }) {
+      assert.equal(companyId, W);
+      assert.match(prompt, /Choose and combine the tools actually available/u);
+      const runId = sessionId === PEER_SESSION ? PEER_RUN : RUN;
+      started.push(sessionId); receipts.set(sessionId, { requestId, state: "submitted", runId });
+      return { runId };
+    },
+  });
+  return { started, receipts, finishFirst() { firstSucceeded = true; } };
+}
+
+test("two distinct registered Tasks sharing a read path can both be admitted on a readable-only Host", async () => {
+  const f = await taskFixture();
+  const boardScope = { projectId: W, ctoId: CTO, workstreamId: "ws-1" };
+  const readOnly = { ...f.record.packet, goal: "Read shared input for the first independent result.", revision: 2,
+    sourceAccess: { ...f.record.packet.sourceAccess, writePaths: [] } };
+  const peer = { ...readOnly, taskId: "task-peer", revision: 1, goal: "Review shared input for another deliverable." };
+  const published = await publishCtoTaskPacket({ ...boardScope, expectedBaseRevisionId: "qa-file-board-1", revisionId: "read-only-parallel",
+    packet: readOnly, additionalPackets: [peer] }, f.ctoContext, f.f.platform);
+  assert.equal((published.data as { status: string }).status, "published");
+  const { started, receipts } = supportSecondTask(f);
+  const { localFolders: folders } = f.f.platform as unknown as { localFolders: { status(folderKey: string): Promise<unknown> } };
+  const folderStatus = folders.status.bind(folders);
+  folders.status = async folderKey => ({ ...await folderStatus(folderKey) as object, writable: false, access: "readOnly" });
+  const parameters = [readOnly, peer].map(packet => ({ ...boardScope, taskId: packet.taskId, packetRevision: packet.revision, role: "worker" }));
+  for (const input of parameters) {
+    const prepared = await prepareTaskWorker(input, f.ctoContext, f.f.platform);
+    assert.equal((prepared.data as { status: string }).status, "registered", JSON.stringify(prepared.data));
+  }
+  const tool = createBuilderPlatform().tools.find(tool => tool.name === "builder.dispatch-task-worker")!;
+  const results = await Promise.all(parameters.map(input => tool.handler(input, f.ctoContext as never, f.f.platform)));
+  assert.deepEqual(results.map(result => (result.data as { status: string }).status), ["submitted", "submitted"]);
+  assert.deepEqual(new Set(started), new Set([SESSION, PEER_SESSION]));
+  assert.deepEqual(new Set([...receipts.values()].map(row => row.runId)), new Set([RUN, PEER_RUN]));
+  assert.deepEqual(f.effects, { reads: 0, writes: 0, deletes: 0 }, "Core DTO receipts are admission, not actual execution");
+});
+
+test("ordered overlapping writes wait for the exact accepted predecessor and its closed Run", async () => {
+  const f = await taskFixture();
+  const scope = { projectId: W, ctoId: CTO, workstreamId: "ws-1" };
+  const tools = createBuilderPlatform().tools;
+  const call = async (name: string, params: object, context = f.ctoContext) => tools.find(tool => tool.name === name)!
+    .handler(params as never, context as never, f.f.platform);
+  const submitted = (await call("builder.submit-task-source", { paths: ["src/feature.ts"] }, f.context)).data as {
+    status: string; submission: { submissionId: string } };
+  assert.equal(submitted.status, "submitted");
+  const peer = { ...f.record.packet, taskId: "task-peer", goal: "Extend the accepted feature in sequence.", dependencies: ["task-dev"],
+    sourceAccess: { ...f.record.packet.sourceAccess, expectedHead: COMMIT } };
+  await publishCtoTaskPacket({ ...scope, expectedBaseRevisionId: "qa-file-board-1", revisionId: "ordered-overlap",
+    packet: peer }, f.ctoContext, f.f.platform);
+  const host = supportSecondTask(f, true);
+  const params = { ...scope, taskId: "task-peer", packetRevision: 1, role: "worker" };
+  assert.equal(((await prepareTaskWorker(params, f.ctoContext, f.f.platform)).data as { status: string }).status, "registered");
+  const dispatch = async () => (await call("builder.dispatch-task-worker", params)).data as { status: string; reason?: string };
+  assert.equal((await dispatch()).reason, "overlapping-predecessor-source-not-handed-off");
+  const accepted = (await call("builder.accept-task-source-submission", {
+    ...scope, taskId: "task-dev", submissionId: submitted.submission.submissionId,
+  })).data as { status: string };
+  assert.equal(accepted.status, "accepted");
+  assert.equal((await dispatch()).reason, "overlapping-predecessor-source-not-handed-off", "acceptance alone is not a closed Run");
+  assert.deepEqual(host.started, []);
+  host.finishFirst();
+  let branchHead = HEAD;
+  Object.assign((f.f.platform as unknown as { localFolders: object }).localFolders, {
+    async readWorkspaceSourceGitTipV1(sourceId: string, folderKey: string, branch: string) {
+      return { status: "current", sourceId, folderKey, branch, commitSha: branchHead, treeSha: TREE, observedAt: now };
+    },
+  });
+  assert.equal((await dispatch()).reason, "overlapping-predecessor-branch-tip-changed");
+  assert.deepEqual(host.started, []);
+  branchHead = COMMIT;
+  assert.equal((await dispatch()).status, "submitted");
+  assert.deepEqual(host.started, [PEER_SESSION]);
+});
+
+test("a current second Workstream writing the same Source blocks effects, while original submission replay stays readable", async () => {
+  const f = await taskFixture();
+  const submit = () => createBuilderPlatform().tools.find(tool => tool.name === "builder.submit-task-source")!
+    .handler({ paths: ["src/feature.ts"] }, f.context as never, f.f.platform);
+  const original = (await submit()).data as { status: string; submission: unknown };
+  assert.equal(original.status, "submitted");
+  const workstreams = createWorkstreamStore(W, W, f.f.state);
+  const board = (await workstreams.current())!.revision;
+  const originalWorkstream = board.workstreams[0]!;
+  const peer = { ...originalWorkstream, spec: { ...originalWorkstream.spec, id: "ws-peer", assignedCtoId: "cto-peer",
+    scopeNodeIds: ["peer-feature"] }, ctoAgentId: PEER_AGENT, ctoSessionId: PEER_SESSION };
+  await workstreams.publish({ expectedBaseRevisionId: board.revisionId, revision: { ...board,
+    revisionId: "cross-workstream-writers", workstreams: [...board.workstreams, peer] } });
+  const packet = { ...f.record, packet: { ...f.record.packet, workstreamId: "ws-peer", ctoId: "cto-peer", taskId: "task-peer",
+    scopeNodeIds: ["peer-feature"], sourceAccess: { ...f.record.packet.sourceAccess, branch: "feature/peer" } },
+    source: { ...f.record.source, workstreamId: "ws-peer", instructionSha256: workstreamInstructionDigest(peer) },
+    author: { agentId: PEER_AGENT, sessionId: PEER_SESSION, runId: PEER_RUN } };
+  const peerStore = createTaskPacketStore(W, W, "cto-peer", "ws-peer", f.f.state);
+  assert.equal((await peerStore.publish({ expectedBaseRevisionId: null, revision: { projectId: W, workstreamId: "ws-peer",
+    ctoId: "cto-peer", revisionId: "peer-packets", packets: [packet] } })).status, "published");
+  await assert.rejects(() => writeTaskWorkerFile({ relativePath: "src/feature.ts", contents: "must not overwrite" }, f.context, f.f.platform),
+    /writers in another Workstream/u);
+  assert.equal(((await readTaskWorkerFile({ relativePath: "src/feature.ts" }, f.context, f.f.platform)).data as { status: string }).status, "read");
+  const replay = (await submit()).data as typeof original;
+  assert.equal(replay.status, "existing");
+  assert.deepEqual(replay.submission, original.submission);
+  assert.deepEqual(f.effects, { reads: 1, writes: 0, deletes: 0 });
 });
 
 test("Task revision drift between Builder observation and Core effect cannot mutate a file", async () => {

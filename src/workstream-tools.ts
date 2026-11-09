@@ -37,6 +37,32 @@ function conflict(actualBaseRevisionId: string | null) {
     data: asJson({ status: "conflict", actualBaseRevisionId, executionStarted: false }) };
 }
 
+function dependencyPreflight(spec: ReturnType<typeof parseWorkstreamSpec>, board: Awaited<ReturnType<typeof readWorkstreams>>) {
+  const records = [...(board?.revision.workstreams ?? []).filter(item => item.spec.id !== spec.id),
+    { spec } as WorkstreamRecord];
+  const byId = new Map(records.map(record => [record.spec.id, record]));
+  const unresolved = spec.dependencies.filter(dependency => !byId.has(dependency));
+  const edges = new Map(records.map(record => [record.spec.id,
+    record.spec.dependencies.filter(dependency => byId.has(dependency))]));
+  const pathToCandidate = (start: string): string[] | null => {
+    const pending: Array<{ id: string; path: string[] }> = [{ id: start, path: [start] }];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (current.id === spec.id) return current.path;
+      if (visited.has(current.id)) continue;
+      visited.add(current.id);
+      for (const dependency of edges.get(current.id) ?? []) pending.push({ id: dependency, path: [...current.path, dependency] });
+    }
+    return null;
+  };
+  for (const dependency of edges.get(spec.id) ?? []) {
+    const path = pathToCandidate(dependency);
+    if (path) return { cycle: [spec.id, ...path], unresolved };
+  }
+  return { cycle: null, unresolved };
+}
+
 export async function validateG5Handoff(workspaceId: string, projectId: string, spec: ReturnType<typeof parseWorkstreamSpec>,
   change: WorkstreamChange, runContext: unknown, platform: SpsPlatformInvocationContext) {
   const handoff = change.g5Handoff;
@@ -117,9 +143,12 @@ export async function publishWorkstream(params: unknown, runContext: unknown, pl
   if (change.impactNodeIds.some(node => !impactNodes.has(node)) || change.impactInterfaceContracts.some(contract => !impactContracts.has(contract))) {
     throw new Error("Change impact references do not match the current or previous Workstream scope/contracts.");
   }
+  const dependencyCheck = dependencyPreflight(spec, current);
+  if (dependencyCheck.cycle) return { content: `Workstream dependencies form a cycle among exact published Workstream IDs: ${dependencyCheck.cycle.join(" -> ")}. No board write or execution was requested.`,
+    data: asJson({ status: "dependency-conflict", cycle: dependencyCheck.cycle, executionStarted: false }) };
   const overlaps = (current?.revision.workstreams ?? []).filter(record => record.spec.id !== spec.id
     && record.spec.assignedCtoId !== spec.assignedCtoId && record.spec.scopeNodeIds.some(node => spec.scopeNodeIds.includes(node)));
-  if (overlaps.length) return { content: "Each Graph node has one responsible CTO. Coordinate through interfaces/dependencies; that CTO can later divide internal work among its Workers. Another CTO already owns part of this scope. Existing state is unchanged and no execution was requested.",
+  if (overlaps.length) return { content: "Workstream preflight found a Graph node already assigned to another CTO. Each node has one responsible CTO; shared declared interfaces remain allowed. Unresolved dependency text is not interpreted as an ID, and Integration Manager waits until an exact Workstream and current verification exist. Existing state is unchanged and no execution was requested.",
     data: asJson({ status: "scope-conflict", workstreamIds: overlaps.map(record => record.spec.id), executionStarted: false }) };
   const registry = await readProjectCtos(context.companyId, projectId, platform);
   const cto = registry.ctos.find(record => record.ctoId === spec.assignedCtoId);
@@ -143,8 +172,11 @@ export async function publishWorkstream(params: unknown, runContext: unknown, pl
     workstreams: [...(current?.revision.workstreams ?? []).filter(item => item.spec.id !== spec.id), record] }, projectId);
   const result = await createWorkstreamStore(context.companyId, projectId, guardedState(platform, check)).publish({ expectedBaseRevisionId, revision: board });
   await check();
-  return { content: result.status === "published" ? "Workstream instruction stored for the assigned CTO. Receipt is pending: no session message, provider run, Worker, code or completion was created. The source and technical authorization must be rechecked before any later execution."
-    : "The board changed. Read and reconcile without automatic retry.", data: asJson({ ...result, executionStarted: false }) };
+  const dependencyStatus = dependencyCheck.unresolved.length
+    ? ` Unresolved dependency references: ${dependencyCheck.unresolved.join(", ")}. Integration Manager waits until an exact Workstream ID is published and its verification is current.` : "";
+  return { content: result.status === "published" ? `Workstream instruction stored for the assigned CTO. Publication preflight checked one-CTO-per-Graph-node ownership, exact Workstream-ID dependency cycles, and that declared Graph node/interface references exist; shared interface references are allowed. Dependency descriptions are matched only when the whole entry equals an existing Workstream ID; no prose or interface semantics are inferred or AI-reviewed.${dependencyStatus} Receipt is pending: no session message, provider run, Worker, code or completion was created. The source and technical authorization must be rechecked before any later execution.`
+    : "The board changed. Read and reconcile without automatic retry.", data: asJson({ ...result, executionStarted: false,
+      ...(result.status === "published" && dependencyCheck.unresolved.length ? { unresolvedDependencies: dependencyCheck.unresolved } : {}) }) };
 }
 
 export async function resolveCtoAuthority(projectId: string, ctoId: string, context: ReturnType<typeof parseLeadToolContext>, platform: SpsPlatformInvocationContext) {

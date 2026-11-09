@@ -23,6 +23,9 @@ import { createCurrentBaselineAssuranceProvider } from "./spec-assurance/current
 import { hasUndecidedTaskRequirement } from "./builder-gates/task-decision-scope.ts";
 import { resolveTaskQaContinuationAuthority, type TaskQaContinuationAuthority } from "./task-qa-continuation-authority.ts";
 import { assertTaskWorkerFileDesignAuthority } from "./task-worker-file-design-authority.ts";
+import { taskDependsOn, taskWriteOverlap, unorderedTaskWriterIds } from "./task-parallel-plan.ts";
+import { readAcceptedTaskSourceForQa } from "./task-source-acceptance.ts";
+import { readWorkspaceSourceGitTipProof } from "./workspace-source-git-tip.ts";
 
 const asJson = (value: unknown) => value as JsonValue;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
@@ -70,6 +73,50 @@ function dependenciesMatchCurrent(record: TaskPacketRecord, packets: readonly Ta
     return dependency?.packet.revision === pin.revision
       && taskPacketRecordDigest(dependency, record.packet.projectId, record.packet.ctoId, record.packet.workstreamId) === pin.recordSha256;
   });
+}
+
+function packetPlan(packet: TaskPacketRecord, packets: readonly TaskPacketRecord[]) {
+  return new Map(packets.filter(row => row.source.instructionSha256 === packet.source.instructionSha256
+    && row.source.specRevision === packet.source.specRevision && row.source.requestId === packet.source.requestId)
+    .map(row => [row.packet.taskId, dependenciesMatchCurrent(row, packets)
+      ? row.packet : { ...row.packet, dependencies: [] }]));
+}
+
+async function competingWorkstreamWriters(workspaceId: string, projectId: string, task: TaskPacketRecord["packet"],
+  platform: SpsPlatformInvocationContext, board?: NonNullable<Awaited<ReturnType<typeof readWorkstreams>>>) {
+  const access = task.sourceAccess;
+  if (!access || !(task.kind === "qa" ? access.qaWritePaths : access.writePaths).length) return [];
+  const workstreams = board ?? await readWorkstreams(workspaceId, projectId, platform);
+  if (!workstreams) throw new Error("The current Workstream board is unavailable for parallel write review.");
+  const competing: string[] = [];
+  for (const peer of workstreams.revision.workstreams) {
+    if (peer.spec.id === task.workstreamId) continue;
+    const peerBoard = await createTaskPacketStore(workspaceId, projectId, peer.spec.assignedCtoId, peer.spec.id, platform.state).current();
+    if (!peerBoard) continue;
+    const digest = workstreamInstructionDigest(peer);
+    if (peerBoard.revision.packets.some(row => row.source.instructionSha256 === digest
+      && row.source.specRevision === peer.spec.revision && taskWriteOverlap(task, row.packet))) competing.push(peer.spec.id);
+  }
+  return competing;
+}
+
+function overlappingTaskPredecessors(task: TaskPacketRecord, packets: readonly TaskPacketRecord[],
+  planned: ReadonlyMap<string, TaskPacketRecord["packet"]>) {
+  return packets.filter(row => planned.has(row.packet.taskId) && taskWriteOverlap(task.packet, row.packet)
+    && taskDependsOn(planned.get(task.packet.taskId)!, row.packet.taskId, planned));
+}
+
+async function readOrderedWriterTip(task: TaskPacketRecord["packet"], platform: SpsPlatformInvocationContext) {
+  const source = task.sourceAccess;
+  const folders = (platform as SpsPlatformInvocationContext & { localFolders?: {
+    readWorkspaceSourceGitTipV1?: (source: string, folder: string, branch: string) => Promise<unknown>;
+  } }).localFolders;
+  if (!source?.branch || !source.expectedHead || typeof folders?.readWorkspaceSourceGitTipV1 !== "function") return false;
+  try {
+    const tip = readWorkspaceSourceGitTipProof(await folders.readWorkspaceSourceGitTipV1(source.sourceId, source.folderKey, source.branch));
+    return tip.status === "current" && tip.sourceId === source.sourceId && tip.folderKey === source.folderKey
+      && tip.branch === source.branch && tip.commitSha === source.expectedHead;
+  } catch { return false; }
 }
 
 type TaskWorkerToolContext = Readonly<{ companyId: string; agentId: string; runId: string; sessionId: string; projectId: string }>;
@@ -264,7 +311,7 @@ export async function readTaskQaEventOrigin(runContext: unknown, platform: SpsPl
 }
 
 export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, platform: SpsPlatformInvocationContext,
-  purpose: "binding" | "file-effect" = "binding") {
+  purpose: "binding" | "file-effect" | "file-mutation" = "binding") {
   const context = parseTaskWorkerToolContext(runContext);
   const captured = new Map<string, RevisionPublicationGuard>();
   const observed = { ...platform, state: { ...platform.state, async get(key: SpsStateKey) {
@@ -283,11 +330,26 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
   } } } as SpsPlatformInvocationContext;
   let current = await readCurrentTaskWorkerBinding(context, observed);
   let fileDesign: Awaited<ReturnType<typeof assertTaskWorkerFileDesignAuthority>> | null = null;
+  const requiresFileDesign = purpose === "file-effect" || purpose === "file-mutation";
   const assertFileDesign = async () => {
-    if (purpose === "file-effect") fileDesign = await assertTaskWorkerFileDesignAuthority({ workspaceId: context.companyId,
+    if (requiresFileDesign) fileDesign = await assertTaskWorkerFileDesignAuthority({ workspaceId: context.companyId,
       projectId: context.projectId, ctoId: current.ctoId, workstreamId: current.worker.workstreamId,
       taskRecord: current.packet, platform: observed });
   };
+  const assertMayWrite = async () => {
+    const planned = packetPlan(current.packet, current.currentPackets);
+    if (unorderedTaskWriterIds(current.packet.packet, planned).length) {
+      throw new Error("Current Task plan has unordered writers for the same Source path. Replan before writing.");
+    }
+    if ((await competingWorkstreamWriters(context.companyId, context.projectId, current.packet.packet, observed)).length) {
+      throw new Error("Current Task plan has writers in another Workstream for the same Source path. Coordinate ownership before writing.");
+    }
+    if (overlappingTaskPredecessors(current.packet, current.currentPackets, planned).length
+      && !await readOrderedWriterTip(current.packet.packet, observed)) {
+      throw new Error("The ordered Task no longer has its exact predecessor branch tip. Replan before writing.");
+    }
+  };
+  if (purpose === "file-mutation") await assertMayWrite();
   await assertFileDesign();
   const assertCurrent = async () => {
     const latest = await readCurrentTaskWorkerBinding(context, observed);
@@ -298,6 +360,7 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
       throw new Error("Current Task Worker, packet or source authority changed during the file operation.");
     }
     current = latest;
+    if (purpose === "file-mutation") await assertMayWrite();
     await assertFileDesign();
   };
   const fileGuards = () => {
@@ -307,7 +370,7 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
     const required = [taskWorkerRegistryKey(context.projectId, current.ctoId),
       `project-ctos.v1.${rawHash(context.projectId)}`, `workstreams-head.v1.${rawHash(context.projectId)}`,
       `task-packets-head.v1.${rawHash(packetScope)}`, `cto-delivery-head.v1.${rawHash(deliveryScope)}`];
-    if (purpose === "file-effect") {
+    if (requiresFileDesign) {
       if (!fileDesign) throw new Error("unsupported:task-file-design-authority-unavailable");
       required.push(`design-baseline-head.v1.${rawHash(context.projectId)}`, "lead-agent.v1");
       if (fileDesign.g5.status !== "not-scoped") required.push(`ui-contracts-head.v1.${rawHash(context.projectId)}`);
@@ -320,12 +383,12 @@ export async function resolveCurrentTaskWorkerToolCall(runContext: unknown, plat
     }
     return structuredClone(guards);
   };
-  return { current, assertCurrent, fileGuards };
+  return { current, assertCurrent, assertMayWrite, fileGuards };
 }
 
 const resolveTaskWorkerFileCall = resolveCurrentTaskWorkerToolCall;
-async function resolveGuardedTaskWorkerFileCall(runContext: unknown, platform: SpsPlatformInvocationContext) {
-  const call = await resolveTaskWorkerFileCall(runContext, platform, "file-effect");
+async function resolveGuardedTaskWorkerFileCall(runContext: unknown, platform: SpsPlatformInvocationContext, mutate = false) {
+  const call = await resolveTaskWorkerFileCall(runContext, platform, mutate ? "file-mutation" : "file-effect");
   return { ...call, guards: call.fileGuards() };
 }
 
@@ -362,7 +425,7 @@ export async function writeTaskWorkerFile(params: unknown, runContext: unknown, 
   const input = exactToolRecord(params, ["relativePath", "contents"]);
   if (typeof input.relativePath !== "string" || typeof input.contents !== "string") throw new TypeError("relativePath and contents must be strings.");
   let call: Awaited<ReturnType<typeof resolveGuardedTaskWorkerFileCall>>;
-  try { call = await resolveGuardedTaskWorkerFileCall(runContext, platform); }
+  try { call = await resolveGuardedTaskWorkerFileCall(runContext, platform, true); }
   catch (error) {
     if (error instanceof Error && error.message.startsWith("unsupported:")) return taskToolUnsupported(error.message.slice("unsupported:".length));
     throw error;
@@ -375,7 +438,7 @@ export async function deleteTaskWorkerFile(params: unknown, runContext: unknown,
   const input = exactToolRecord(params, ["relativePath"]);
   if (typeof input.relativePath !== "string") throw new TypeError("relativePath must be a string.");
   let call: Awaited<ReturnType<typeof resolveGuardedTaskWorkerFileCall>>;
-  try { call = await resolveGuardedTaskWorkerFileCall(runContext, platform); }
+  try { call = await resolveGuardedTaskWorkerFileCall(runContext, platform, true); }
   catch (error) {
     if (error instanceof Error && error.message.startsWith("unsupported:")) return taskToolUnsupported(error.message.slice("unsupported:".length));
     throw error;
@@ -410,6 +473,7 @@ export async function submitTaskWorkerSource(params: unknown, runContext: unknow
   });
   const result = await submitTaskSourceFiles({ runContext, paths: input.paths, platform,
     state: platform.state as typeof platform.state & RevisionState,
+    assertMayCommit: call.assertMayWrite,
     resolveAuthority: async receivedContext => {
       if (receivedContext !== runContext) throw new Error("Task source submission must use the exact active Host run context.");
       return { binding, assertCurrent: call.assertCurrent };
@@ -437,15 +501,15 @@ export async function dispatchPreparedTaskWorker(params: unknown, runContext: un
     await authority.check();
     const board = await store.current();
     const packet = board?.revision.packets.find(item => item.packet.taskId === taskId);
-    if (!packet || packet.packet.revision !== packetRevision || packet.source.requestId !== authority.source.requestId
+    if (!board || !packet || packet.packet.revision !== packetRevision || packet.source.requestId !== authority.source.requestId
       || packet.source.specRevision !== authority.source.specRevision || packet.source.instructionSha256 !== authority.source.sha256
       || (role === "worker" ? packet.packet.kind !== "development" : packet.packet.kind !== "qa")
-      || !dependenciesMatchCurrent(packet, board!.revision.packets)) {
+      || !dependenciesMatchCurrent(packet, board.revision.packets)) {
       throw new Error("Dispatch requires the exact current Task Packet revision and dependency/source pins.");
     }
     const currentWorkstreams = await readWorkstreams(context.companyId, projectId, platform);
     const currentWorkstream = currentWorkstreams?.revision.workstreams.find(item => item.spec.id === workstreamId);
-    if (!currentWorkstream) throw new Error("Dispatch requires the current Workstream source record.");
+    if (!currentWorkstreams || !currentWorkstream) throw new Error("Dispatch requires the current Workstream source record.");
     await assertTaskDecisionScopeCurrent({ ...context, projectId }, packet, platform);
     const g5Effect = await assertCurrentCtoTaskG5Effect({ workspaceId: context.companyId, projectId, ctoId, workstreamId,
       taskId, workstream: currentWorkstream, taskRecord: packet, assertCurrent: authority.check,
@@ -465,7 +529,7 @@ export async function dispatchPreparedTaskWorker(params: unknown, runContext: un
       throw new Error("Dispatch requires the exact current prepared Task Worker role and identity.");
     }
     const binding = deriveTaskWorkerFileBinding({ workspaceId: context.companyId, projectId, ctoId, packet,
-      currentPackets: board!.revision.packets, worker });
+      currentPackets: board.revision.packets, worker });
     const owned = ownedClient(platform);
     if (typeof owned?.get !== "function") throw new Error("unsupported:owned-task-worker-profile-reader-unavailable");
     const profile = agentReceipt(await owned.get({ companyId: context.companyId, pluginAgentKey: worker.pluginAgentKey }));
@@ -473,7 +537,7 @@ export async function dispatchPreparedTaskWorker(params: unknown, runContext: un
       throw new Error("The prepared Task Worker owned identity changed or is inactive.");
     }
     await authority.check();
-    return { board, packet, worker, binding, registry, raw };
+    return { board, packet, worker, binding, registry, raw, currentWorkstreams };
   };
   const initial = await readCurrent();
   const assertCurrent = async () => {
@@ -484,9 +548,50 @@ export async function dispatchPreparedTaskWorker(params: unknown, runContext: un
       throw new Error("Task Worker registry, packet or dependency authority changed during dispatch.");
     }
   };
-  const result = await dispatchTaskWorkerSession({ platform, binding: initial.binding, packet: initial.packet, assertCurrent });
+  const checkStart = async () => {
+    const latest = await readCurrent();
+    if (latest.board.revision.revisionId !== initial.board.revision.revisionId
+      || latest.registry.revision !== initial.registry.revision || latest.worker.sessionId !== initial.worker.sessionId) {
+      return { reason: "task-plan-changed-before-dispatch", taskIds: [taskId] };
+    }
+    const target = latest.packet.packet;
+    const planned = packetPlan(latest.packet, latest.board.revision.packets);
+    const unordered = unorderedTaskWriterIds(target, planned);
+    if (unordered.length) return { reason: "unordered-source-writers", taskIds: unordered };
+    if ((await competingWorkstreamWriters(context.companyId, projectId, target, platform, latest.currentWorkstreams)).length) {
+      return { reason: "cross-workstream-source-writers", taskIds: [taskId] };
+    }
+    const predecessors = overlappingTaskPredecessors(latest.packet, latest.board.revision.packets, planned);
+    let pinnedPredecessor = false;
+    for (const predecessor of predecessors) {
+      const blocked = { reason: "overlapping-predecessor-source-not-handed-off", taskIds: [predecessor.packet.taskId] };
+      if (predecessor.packet.kind !== "development" || !target.sourceAccess?.branch
+        || predecessor.packet.sourceAccess?.branch !== target.sourceAccess.branch) return blocked;
+      try {
+        const receipt = await readAcceptedTaskSourceForQa({ workspaceId: context.companyId, projectId, ctoId, workstreamId,
+          task: predecessor, packets: latest.board.revision.packets, workerRecords: latest.registry.records,
+          state: platform.state, platform, assertCurrent });
+        if (receipt.status !== "accepted" || receipt.submission.coreStatus !== "committed") return blocked;
+        pinnedPredecessor ||= target.sourceAccess.expectedHead === receipt.submission.commitSha;
+        const { sessionId, runId } = receipt.submission.producer;
+        const run = await platform.agents.sessions.getRun(sessionId, context.companyId, runId);
+        if (run?.runId !== runId || run.status !== "succeeded" || run.cancellationRequested !== false
+          || !["confirmed", "not_applicable"].includes(run.termination)) return blocked;
+      } catch { return blocked; }
+    }
+    if (predecessors.length && !pinnedPredecessor) return { reason: "overlapping-predecessor-head-not-pinned",
+      taskIds: predecessors.map(row => row.packet.taskId) };
+    if (predecessors.length && !await readOrderedWriterTip(target, platform)) return {
+      reason: "overlapping-predecessor-branch-tip-changed", taskIds: predecessors.map(row => row.packet.taskId) };
+    if (!predecessors.length) return null;
+    const final = await readCurrent();
+    return final.board.revision.revisionId !== latest.board.revision.revisionId || final.registry.revision !== latest.registry.revision
+      ? { reason: "task-plan-changed-before-dispatch", taskIds: [taskId] } : null;
+  };
+  const result = await dispatchTaskWorkerSession({ platform, binding: initial.binding, packet: initial.packet, assertCurrent, checkStart });
   const content = result.status === "submitted" ? "Core accepted one restricted Task Worker request. Actual execution, implementation, Git commit, protected test and QA pass are not established by this receipt."
     : result.status === "existing" ? "The exact deterministic Task Worker request already exists; no duplicate Run was sent. Read the Run separately to observe execution."
+    : result.status === "blocked" ? "The current Task plan requires coordination before dispatch. No Worker Run was sent."
     : result.status === "unknown" ? "Dispatch state is uncertain. Reconcile the same request; do not retry automatically."
     : "Task Worker dispatch is unsupported by the current Host API. No fallback was used.";
   return { content, data: asJson({ ...result, packetRevision, taskId, role, completion: "not-established",
@@ -569,7 +674,7 @@ export async function prepareTaskWorker(params: unknown, runContext: unknown, pl
       config: { name: `${title} ${taskId}`.slice(0, 120), role: "engineer", title,
         instructions: role === "qa"
           ? "Inspect only the assigned current QA Task Packet and its exact test plan. Registration grants no execution or result authority. Report evidence without claiming a pass until a real independent QA run is verified."
-          : "Work only on the assigned current development Task Packet. Registration grants no execution or permission beyond the Host delegation. Do not claim completion without verified evidence." } }));
+          : "Work only on the assigned current development Task Packet. Choose methods from available tools within the existing Host delegation. Respect other Tasks' ownership and submit exact results and evidence. Registration grants no new permission." } }));
     await authority.check();
   }
   if (!profile) return unsupported("owned-agent-profile-unavailable");

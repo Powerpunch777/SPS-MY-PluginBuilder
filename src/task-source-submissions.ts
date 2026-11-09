@@ -392,6 +392,7 @@ export async function submitTaskSourceFiles(input: Readonly<{
   platform: SpsPlatformInvocationContext;
   state: RevisionState;
   resolveAuthority(runContext: unknown): Promise<ResolvedTaskAuthority>;
+  assertMayCommit?(): Promise<void>;
 }>): Promise<TaskSourceSubmissionResult> {
   const platform = input.platform as CommitPlatform;
   const folders = platform.localFolders;
@@ -466,6 +467,7 @@ export async function submitTaskSourceFiles(input: Readonly<{
     return unknown(id, "prior-commit-attempt-has-no-authoritative-outcome");
   }
 
+  await input.assertMayCommit?.();
   try { await assertFolder(folders, binding); }
   catch { return Object.freeze({ status: "unsupported", reason: "declared-task-source-alias-unavailable-or-mismatched",
     completion: "not-established", qaVerdict: "not-established" }); }
@@ -485,7 +487,7 @@ export async function submitTaskSourceFiles(input: Readonly<{
     try { return (await cas(input.state, claimOutcomeKey, { exists: false }, next)).swapped; }
     catch { return false; }
   };
-  try { await authority.assertCurrent(); await assertFolder(folders, binding); }
+  try { await authority.assertCurrent(); await assertFolder(folders, binding); await input.assertMayCommit?.(); }
   catch {
     await finish({ status: "rejected", reason: "current-task-or-source-authority-changed-before-core-commit" });
     return unknown(id, "current-task-or-source-authority-changed-before-core-commit");

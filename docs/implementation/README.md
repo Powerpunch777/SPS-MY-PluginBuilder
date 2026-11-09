@@ -897,6 +897,20 @@
   별도 Core 후보의 실제 임시 PG/Git 검사와 공개 SDK 연결은 독립 증거로 다루며,
   이 변경을 실제 AI·OS·설치본 또는 최종 납품 인수 완료로 표시하지 않는다.
 
+### 작업 분해·병렬 실행·도구 선택
+
+| 범위 | 확인 상태와 근거 |
+| --- | --- |
+| 기존 계획·변경관리 | **ALREADY_IMPLEMENTED** (소스): Workstream의 Graph 노드 소유권, 승인 인터페이스 참조, Task Packet 범위·DAG·Revision/CAS와 G5의 영향 기반 QA 승계 경로를 재사용한다. |
+| 정밀 분해 및 충돌 검사 | **PARTIALLY_IMPLEMENTED**: Lead 도구 설명과 CTO 실행 메시지에 결과물·공유 계약·AC·재계획 지침을 반영했다. 정확한 Workstream ID 순환은 새 발행을 차단한다. 같은 현재 Source에서 순서 없는 쓰기 경로가 겹치거나 다른 현재 Workstream이 같은 경로를 쓰면 새 실행/파일 변경을 차단한다. 순서가 정해진 같은 경로의 후속 Task는 기존 제출·CTO 인수·선행 Run 종료와 현재 브랜치 tip을 확인한다. 동일 파일의 공통 읽기와 제출 영수증 재조회는 허용한다. |
+| 기능·계약 검토 | **PARTIALLY_IMPLEMENTED**: 같은 목표·범위의 계획은 검토 힌트이며 자동 중복 판정이 아니다. 선언된 경로, 명시된 의존성과 승인 인터페이스만 구조적으로 확인한다. 서로 다른 파일의 API/스키마 의미 충돌과 공용 DB/계정은 계획 리뷰·검증에서 별도 확인한다. 다른 Source ID가 같은 물리 루트가 아님을 이 검사만으로 보장하지 않는다. |
+| Worker와 Skills | **PARTIALLY_IMPLEMENTED**: 실제 실행 메시지가 지원 도구의 자율적 선택·조합과 충돌 보고를 안내한다. Task Packet 필드와 권한은 그대로다. 개발용 Codex의 로컬 Computer Use Skill은 존재하지만 제품 Worker의 Skill 검색·전달 계약은 **UNKNOWN**이다. 별도 Skill이나 로더를 추가하지 않았다. |
+| Computer Use | **BLOCKED / NOT_RUN**: 현재 제품 Worker의 제한 세션에서 임의 셸·브라우저·Computer Use는 허용되지 않는다. 제품 Worker의 GUI 세션 발급, 공유 GUI 점유·정리 증거 연결은 **NOT_IMPLEMENTED**다. 개발용 도구와 독립 브라우저 시험 기반은 제품 실증이 아니다. |
+
+CAO 관련 현재 운영·의존성은 정본과 저장소 지침에서 폐지로 명시했다. 원문, 이전 실험,
+실패 기록과 원문 AC/정책 추적은 보존한다. 등록 도구의 병렬 접수와 파일 효과 시험에서
+Core 응답은 fixture이므로 실제 두 Worker의 AI/GUI 실행 또는 OS 격리 인수가 아니다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)

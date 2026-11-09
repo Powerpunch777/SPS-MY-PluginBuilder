@@ -174,7 +174,9 @@ export type TaskWorkerDispatchResult = Readonly<{
   qaVerdict: "not-established";
 }> | Readonly<{ status: "unsupported" | "unknown"; reason: string; requestId: string;
   requestState: "not-attempted" | "unknown" | "uncertain" | "pending"; runId: string | null;
-  executionStarted: false | null; completion: "not-established"; qaVerdict: "not-established" }>;
+  executionStarted: false | null; completion: "not-established"; qaVerdict: "not-established" }>
+  | Readonly<{ status: "blocked"; reason: string; taskIds: readonly string[]; requestId: string;
+    requestState: "not-attempted"; runId: null; executionStarted: false; completion: "not-established"; qaVerdict: "not-established" }>;
 
 /** Starts one exact Worker or QA session request, limited to registered Task source file tools. */
 export async function dispatchTaskWorkerSession(input: Readonly<{
@@ -182,6 +184,7 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   binding: TaskWorkerFileBinding;
   packet: TaskPacketRecord;
   assertCurrent(): Promise<void>;
+  checkStart?(): Promise<{ reason: string; taskIds: readonly string[] } | null>;
 }>): Promise<TaskWorkerDispatchResult> {
   const requestId = taskWorkerRequestId(input.binding);
   const unknown = (reason: string, runId: string | null = null, requestState: "unknown" | "uncertain" | "pending" = "unknown",
@@ -225,13 +228,16 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   try {
     await assertSessionExecutionPolicySupport(input.platform, input.binding.sessionId, input.binding.workspaceId);
   } catch { return unsupported("restricted-worker-session-policy-unavailable"); }
-  try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
-  catch { return unsupported("task-worker-source-folder-not-current-and-writable"); }
+  const writes = input.binding.role === "qa" ? input.binding.sourceAccess.qaWritePaths : input.binding.sourceAccess.writePaths;
+  const folderOperation = writes.length ? "write" : "read";
+  const folderReason = writes.length ? "task-worker-source-folder-not-current-and-writable" : "task-worker-source-folder-not-current-and-readable";
+  try { await assertTaskFolderAccess(localFolders, input.binding, folderOperation); }
+  catch { return unsupported(folderReason); }
   const prompt = [
     input.binding.role === "worker"
       ? "Implement only the exact assigned Builder Task Packet below, using writePaths for implementation changes."
       : "Perform only the independent QA task below, using qaWritePaths for test or configuration changes. Do not modify any pinned dependency's implementation write paths or evidence. Once builder.request-protected-task-qa confirms a queued execution and recorded Task reference, finish this AI turn normally without polling or claiming Task completion. The current Node must be released before protected execution can run. Only the system's real protected-test terminal event may automatically continue this pending QA; do not send a continue or DONE message to yourself. On continuation, re-read the exact protected result and assess every assigned acceptance/test-plan criterion before builder.publish-task-qa-report. If that Host continuation is unsupported, preserve the pending QA and report the missing support. Unsupported or uncertain execution is not QA PASS.",
-    "Use only the task-scoped source file tools and exact paths in sourceAccess. After the assigned changes are ready to hand off, call builder.submit-task-source with the exact changed paths; the packet must explicitly pin branch and expectedHead. A conflict or unknown response is not permission to retry, switch branch, or guess a new head. Do not use generic test commands as protected QA, claim completion, or expand the authorized source root or file list.",
+    "Choose and combine the tools actually available in this session to meet the Task goal; the packet does not prescribe a tool sequence. Report a missing capability, overlapping work, or scope change to the CTO instead of expanding authority. Use task-scoped source file tools for changes and respect the exact paths in sourceAccess. Submit the exact changed paths with builder.submit-task-source; branch and expectedHead must be pinned. A conflict or unknown response is not permission to retry, switch branch, or guess a new head. Do not use generic test commands as protected QA or claim unverified completion.",
     "This dispatch is one idempotent attempt for this exact packet revision. If its result is uncertain, reconcile this same request; do not dispatch a replacement.",
     JSON.stringify({ packet, sourceBinding: { schemaVersion: input.binding.schemaVersion, projectId: input.binding.projectId,
       ctoId: input.binding.ctoId, workstreamId: input.binding.workstreamId, taskId: input.binding.taskId,
@@ -240,6 +246,9 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
       source: input.binding.source, sourceAccess: input.binding.sourceAccess } }),
   ].join("\n\n");
   await input.assertCurrent();
+  const blocked = await input.checkStart?.();
+  if (blocked) return Object.freeze({ ...blocked, status: "blocked", requestId, requestState: "not-attempted",
+    runId: null, executionStarted: false, completion: "not-established", qaVerdict: "not-established" });
   let accepted: { runId: string };
   try {
     accepted = await sessions.sendMessage(input.binding.sessionId, input.binding.workspaceId,
@@ -248,7 +257,7 @@ export async function dispatchTaskWorkerSession(input: Readonly<{
   if (!accepted || typeof accepted.runId !== "string" || !UUID.test(accepted.runId)) return unknown("worker-session-dispatch-receipt-invalid");
   try { await input.assertCurrent(); }
   catch { return unknown("task-authority-changed-after-worker-dispatch", accepted.runId); }
-  try { await assertTaskFolderAccess(localFolders, input.binding, "write"); }
+  try { await assertTaskFolderAccess(localFolders, input.binding, folderOperation); }
   catch { return unknown("task-source-folder-changed-after-worker-dispatch", accepted.runId); }
   try {
     const receipt = parseTaskWorkerRequest(await sessions.getRequest(input.binding.sessionId, input.binding.workspaceId, requestId), requestId);

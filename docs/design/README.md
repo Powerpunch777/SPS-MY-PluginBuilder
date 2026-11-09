@@ -31,6 +31,11 @@ CSAS v0.9·v0.8의 비충돌 유효 조항 → v15·과거 설계** 순이다. �
 
 ## 최신 확정 개정
 
+- **CAO 폐지 및 정밀 작업 분해**: 개발은 Codex Lead와 앱 하위 에이전트가 맡고, CAO는
+  현행 실행·계정 전환의 의존성이 아니다. `01_Design/` 원문에 남은 CAO 전달/운영
+  문구와 관련 관측은 역사 기록이며, 현행 지시는 [v16 §5](CURRENT-PRODUCT-CONTRACT-2026-11-04.md#5-ctoworker질문과-실행)와
+  [Agent 실행 계약](AGENT-GOALS-AND-RUNTIME.md)을 따른다. 원문·AC와 실패 증거는 보존한다.
+
 - [CTO·Worker 장기목표·완료 후 대기 (2026-11-05)](01_Design/SPS_Builder_Delegated_Goals_And_Completion_Idle_Addendum_2026-11-05.md):
   Lead→담당 CTO, CTO→직속 Worker/QA 목표 배정과 서버 권한 강제, 완료 후 IDLE/새 배정 대기를 확정한다.
   Turn DONE·Goal COMPLETED·VERIFIED를 분리하며 완료 Goal은 계정/Capacity 복구로도 깨우지 않는다.
@@ -68,7 +73,7 @@ CSAS v0.9·v0.8의 비충돌 유효 조항 → v15·과거 설계** 순이다. �
   CTO VERIFIED/통합 상태 분리, 지속 이벤트·중복 방지·부분 통합, 기술 오류 CTO 환류와
   설계 충돌 Review 경로, Final Integration Packet과 Main 최종 점검·사용자 납품 구성
   확정이다. 원문 `초안` 표시는 책임/라우팅 결정을 미정으로 되돌리지 않는다.
-  AC-INT-01~16을 NOT_RUN으로 추가했으며 임시 CAO에 새 AI Lead를 만드는 지시가 아니다.
+  AC-INT-01~16을 NOT_RUN으로 추가했다. 원문의 과거 개발 조직 인계 문구는 현행 운영 지시가 아니다.
 - [Project Document Center·최신성 보완 v1.1 (2026-11-04)](01_Design/SPS_Builder_Project_Document_Center_and_Freshness_Addendum_v1.1_2026-11-04.md):
   좌측 `문서`와 중앙 문서센터, 통합 기준선·상세 링크, 검색·필터·비교·Markdown,
   승인과 최신성의 분리, 영향 문서만 새 초안으로 갱신하는 계약이다. 새 AI 세션이나
