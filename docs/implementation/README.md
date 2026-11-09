@@ -834,6 +834,13 @@
   동시 발행·기존 이력·동일 요청 조회 및 불완전 묶음 거부를 확인했다. 정확한 변경 범위 밖
   승인 뒤에도 이전 Run의 쓰기는 차단되며, 새 권한으로 재등록한 쓰기만 가능했다.
   Core/Run 응답은 fixture다. 공식 Goal 실행·실제 QA·OS 및 두 CTO 전체 통합 인수와 구분한다.
+- 별도 서버 전용 QA reader는 현재 담당 CTO 권한 아래 지정된 과거 보드의 개발·QA Task,
+  최신 보고서와 실행 참조, 제출·인수 기록과 실제 조회된 생산자 Run, 독립 QA 저자의 정상
+  종료, Core 영수증 및 현재 승인된 Commit/Tree를 대조한다. 최신 실패를 건너뛰어 옛 PASS를
+  고르지 않는다. 생산자 실패·취소가 보존된 경우는 수신한 Commit의 출처일 뿐 성공이 아니다.
+  물리 `c69915a`의 관련 44개와 타입 검사가 통과했다. Core/Git 응답은 합성이며 reader는
+  현재 G6를 만들거나 실행을 시작하지 않는다. 정확한 비교 pair, ACK 뒤 현재 Task와 이
+  원본 증거를 새 VERIFIED·Manager에 결속하는 작업은 남아 있다.
 
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
