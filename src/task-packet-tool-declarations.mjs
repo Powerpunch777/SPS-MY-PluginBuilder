@@ -54,11 +54,12 @@ export const READ_CTO_TASK_PACKETS_TOOL = Object.freeze({
 
 export const PUBLISH_CTO_TASK_PACKET_TOOL = Object.freeze({
   name: "builder.publish-task-packet", displayName: "Publish a planning packet for this CTO's task",
-  description: "Only the exact active Core-bound CTO may publish a task packet against its current instruction and expected base revision. This stores planning only: it does not create sessions, invoke providers, execute code, run QA or represent completion. QA packets require a test plan; the service enforces that requirement. Reconcile unknown writes by reading; never retry automatically.",
+  description: "Only the exact active Core-bound CTO may publish Task Packets against its current instruction and expected base revision. Include dependent packets in additionalPackets when updating a connected group to a new instruction. All packets share one board publication. This stores planning only: it does not create sessions, execute code, run QA or represent completion. QA packets require a test plan. Reconcile unknown writes by reading; never retry automatically.",
   parametersSchema: { type: "object", additionalProperties: false,
     required: ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "packet"],
     properties: { projectId: id, ctoId: id, workstreamId: id,
-      expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 }, revisionId: id, packet: packetSchema },
+      expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 }, revisionId: id, packet: packetSchema,
+      additionalPackets: { type: "array", maxItems: 63, items: packetSchema } },
   },
 });
 

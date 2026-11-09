@@ -818,6 +818,23 @@
   POLICY-EXEC-12 전체 인수가 아니다. Task 업무 완료 시간·권한 대기·수동 개입 계측,
   영향 없는 이전 Task 승계, 공식 Goal 실행과 실제 두 CTO 전체 업무/납품 인수는 남는다.
 
+### 2026-11-09 연결 Task 재발행과 G5 비교
+
+- 기존 `builder.publish-task-packet`의 선택 `additionalPackets`로 같은 Workstream의
+  연결된 개발·QA Task를 한 보드 CAS에 발행한다. 모든 packet은 명시한 다음 Revision이고,
+  의존성 핀은 입력 순서와 무관하게 최종 보드의 정확한 Revision/digest를 사용한다.
+  단건 요청, 기존 이력, 권한 검사와 결과 불확실 시 조회 규칙은 유지한다.
+  섞인 Workstream Revision, 권한 밖 Task, 순환·중복·잘못된 companion은 보드에 반영하지 않는다.
+- G5는 기존 정확한 old/new 발행 쌍에서 `recordedTaskInputs`를 읽기 전용으로 비교한다.
+  두 방향 Graph 연결, 승인 요구사항/AC·원문 핀, Task 의존성, UI와 기술·검증 기준을 대조한다.
+  비교의 동일 판정은 기록된 입력 범위만 뜻한다. 제품 전체 영향, 과거 QA 재사용,
+  새 G6/VERIFIED 또는 이전 Run의 권한을 승인하지 않는다. 검증되지 않은 외부 Workstream
+  의존성, 승인·모델 누락이나 오래된 Task 핀은 `unknown`이다.
+- 실제 Builder 등록 도구로 승인과 Task 발행을 재현했다. 단건 재발행의 최초 실패를 보존했고,
+  동시 발행·기존 이력·동일 요청 조회 및 불완전 묶음 거부를 확인했다. 정확한 변경 범위 밖
+  승인 뒤에도 이전 Run의 쓰기는 차단되며, 새 권한으로 재등록한 쓰기만 가능했다.
+  Core/Run 응답은 fixture다. 공식 Goal 실행·실제 QA·OS 및 두 CTO 전체 통합 인수와 구분한다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)

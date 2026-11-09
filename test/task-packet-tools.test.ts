@@ -170,6 +170,61 @@ test("dependencies must exist on the same instruction and form a DAG", async () 
     })) } }), /DAG|cycle/i);
 });
 
+test("a connected development and QA group is rebound to a new instruction in one board revision", async () => {
+  const { f, ctoContext } = await delivered();
+  const development = packet({ taskId: "development" });
+  const qa = packet({ taskId: "qa", kind: "qa", dependencies: ["development"], testPlan: {
+    environment: "Fixture", steps: ["Run check"], expectedResults: ["Expected output"], passCriteria: ["All checks pass"],
+  } });
+  const scope = { projectId: P, ctoId: CTO, workstreamId: "ws-1" };
+  const group = (context: unknown, base: string | null, revisionId: string, revision: number) => publishCtoTaskPacket({
+    ...scope, expectedBaseRevisionId: base, revisionId, packet: { ...qa, revision }, additionalPackets: [{ ...development, revision }],
+  }, context, f.platform);
+  const store = createTaskPacketStore(W, P, CTO, "ws-1", f.platform.state);
+  assert.equal(((await group(ctoContext, null, "group-1", 1)).data as { status: string }).status, "published");
+  const old = (await store.current())!;
+  assert.equal(old.sequence, 1);
+  await reviseWorkstream(f, "group-workstream-2");
+  f.runs.set(ctoContext.runId, { ...f.runs.get(ctoContext.runId)!, status: "succeeded" });
+  await dispatchCtoWorkstream({ projectId: P, workstreamId: "ws-1", specRevision: 2, boardRevisionId: "group-workstream-2" }, ctx(), f.platform);
+  const nextContext = ctx(C, (await f.deliveryStore().current())!.revision.runId!);
+  await assert.rejects(publish(f, nextContext, { ...development, revision: 2 }, "group-1", "partial"), /same specification revision/);
+  assert.deepEqual(await store.current(), old);
+  assert.equal(((await group(nextContext, "group-1", "group-2", 2)).data as { status: string }).status, "published");
+  const next = (await store.current())!;
+  assert.equal(next.sequence, 2);
+  const dev = next.revision.packets.find(row => row.packet.taskId === "development")!;
+  const reviewed = next.revision.packets.find(row => row.packet.taskId === "qa")!;
+  assert.equal(dev.source.specRevision, 2);
+  assert.deepEqual(reviewed.source, dev.source);
+  assert.deepEqual(reviewed.dependencyPins, [{ taskId: "development", revision: 2,
+    recordSha256: taskPacketRecordDigest(dev, P, CTO, "ws-1") }]);
+  assert.deepEqual(await store.publishedRevision("group-1"), old);
+  const replay = await group(nextContext, "group-1", "group-2", 2);
+  assert.equal((replay.data as { status: string }).status, "existing");
+  assert.deepEqual(await store.current(), next);
+  assert.equal(f.sends, 2, "planning publication does not dispatch Worker or QA");
+});
+
+test("an invalid companion rejects the entire publication before CAS", async () => {
+  const { f, ctoContext } = await delivered();
+  const first = packet({ taskId: "a" }), second = packet({ taskId: "b" });
+  const publishGroup = (value: unknown, additionalPackets: unknown) => publishCtoTaskPacket({
+    projectId: P, ctoId: CTO, workstreamId: "ws-1", expectedBaseRevisionId: null, revisionId: "invalid-group",
+    packet: value, additionalPackets,
+  }, ctoContext, f.platform);
+  const accessor: unknown[] = [];
+  Object.defineProperty(accessor, "0", { enumerable: true, get() { assert.fail("companion getter ran"); } });
+  const stateBefore = structuredClone(f.values);
+  await assert.rejects(publishGroup(first, accessor), /must contain data/);
+  await assert.rejects(publishGroup(first, [first]), /IDs must be unique/);
+  await assert.rejects(publishGroup(first, [{ ...second, ctoId: "another-cto" }]), /scope|ctoId/i);
+  await assert.rejects(publishGroup(first, [{ ...second, revision: 2 }]), /next exact/);
+  await assert.rejects(publishGroup({ ...first, dependencies: ["b"] }, [{ ...second, dependencies: ["a"] }]), /DAG/);
+  assert.deepEqual(f.values, stateBefore);
+  assert.equal(await createTaskPacketStore(W, P, CTO, "ws-1", f.platform.state).current(), null);
+});
+
 test("stale delivered Workstream and the legacy six-tool delivery policy are denied", async () => {
   const { f, ctoContext } = await delivered();
   await publish(f, ctoContext, packet(), null, "packet-before-revision");

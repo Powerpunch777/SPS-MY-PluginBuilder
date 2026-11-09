@@ -10,6 +10,7 @@ import { createRevisionJournal, type RevisionState } from "./solution-revision-s
 import { exactToolRecord, parseLeadToolContext, resolveLeadToolAuthority } from "./lead-tool-authority.ts";
 import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
 import { parseWorkstreamBoard, type WorkstreamRecord } from "./domain/workstreams.ts";
+import { comparePublishedG5TaskInputs } from "./g5-task-input-comparison.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 
@@ -74,7 +75,7 @@ function uiRecords(revision: UiRevision): readonly Record<string, unknown>[] {
  * no caller-provided source records are accepted.
  */
 export async function readG5ChangeImpactCandidates(params: unknown, runContext: unknown,
-  platform: SpsPlatformInvocationContext) {
+  platform: SpsPlatformInvocationContext, includeTaskInputs = true) {
   const input = impactInput(params);
   const projectId = id(input.projectId, "projectId");
   const context = parseLeadToolContext(runContext);
@@ -85,7 +86,7 @@ export async function readG5ChangeImpactCandidates(params: unknown, runContext: 
   if (authority.channel !== "main" && authority.channel !== "integration-review") {
     throw new Error("G5 source comparison is limited to Main or Integration Review Lead sessions.");
   }
-  return comparePublishedRevisions(input, context.companyId, projectId, platform.state as RevisionState, authority.check);
+  return comparePublishedRevisions(input, context.companyId, projectId, platform.state as RevisionState, authority.check, includeTaskInputs);
 }
 
 function impactInput(params: unknown) {
@@ -104,7 +105,7 @@ export async function readUserG5ChangeImpact(params: unknown, context: Pick<SpsA
   const input = impactInput(params);
   const workspaceId = id(context.companyId, "workspaceId");
   if (input.projectId !== workspaceId) throw new Error("G5 project does not match the authenticated Workspace.");
-  return (await comparePublishedRevisions(input, workspaceId, workspaceId, context.state as RevisionState, check)).data;
+  return (await comparePublishedRevisions(input, workspaceId, workspaceId, context.state as RevisionState, check, true)).data;
 }
 
 /** Internal dispatch guard. This is deliberately not registered as a CTO-facing tool. */
@@ -201,7 +202,7 @@ export async function assertCurrentCtoTaskG5Effect(input: Readonly<{
 }
 
 async function comparePublishedRevisions(input: ReturnType<typeof impactInput>, workspaceId: string, projectId: string,
-  state: RevisionState, check: () => Promise<void>) {
+  state: RevisionState, check: () => Promise<void>, includeTaskInputs = false) {
   await check();
   const oldBaselineId = id(input.oldBaselineRevisionId, "oldBaselineRevisionId");
   const newBaselineId = id(input.newBaselineRevisionId, "newBaselineRevisionId");
@@ -267,6 +268,7 @@ async function comparePublishedRevisions(input: ReturnType<typeof impactInput>, 
       snapshot(projectId, newBaseline.graph.graphRevisionId, newGraph)),
   };
 
+  let technologyPair: readonly [ReturnType<typeof parseAuthoredTechnologyDecisions>, ReturnType<typeof parseAuthoredTechnologyDecisions>] | null = null;
   if (input.technology !== undefined) {
     const pins = revisionPair(input.technology, "technology");
     const store = createG5TechnologyReader(workspaceId, projectId, state);
@@ -283,6 +285,7 @@ async function comparePublishedRevisions(input: ReturnType<typeof impactInput>, 
       snapshot(projectId, pins.oldRevisionId, before.revision.register.entries.map(item => ({ ...item, graphRefs: item.scopeNodeIds }))),
       snapshot(projectId, pins.newRevisionId, after.revision.register.entries.map(item => ({ ...item, graphRefs: item.scopeNodeIds }))),
     );
+    technologyPair = [before.revision, after.revision];
   }
 
   type PublishedWorkstream = Awaited<ReturnType<ReturnType<typeof createG5WorkstreamReader>["publishedRevision"]>>;
@@ -318,6 +321,7 @@ async function comparePublishedRevisions(input: ReturnType<typeof impactInput>, 
     workstreamEntries = [[pins.oldRevisionId, before], [pins.newRevisionId, after]];
   }
 
+  let taskInputComparisons: Awaited<ReturnType<typeof comparePublishedG5TaskInputs>> | null = null;
   if (input.tasks !== undefined) {
     const taskInput = exactToolRecord(input.tasks, ["ctoId", "workstreamId", "oldRevisionId", "newRevisionId"]);
     const ctoId = id(taskInput.ctoId, "tasks.ctoId"), workstreamId = id(taskInput.workstreamId, "tasks.workstreamId");
@@ -339,15 +343,22 @@ async function comparePublishedRevisions(input: ReturnType<typeof impactInput>, 
           throw new Error(`Task ${record.packet.taskId} source/requirement pins do not match the exact ${label} Workstream and Baseline.`);
         }
       }
+      return sourceWorkstream;
     };
-    assertTaskPins(before, workstreamEntries[0][0], oldBaseline, "old");
-    assertTaskPins(after, workstreamEntries[1][0], newBaseline, "new");
+    const oldWorkstream = assertTaskPins(before, workstreamEntries[0][0], oldBaseline, "old");
+    const newWorkstream = assertTaskPins(after, workstreamEntries[1][0], newBaseline, "new");
     const packetRecords = (board: typeof before) => board.revision.packets.map(record => ({
       id: record.packet.taskId, packet: record.packet, graphRefs: record.packet.scopeNodeIds, requirementRefs: record.packet.requirementIds,
       workstreamRefs: [record.packet.workstreamId], taskRefs: record.packet.dependencies,
     }));
     dimensions.tasks = dimensionsPair(snapshot(projectId, pins.oldRevisionId, packetRecords(before)),
       snapshot(projectId, pins.newRevisionId, packetRecords(after)));
+    if (includeTaskInputs && technologyPair && oldWorkstream.spec.technologyDecisionsRef === technologyPair[0].register.revisionId
+      && newWorkstream.spec.technologyDecisionsRef === technologyPair[1].register.revisionId) {
+      taskInputComparisons = await comparePublishedG5TaskInputs(workspaceId,
+        { baseline: oldBaseline, ui: oldUiEntry.revision, technology: technologyPair[0], workstream: oldWorkstream, tasks: before.revision },
+        { baseline: newBaseline, ui: newUiEntry.revision, technology: technologyPair[1], workstream: newWorkstream, tasks: after.revision }, state);
+    }
   }
 
   await check();
@@ -371,6 +382,7 @@ async function comparePublishedRevisions(input: ReturnType<typeof impactInput>, 
         workstreams: input.workstreams === undefined ? null : input.workstreams,
         tasks: input.tasks === undefined ? null : input.tasks },
       readConsistency: "exact-published-records; no cross-journal atomic snapshot",
+      ...(includeTaskInputs ? { recordedTaskInputs: taskInputComparisons } : {}),
       inventoryLimits: { technology: input.technology === undefined ? "UNKNOWN" : "exact-pair-only",
         ctoWorkstreams: input.workstreams === undefined ? "UNKNOWN" : "workstream-board-only; CTO registry not loaded",
         tasks: input.tasks === undefined ? "UNKNOWN" : "one-CTO-workstream-board-only",

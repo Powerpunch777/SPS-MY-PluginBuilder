@@ -14,6 +14,7 @@ const packetScope = (projectId: string, ctoId: string, workstreamId: string) => 
 type Candidate = Readonly<{ recordId: string; dimension: string }>;
 type Dimension = Readonly<{ status: "CANDIDATES" | "NO_CANDIDATE_OBSERVED" | "UNKNOWN"; candidates: readonly Candidate[] }>;
 type ImpactData = Readonly<{ projectId: string; dimensions: Record<string, Dimension>; inventoryLimits: Record<string, unknown>;
+  recordedTaskInputs?: unknown;
   sourcePins: { oldBaselineRevisionId: string; newBaselineRevisionId: string; oldUiRevisionId: string; newUiRevisionId: string;
     technology: unknown; workstreams: unknown; tasks: unknown } }>;
 type BoardPair<T> = Readonly<{ old: T; current: T; oldRevisionId: string; newRevisionId: string }>;
@@ -275,7 +276,8 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
   }
   const comparisonAgain = await readG5ChangeImpactCandidates(input, runContext, platform);
   const finalG5 = comparisonAgain.data as unknown as ImpactData;
-  if (!exactG5Pins(finalG5.sourcePins) || !samePair(finalG5.dimensions, data.dimensions)) {
+  if (!exactG5Pins(finalG5.sourcePins) || !samePair(finalG5.dimensions, data.dimensions)
+    || !samePair(finalG5.recordedTaskInputs, data.recordedTaskInputs)) {
     throw new Error("An exact historical G5 pair changed during projection reads.");
   }
   await authority.check();
@@ -302,6 +304,7 @@ export async function readG5Revalidation(params: unknown, runContext: unknown,
       workstreamReadinessReceipts: readinessReceipt, g5WorkstreamHandoffAcceptance: handoffAcceptance,
       g5WorkstreamHandoffProposals: handoffAcceptance.map(item => ({ workstreamId: item.workstreamId, g5Handoff: item.handoffProposal })),
       affectedTasks: taskDetails,
+      recordedTaskInputs: data.recordedTaskInputs ?? null,
       completeness: { exactPairRead: true, crossJournalAtomic: false,
         noCandidateMeaning: "UNKNOWN_NOT_PROOF_OF_NO_IMPACT", reapprovalAuthorized: false,
         priorExecutionEvidenceReuse: "UNKNOWN_NO_RUN_RESULT_READER",

@@ -185,6 +185,7 @@ test("CTO task packet tools expose exact planning-only contracts in the manifest
   assert.deepEqual(publish.required, ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "packet"]);
   assert.deepEqual(publish.properties.expectedBaseRevisionId.type, ["string", "null"]);
   const packet = publish.properties.packet;
+  assert.deepEqual(publish.properties.additionalPackets, { type: "array", maxItems: 63, items: packet });
   assert.equal(packet.additionalProperties, false);
   assert.deepEqual(packet.required, ["projectId", "ctoId", "workstreamId", "taskId", "revision", "kind", "title", "goal", "scopeNodeIds", "requirementIds", "dependencies", "included", "excluded", "constraints", "acceptance", "evidenceRequired", "reuse", "testPlan"]);
   assert.deepEqual(packet.properties.kind.enum, ["development", "qa"]);

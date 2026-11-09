@@ -48,7 +48,7 @@ export async function validateG5Handoff(workspaceId: string, projectId: string, 
     oldBaselineRevisionId: handoff.oldBaselineRevisionId, newBaselineRevisionId: handoff.newBaselineRevisionId,
     oldUiRevisionId: handoff.oldUiRevisionId, newUiRevisionId: handoff.newUiRevisionId,
     ...(handoff.technology ? { technology: handoff.technology } : {}),
-    workstreams: handoff.workstreams, tasks: handoff.tasks }, runContext, platform);
+    workstreams: handoff.workstreams, tasks: handoff.tasks }, runContext, platform, false);
   const data = comparison.data as unknown as { sourcePins: Record<string, unknown>; dimensions: Record<string, {
     status: "CANDIDATES" | "NO_CANDIDATE_OBSERVED" | "UNKNOWN"; candidates: readonly { recordId: string }[] }> };
   const ws = data.dimensions.ctoWorkstreams, tasks = data.dimensions.tasks;
