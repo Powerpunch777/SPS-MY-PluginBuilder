@@ -1060,14 +1060,26 @@ async function recordLeadSessionTerminal(channel: "main" | "integration-review",
 async function consumeWorkspaceSessionTerminalJob(job: {
   jobKey: string; companyId?: string; runId?: string; eventId?: string; trigger: string; event?: unknown },
   platform: SpsPlatformInvocationContext) {
+  const consumeManagerTerminal = () => consumeManagerSessionTerminalJob(job as never, platform);
+  const handleManagerTerminal = () => job.companyId ? serialize(`manager-job:${job.companyId}`, consumeManagerTerminal) : consumeManagerTerminal();
   if (job.jobKey !== MANAGER_SESSION_TERMINAL_JOB) return { status: "ignored" as const, reason: "unrelated-job-key" };
   if (job.trigger !== "event") return { status: "ignored" as const, reason: "terminal-handoff-requires-event-trigger" };
+  const eventDescriptor = Object.getOwnPropertyDescriptor(job, "event");
+  const event = eventDescriptor && Object.hasOwn(eventDescriptor, "value") ? eventDescriptor.value : null;
+  const payloadDescriptor = event && typeof event === "object" ? Object.getOwnPropertyDescriptor(event, "payload") : null;
+  const rawPayload = payloadDescriptor && Object.hasOwn(payloadDescriptor, "value") ? payloadDescriptor.value : null;
+  const statusDescriptor = rawPayload && typeof rawPayload === "object" ? Object.getOwnPropertyDescriptor(rawPayload, "status") : null;
+  if (statusDescriptor && Object.hasOwn(statusDescriptor, "value") && ["interrupted", "timed_out"].includes(statusDescriptor.value)) {
+    // These factual outcomes are currently consumed only by Manager admission;
+    // existing Lead/Task handoffs keep their narrower terminal contract.
+    return handleManagerTerminal();
+  }
   const payload = parseAgentSessionTerminal(job);
   if (payload && (!job.companyId || !UUID.test(job.companyId) || !job.runId || !UUID.test(job.runId)
     || !job.eventId || !/^agent-session-terminal-v1:[a-f0-9]{64}$/u.test(job.eventId))) {
     return { status: "unknown" as const, reason: "agent-session-terminal-job-context-invalid" };
   }
-  if (!payload || !job.companyId) return consumeManagerSessionTerminalJob(job as never, platform);
+  if (!payload || !job.companyId) return handleManagerTerminal();
   try {
     const binding = await readLeadAgentBinding(job.companyId, platform);
     const sessions = await leadSessionsFor(job.companyId, binding, platform);
@@ -1083,7 +1095,7 @@ async function consumeWorkspaceSessionTerminalJob(job: {
   if (qa.status !== "not-applicable") return qa;
   const cto = await consumeCtoTaskResultTerminal(job.companyId, job.eventId!, payload, platform);
   if (cto.status !== "not-applicable") return cto;
-  return consumeManagerSessionTerminalJob(job as never, platform);
+  return handleManagerTerminal();
 }
 
 async function firstDesignReviewView(companyId: string, platform: SpsPlatformInvocationContext) {
@@ -1112,15 +1124,17 @@ export function createBuilderPlatform() {
       ...taskFolderCapabilities as (typeof SPS_PLATFORM_CAPABILITIES)[number][],
       ...["sps.runs.dispatch", "sps.executions.read", "sps.artifacts.read"].filter(capability => (SPS_PLATFORM_CAPABILITIES as readonly string[]).includes(capability)) as (typeof SPS_PLATFORM_CAPABILITIES)[number][]],
     jobs: [{ jobKey: WORKSTREAM_VERIFIED_JOB, handler: async (job, platform) => {
-      const result = await consumeVerifiedWorkstreamJob(job, platform);
+      const result = job.companyId
+        ? await serialize(`manager-job:${job.companyId}`, () => consumeVerifiedWorkstreamJob(job, platform))
+        : await consumeVerifiedWorkstreamJob(job, platform);
       // A persisted pending reservation is not successful Git/CI execution.
       // Surface the missing producer to Core's bounded job-error handling.
       if ("waitingDependencies" in result && result.waitingDependencies === true
-        || ["accepted", "stale", "ignored", "waiting"].includes(result.status)) return;
+        || ["accepted", "stale", "ignored", "waiting", "waiting-manager"].includes(result.status)) return;
       if (result.status !== "accepted") throw new Error(`Workstream integration not admitted: ${result.reason}`);
     } }, { jobKey: MANAGER_SESSION_TERMINAL_JOB, handler: async (job, platform) => {
       const result = await consumeWorkspaceSessionTerminalJob(job, platform);
-      if (["accepted", "failed", "stale", "ignored", "waiting"].includes(result.status)) return;
+      if (["accepted", "failed", "stale", "ignored", "waiting", "waiting-manager"].includes(result.status)) return;
       throw new Error(`Owned session terminal handoff unresolved: ${"reason" in result ? result.reason : "unconfirmed"}`);
     } }, { jobKey: INTEGRATION_PACKET_MAIN_JOB, handler: async (job, platform) => {
       if (unrelatedJobEvent(job, INTEGRATION_PACKET_EVENT)) return;

@@ -380,16 +380,33 @@ function trackContinuationState(workspaceId: string, platform: Host) {
   } };
 }
 
-async function currentManagerLastRunId(workspaceId: string, authority: ManagerAuthority, platform: Host) {
+async function readManagerLastRunId(workspaceId: string, authority: ManagerAuthority, platform: Host) {
   const observations = await platform.agents.sessions.list(authority.agentId, workspaceId);
   if (!Array.isArray(observations) || observations.length > 100) throw new Error("manager-session-observation-unavailable");
   const rows = observations.filter(item => exactObject(item) && item.sessionId === authority.sessionId);
   if (rows.length !== 1 || rows[0]!.agentId !== authority.agentId || rows[0]!.companyId !== workspaceId
     || rows[0]!.taskKey !== authority.taskKey || rows[0]!.status !== "active" || rows[0]!.closedAt !== null
-    || typeof rows[0]!.lastRunId !== "string" || !REQUEST_ID.test(rows[0]!.lastRunId)) {
+    || rows[0]!.lastRunId !== null && (typeof rows[0]!.lastRunId !== "string" || !REQUEST_ID.test(rows[0]!.lastRunId))) {
     throw new Error("manager-current-last-run-unavailable-or-mismatched");
   }
-  return rows[0]!.lastRunId;
+  return rows[0]!.lastRunId as string | null;
+}
+
+async function currentManagerLastRunId(workspaceId: string, authority: ManagerAuthority, platform: Host) {
+  const lastRunId = await readManagerLastRunId(workspaceId, authority, platform);
+  if (lastRunId === null) throw new Error("manager-current-last-run-unavailable-or-mismatched");
+  return lastRunId;
+}
+
+async function observeManagerSlot(workspaceId: string, authority: ManagerAuthority, platform: Host) {
+  const lastRunId = await readManagerLastRunId(workspaceId, authority, platform);
+  if (lastRunId === null) return { status: "available" as const, lastRunId };
+  const run = await platform.agents.sessions.getRun(authority.sessionId, workspaceId, lastRunId);
+  if (!safeRunReceipt(run, lastRunId) || await readManagerLastRunId(workspaceId, authority, platform) !== lastRunId) return { status: "unknown" as const };
+  if (["queued", "running", "cancelling"].includes(String(run.status))) return { status: "busy" as const };
+  if (run.status === "cancelled" && run.cancellationRequested === true && run.termination === "confirmed") return { status: "cancelled" as const };
+  return run.cancellationRequested === false && run.termination === "not_applicable"
+    ? { status: "available" as const, lastRunId } : { status: "unknown" as const };
 }
 
 function continuationScope(candidate: ProtectedTerminalCandidate) {
@@ -566,7 +583,7 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
   if (payload.schemaVersion !== 1 || typeof payload.runId !== "string" || !UUID.test(payload.runId)
     || typeof payload.sessionId !== "string" || !UUID.test(payload.sessionId)
     || typeof payload.requestId !== "string" || !REQUEST_ID.test(payload.requestId)
-    || !["succeeded", "failed", "cancelled"].includes(payload.status as string)
+    || !["succeeded", "failed", "cancelled", "timed_out", "interrupted"].includes(payload.status as string)
     || typeof payload.resultSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(payload.resultSha256)
     || typeof payload.finishedAt !== "string" || !Number.isFinite(Date.parse(payload.finishedAt))) {
     return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-event-payload-invalid" };
@@ -583,13 +600,18 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
     reason: "terminal-event-does-not-match-current-manager-request-receipt" };
   const sessionRun = await platform.agents.sessions.getRun(authority.sessionId, job.companyId, payload.runId);
   if (!safeRunReceipt(sessionRun, payload.runId) || sessionRun.status !== payload.status
-    || !["succeeded", "failed", "cancelled"].includes(String(sessionRun.status))) {
+    || !["succeeded", "failed", "cancelled", "timed_out", "interrupted"].includes(String(sessionRun.status))) {
     return { status: "unknown" as const, eventId: job.eventId, reason: "manager-terminal-core-run-does-not-match-terminal-event" };
   }
-  if (payload.status === "failed" || payload.status === "cancelled") {
-    return closeFailedManagerContinuations(job.companyId, payload.requestId, payload.runId, payload.status, job.eventId, platform);
+  if (["failed", "cancelled", "timed_out", "interrupted"].includes(payload.status as string)) {
+    const closed = await closeFailedManagerContinuations(job.companyId, payload.requestId, payload.runId,
+      payload.status === "cancelled" ? "cancelled" : "failed", job.eventId, platform);
+    if (closed.status === "unknown" || payload.status === "cancelled" || sessionRun.cancellationRequested !== false
+      || sessionRun.termination !== "not_applicable") return closed;
+    const drained = await drainUnattemptedManagerWork(job.companyId, payload.runId, authority, platform);
+    return drained ? { ...drained, priorTerminalStatus: payload.status } : closed;
   }
-  if (sessionRun.cancellationRequested !== false) return { status: "unknown" as const, eventId: job.eventId,
+  if (sessionRun.cancellationRequested !== false || sessionRun.termination !== "not_applicable") return { status: "unknown" as const, eventId: job.eventId,
     reason: "manager-terminal-success-is-cancellation-marked" };
   const board = await readWorkstreams(job.companyId, job.companyId, platform);
   if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) return { status: "unknown" as const,
@@ -634,13 +656,18 @@ export async function consumeManagerSessionTerminalJob(job: Job, platformInput: 
       outcomes.push({ eventId: continuation.terminalEventId, status: result.status, reason: result.reason });
     }
   }
-  if (!outcomes.length) return { status: "ignored" as const, eventId: job.eventId,
-    reason: "manager-terminal-run-has-no-current-protected-continuation" };
+  if (!outcomes.length) {
+    const drained = await drainUnattemptedManagerWork(job.companyId, payload.runId, authority, platform);
+    return drained ?? { status: "ignored" as const, eventId: job.eventId,
+      reason: "manager-terminal-run-has-no-current-protected-continuation-or-queued-work" };
+  }
   const unresolved = outcomes.find(item => !["accepted", "stale", "waiting"].includes(item.status));
   if (unresolved) return { status: "unknown" as const, eventId: job.eventId,
     reason: "manager-terminal-continuation-not-confirmed", continuations: outcomes };
   if (outcomes.some(item => item.status === "waiting")) return { status: "waiting" as const, eventId: job.eventId,
     reason: "manager-terminal-continuation-still-waiting", continuations: outcomes };
+  const drained = await drainUnattemptedManagerWork(job.companyId, payload.runId, authority, platform);
+  if (drained) return { ...drained, continuations: outcomes };
   if (outcomes.every(item => item.status === "stale")) return { status: "stale" as const, eventId: job.eventId,
     reason: "manager-terminal-target-no-longer-current", continuations: outcomes };
   return { status: "accepted" as const, eventId: job.eventId, reason: "manager-terminal-notification-consumed",
@@ -781,7 +808,7 @@ async function findCurrentEvent(workspaceId: string, eventId: string, platform: 
 }
 
 type CurrentEvent = Extract<VerifiedEventLookup, { status: "current" }>;
-type EventConsumeResult = Readonly<{ status: "accepted" | "pending" | "uncertain" | "stale" | "unknown" | "unsupported" | "conflict" | "waiting-dependencies";
+type EventConsumeResult = Readonly<{ status: "accepted" | "pending" | "uncertain" | "stale" | "unknown" | "unsupported" | "conflict" | "waiting-dependencies" | "waiting-manager";
   eventId: string; reason: string; waitingDependencies?: true; requestId?: string; receipt?: Readonly<{ receiptId: string; runId: string }> }>;
 
 async function consumeCurrentEvent(workspaceId: string, located: CurrentEvent, platform: Host): Promise<EventConsumeResult> {
@@ -820,7 +847,67 @@ async function consumeCurrentEvent(workspaceId: string, located: CurrentEvent, p
   if (readiness.status !== "ready") return { status: "unknown", eventId: scope.eventId, reason: "integration-readiness-state-invalid" };
   const port = platformManagerDispatchPort({ workspaceId, workstreamId: located.workstreamId,
     eventId: scope.eventId, authority, planDigest: readiness.planDigest, plan: readiness.plan, platform });
+  const reservation = await readVerifiedWorkstreamReservation({ ...scope, verifiedEventId: scope.eventId }, platform.state);
+  if (!reservation?.requestId) {
+    const slot = await observeManagerSlot(workspaceId, authority, platform);
+    const protectedWaiting = slot.status === "available" && slot.lastRunId !== null
+      && await hasPendingProtectedManagerWork(workspaceId, platform);
+    if (slot.status === "busy" || protectedWaiting) {
+      // The existing zero-attempt reservation is the durable queue. A waiting
+      // event must not take a slot released while the reservation is being
+      // saved. The terminal handler first reconciles any protected continuation.
+      const parked = await consumeVerifiedWorkstream(scope, platform.state, readCurrent);
+      if (parked.status !== "pending" || parked.requestId) return parked;
+      return { status: "waiting-manager", eventId: scope.eventId,
+        reason: protectedWaiting ? "manager-protected-continuation-has-priority" : "manager-session-has-an-active-run" };
+    }
+    if (slot.status !== "available") return { status: "unknown", eventId: scope.eventId,
+      reason: slot.status === "cancelled" ? "manager-session-was-cancelled" : "manager-session-slot-not-authoritative" };
+    if (await readManagerLastRunId(workspaceId, authority, platform) !== slot.lastRunId) {
+      return { status: "unknown", eventId: scope.eventId, reason: "manager-session-head-changed-before-reservation" };
+    }
+  }
   return consumeVerifiedWorkstream(scope, platform.state, readCurrent, port);
+}
+
+async function* currentManagerReservations(workspaceId: string, platform: Host) {
+  const board = await readWorkstreams(workspaceId, workspaceId, platform);
+  if (!board || board.revision.workstreams.length > MAX_WORKSTREAMS) throw new Error("manager-queued-workstream-board-unavailable-or-over-bound");
+  const publication = createWorkstreamVerificationPublication(revisionState(platform));
+  for (const { spec } of board.revision.workstreams) {
+    const latest = await publication.readLatestCurrent({ workspaceId, projectId: workspaceId, workstreamId: spec.id });
+    if (latest.status !== "current") {
+      if (latest.status === "unknown" && latest.reason !== "verified-head-unavailable") {
+        throw new Error("manager-queued-verified-head-unavailable");
+      }
+      continue;
+    }
+    const reservation = await readVerifiedWorkstreamReservation({ workspaceId, projectId: workspaceId, workstreamId: spec.id,
+      verifiedEventId: latest.snapshot.eventId }, platform.state);
+    if (reservation) yield { reservation, snapshot: latest.snapshot, workstreamId: spec.id };
+  }
+}
+
+async function hasPendingProtectedManagerWork(workspaceId: string, platform: Host) {
+  let scanned = 0;
+  for await (const { reservation } of currentManagerReservations(workspaceId, platform)) {
+    scanned += reservation.continuations?.length ?? 0;
+    if (scanned > MAX_TERMINAL_ATTEMPT_LOOKUPS) throw new Error("manager-protected-priority-scan-over-bound");
+    if (reservation.status === "accepted" && reservation.continuations?.some(item => ["waiting", "pending", "uncertain"].includes(item.status))) return true;
+  }
+  return false;
+}
+
+async function drainUnattemptedManagerWork(workspaceId: string, terminalRunId: string, authority: ManagerAuthority, platform: Host) {
+  // A replay of an old terminal event may not advance a newer session head.
+  if (await readManagerLastRunId(workspaceId, authority, platform) !== terminalRunId) return null;
+  for await (const { reservation, snapshot, workstreamId } of currentManagerReservations(workspaceId, platform)) {
+    if (!reservation || reservation.requestId !== null || reservation.status !== "pending" || reservation.dispatchAttempts !== 0) continue;
+    if (await readManagerLastRunId(workspaceId, authority, platform) !== terminalRunId) return null;
+    const consumed = await consumeCurrentEvent(workspaceId, { status: "current", workstreamId, snapshot }, platform);
+    if (consumed.status !== "waiting-dependencies" && consumed.status !== "stale") return consumed;
+  }
+  return null;
 }
 
 /** Event-only Workspace job consumer. Core owns active invocation and lease checks. */
@@ -883,7 +970,7 @@ export async function consumeVerifiedWorkstreamJob(job: Job, platformInput: SpsP
       snapshot: latest.snapshot }, platform);
     dependentOutcomes.push(dependent);
   }
-  const unresolved = dependentOutcomes.find(item => !["accepted", "waiting-dependencies", "stale"].includes(item.status));
+  const unresolved = dependentOutcomes.find(item => !["accepted", "waiting-dependencies", "waiting-manager", "stale"].includes(item.status));
   if (unresolved) return { status: "unknown" as const, eventId: unresolved.eventId,
     reason: `dependent-workstream-dispatch-${unresolved.status}:${unresolved.reason}` };
   return { ...main, dependencyRescans: dependentOutcomes.map(item => ({ eventId: item.eventId, status: item.status, reason: item.reason })) };
