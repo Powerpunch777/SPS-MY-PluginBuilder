@@ -784,6 +784,36 @@
   영향 없는 범위 승계, 실제 두 CTO 병렬 통합과 앱/AI/최종 납품 인수는 남는다.
   이 변경만으로 216개 원문 AC와 42개 정책의 전체 인수 상태를 승격하지 않는다.
 
+### 2026-11-08 통합 이벤트 대기 관측 연결
+
+- Core 후보 `71f7bc4`와 공개 SDK 후보 `8a389d8`의 선택적
+  `events.observeJobWakeV1`은 기존 이벤트 dispatch/Job Run의 식별자·상태·시각만 조회한다.
+  현재 Workspace invocation, Plugin 및 등록된 Job과 `jobs.schedule`을 재검증한다.
+  payload/로그/오류 원문/인증정보/lease는 반환하지 않으며 실행·재시도 기능을 추가하지 않는다.
+- Core primitive의 단위/임시 PG 40개, Host 경계 10개 및 private SDK 회귀 38개가 통과했다.
+  별도 실제 Host/임시 PG 독립 검사 11개에 공개 SDK Worker JSONL 연결 1개를 추가한
+  실행은 12개 모두 통과했다. SDK의 설치 없는 회귀 312개와 광고/전송 집중 21개도 통과했다.
+  설치를 수행하는 세 consumer smoke는 이번 회귀 범위에서 제외했다.
+  DB 행과 invocation은 시험용이며 실제 Agent/CLI/모델/OS 보호나 자동 통합 업무 인수가 아니다.
+- Builder는 기존 권위 있는 VERIFIED 발행, 현재 계획·Manager 권한, 인수 예약과 정확한
+  Core request/Run을 읽어 Job 큐 대기와 검증 이벤트→Manager 시작을 구분한다.
+  기준 시각은 Core wake 생성 시각이지 별도 발행 시계나 전체 업무 완료 시각이 아니다.
+  현재 계획 문맥도 과거 Manager 실행 계획의 증명으로 바꾸지 않는다.
+  현재 publication의 guarded 조회를 마지막에 다시 수행하여 일반 state.get 관측에 잡히지 않는
+  설계 head 변경도 무효화한다. 대기·실행 오류·취소와 현재 증거/변경됨을 분리하고,
+  미지원/거부/누락/불확실은 0이 아닌 미측정으로 유지한다.
+- 후보 SDK `8a389d8`의 물리 QA 사본에서 최종 연결 소스의 전체 회귀 1,438개,
+  타입·빌드 및 desktop/mobile 화면 검사가 통과했다. 모듈 집중 검사 37개와 연결 UI/모듈
+  42개는 별도 실행이며 전체 결과에 더하지 않는다. 합성 Core 응답의 소스 회귀와 실제
+  SDK→Host→임시 PG 증거를 구분하고, 초기 타입/설계 head 변경 실패 원본을 보존했다.
+- Desktop 후보 `ec31c4ed`는 일반 toolOutput wake의 Goal-free 상태를 resume 뒤 재조회하고
+  현재 thread의 Goal 변경 알림 및 전송 직전 local gate를 검사한다. 메모리 검사 88개가
+  통과했다. 이미 전송된 요청은 되돌릴 수 없고 provider-side 원자 조건이나 공식 Goal 실행은
+  구현하지 않았다. 설치본·실제 AppServer/모델을 이 검사에서 실행하지 않았다.
+- 제품 SDK pin `c69915a`와 설치본은 그대로다. 후보 API의 존재·이 소스 연결은 제품 배포나
+  POLICY-EXEC-12 전체 인수가 아니다. Task 업무 완료 시간·권한 대기·수동 개입 계측,
+  영향 없는 이전 Task 승계, 공식 Goal 실행과 실제 두 CTO 전체 업무/납품 인수는 남는다.
+
 - [상품 선택 저장 계약](product-selection/contract.md)
 - [기준선 본문 생산자와 Manager 읽기 계약](project-documents/baseline-body-source.md)
 - [UI Contract와 사용자 승인 연결](ui-contracts/README.md)

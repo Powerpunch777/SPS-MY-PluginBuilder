@@ -64,6 +64,27 @@ function metricsWithUnstartedRequest() {
   ], summary: { observedRuns: 0, normalEndedRuns: 0, measuredRuns: 0, totalExecutionMs: null, totalQueueMs: null } };
 }
 
+function metricsWithIntegration() {
+  const base = metricsWithDevelopment();
+  const unavailable = { status: "unavailable", fromAt: null, toAt: null, durationMs: null, reason: "verification-stale" };
+  const current = { workstreamId: "ws-1", status: "current", eventId: "builder-verified-v1:fixture",
+    sourcePins: [{ sourceId: "source-1", revisionId: "revision-1", sha256: "a".repeat(64) }], reason: null,
+    queueWait: { status: "measured", fromAt: "2026-11-07T00:00:00.000Z", toAt: "2026-11-07T00:00:00.500Z", durationMs: 500, reason: null },
+    verifiedWakeToManagerStart: { status: "measured", fromAt: "2026-11-07T00:00:00.000Z", toAt: "2026-11-07T00:00:01.250Z", durationMs: 1250, reason: null },
+    jobRunId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", jobStatus: "delivered", jobRunStatus: "succeeded", currentPlanRevisionId: "plan-1",
+    manager: { agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", runId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" } };
+  const waiting = { status: "waiting", fromAt: "2026-11-07T00:00:00.000Z", toAt: null, durationMs: null, reason: "not-started" };
+  return { ...base, integration: { status: "ready", workspaceId: WORKSPACE, projectId: WORKSPACE,
+    observedAt: base.observedAt, consistency: "rechecked-current-records-not-a-global-transaction",
+    timeSource: "core-verified-wake-created-at-not-a-separate-publication-clock",
+    planCoverage: "current-plan-context-not-historical-manager-plan-attestation", completionAuthority: "not-established",
+    workstreams: [current, { ...current, workstreamId: "ws-waiting", eventId: "builder-verified-v1:waiting",
+      queueWait: waiting, verifiedWakeToManagerStart: waiting, jobRunId: null, jobStatus: "pending", jobRunStatus: null, manager: null, currentPlanRevisionId: null },
+    { ...current, workstreamId: "ws-stale", status: "stale", eventId: null, sourcePins: [], reason: "verification-stale",
+      queueWait: unavailable, verifiedWakeToManagerStart: unavailable, jobRunId: null, jobStatus: null, jobRunStatus: null, manager: null, currentPlanRevisionId: null }] } };
+}
+
 function metricsWithDevelopment() {
   const base = metricsWithCommitAcceptance();
   return { ...base, unmeasured: { ...base.unmeasured, reworkCount: 1 },
@@ -215,6 +236,53 @@ test("record-backed development DTO renders measured source work without promoti
   } finally { await removeOwnedTemp(temporary, PANEL_TEMP_PREFIX); }
 });
 
+test("integration wait DTO preserves measured, waiting and stale evidence without asserting completion", async () => {
+  const { Panel, parseDTO, temporary } = await loadMetricsPanel();
+  try {
+    const value = metricsWithIntegration();
+    assert.ok(parseDTO(value, WORKSPACE));
+    const html = renderPanel(Panel, value);
+    assert.match(html, /통합 실행 대기/u);
+    assert.match(html, /Job 큐 대기/u);
+    assert.match(html, /검증 이벤트→Manager 시작/u);
+    assert.match(html, /실행 대기/u);
+    assert.match(html, /변경됨/u);
+    assert.match(html, /이벤트 처리됨/u);
+    assert.match(html, /배정 대기/u);
+    assert.match(html, /1\.25초/u);
+    assert.doesNotMatch(html, /0초|통합 완료|QA 합격/u);
+    const unknown = { ...value, integration: { status: "unknown", reason: "observation-denied" } };
+    assert.ok(parseDTO(unknown, WORKSPACE));
+    assert.match(renderPanel(Panel, unknown), /통합 실행 기록을 확인할 수 없습니다/u);
+    assert.match(renderPanel(Panel, unknown), /task-worker/u);
+    const bad = (mutate: (copy: any) => void) => { const copy = structuredClone(value); mutate(copy); return copy; };
+    const failed = bad(copy => { copy.integration.workstreams[0].jobStatus = "dead"; copy.integration.workstreams[0].jobRunStatus = "failed"; });
+    assert.ok(parseDTO(failed, WORKSPACE));
+    assert.match(renderPanel(Panel, failed), /실행 오류/u);
+    let getterReads = 0;
+    for (const invalid of [
+      bad(copy => { copy.integration.workspaceId = "22222222-2222-4222-8222-222222222222"; }),
+      bad(copy => { copy.integration.completionAuthority = "verified"; }),
+      bad(copy => { copy.integration.observedAt = "2026-11-07T00:00:04.000Z"; }),
+      bad(copy => { copy.integration.workstreams[0].queueWait.durationMs = 1; }),
+      bad(copy => { copy.integration.workstreams[0].manager = null; }),
+      bad(copy => { copy.integration.workstreams[0].jobRunId = null; }),
+      bad(copy => { copy.integration.workstreams[0].jobRunStatus = "unrecognized"; }),
+      bad(copy => { copy.integration.workstreams[0].jobStatus = "leased"; copy.integration.workstreams[0].jobRunStatus = null; }),
+      bad(copy => { copy.integration.workstreams[1].queueWait.durationMs = 0; }),
+      bad(copy => { copy.integration.workstreams[2].queueWait = copy.integration.workstreams[0].queueWait; }),
+      bad(copy => { copy.integration.workstreams.push(copy.integration.workstreams[0]); }),
+      bad(copy => { copy.integration.workstreams[0].sourcePins.push(copy.integration.workstreams[0].sourcePins[0]); }),
+      bad(copy => { copy.integration.workstreams[0].verifiedWakeToManagerStart.fromAt = "2026-11-07T00:00:00.100Z";
+        copy.integration.workstreams[0].verifiedWakeToManagerStart.durationMs = 1150; }),
+      bad(copy => Object.defineProperty(copy.integration.workstreams[0], "manager", {
+        enumerable: true, get() { getterReads++; return value.integration.workstreams[0]!.manager; } })),
+      bad(copy => Object.defineProperty(copy.integration, "status", { enumerable: true, get() { getterReads++; return "ready"; } })),
+    ]) assert.equal(parseDTO(invalid, WORKSPACE), null);
+    assert.equal(getterReads, 0);
+  } finally { await removeOwnedTemp(temporary, PANEL_TEMP_PREFIX); }
+});
+
 test("Builder mounts execution metrics only in System and has no page-level horizontal overflow", async () => {
   const temporary = await mkdtemp(path.join(projectRoot, BROWSER_TEMP_PREFIX));
   const evidenceDirectory = process.env.SPS_EXECUTION_METRICS_QA_EVIDENCE_DIR?.trim();
@@ -264,7 +332,8 @@ test("Builder mounts execution metrics only in System and has no page-level hori
     const directory = path.resolve(evidenceDirectory);
     await mkdir(directory, { recursive: true });
     const output = path.join(directory, name);
-    await page.getByRole("region", { name: "개발 실행 지표" }).scrollIntoViewIfNeeded();
+    if (name.includes("integration")) await page.getByRole("heading", { name: "통합 실행 대기" }).scrollIntoViewIfNeeded();
+    else await page.getByRole("region", { name: "개발 실행 지표" }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: output });
     evidencePaths.push(output);
   };
@@ -297,6 +366,14 @@ test("Builder mounts execution metrics only in System and has no page-level hori
     await page.setViewportSize({ width: 1440, height: 900 });
     assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true);
     await saveScreenshot(page, "builder-metrics-development-1440.png");
+    await page.evaluate(value => (window as unknown as { mountBuilder(value: unknown): void }).mountBuilder(value), metricsWithIntegration());
+    await page.getByRole("heading", { name: "통합 실행 대기" }).waitFor();
+    assert.equal(await page.getByRole("cell", { name: "실행 대기", exact: true }).count(), 2);
+    assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true);
+    await saveScreenshot(page, "builder-metrics-integration-1440.png");
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.locator("html").evaluate(element => element.scrollWidth <= window.innerWidth), true);
+    await saveScreenshot(page, "builder-metrics-integration-390.png");
     const pending = metricsWithUnstartedRequest();
     const initial = { ...pending.runs[0]!, taskId: "task-qa", role: "qa", reason: "qa-origin-not-observed" };
     const continuation = { ...initial, reason: "qa-continuation-current-session-unavailable" };

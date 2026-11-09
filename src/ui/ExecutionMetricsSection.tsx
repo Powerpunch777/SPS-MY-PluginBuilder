@@ -1,6 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { usePluginData } from "@sonparkserver/plugin-sdk/ui/bridge";
 import type { ExecutionMetrics } from "../execution-metrics.ts";
+import type { IntegrationWaitMetricsRead } from "../integration-wait-metrics.ts";
 
 function fields(value: unknown, keys: readonly string[]) {
   if (!value || typeof value !== "object" || Array.isArray(value)
@@ -24,6 +25,95 @@ function fieldsWithLegacyShape(value: unknown, legacy: readonly string[], curren
   return { row: fields(value, shape), hasCurrentFields: shape === current };
 }
 
+function parseIntegrationWaitDTO(value: unknown, workspaceId: string, observedAt: string): IntegrationWaitMetricsRead {
+  const id = (value: unknown) => typeof value === "string" && Boolean(value.trim()) && value.length <= 160
+    && !/[\u0000-\u001f\u007f]/u.test(value);
+  const uuid = (value: unknown) => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(value);
+  const instant = (value: unknown): number => {
+    if (typeof value !== "string" || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value
+      || Date.parse(value) > Date.parse(observedAt)) throw new TypeError("Invalid integration metrics timestamp.");
+    return Date.parse(value);
+  };
+  const array = (value: unknown, maximum: number): unknown[] => {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum
+      || Reflect.ownKeys(value).length !== value.length + 1) throw new TypeError("Invalid integration metrics array.");
+    return Array.from({ length: value.length }, (_, index) => {
+      const item = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!item?.enumerable || !Object.hasOwn(item, "value")) throw new TypeError("Invalid integration metrics item.");
+      return item.value;
+    });
+  };
+  if (value && typeof value === "object" && Object.getOwnPropertyDescriptor(value, "status")?.value === "unknown") {
+    const row = fields(value, ["status", "reason"]);
+    if (!id(row.reason)) throw new TypeError("Invalid integration metrics reason.");
+    return row as IntegrationWaitMetricsRead;
+  }
+  const row = fields(value, ["status", "workspaceId", "projectId", "observedAt", "consistency", "timeSource",
+    "planCoverage", "completionAuthority", "workstreams"]);
+  instant(row.observedAt);
+  if (row.status !== "ready" || row.workspaceId !== workspaceId || row.projectId !== workspaceId
+    || row.consistency !== "rechecked-current-records-not-a-global-transaction"
+    || row.timeSource !== "core-verified-wake-created-at-not-a-separate-publication-clock"
+    || row.planCoverage !== "current-plan-context-not-historical-manager-plan-attestation"
+    || row.completionAuthority !== "not-established") throw new TypeError("Invalid integration metrics scope.");
+  const interval = (value: unknown) => {
+    const part = fields(value, ["status", "fromAt", "toAt", "durationMs", "reason"]);
+    if (part.status === "measured") {
+      const elapsed = instant(part.toAt) - instant(part.fromAt);
+      if (!Number.isSafeInteger(elapsed) || elapsed < 0 || part.durationMs !== elapsed || part.reason !== null) {
+        throw new TypeError("Invalid measured integration interval.");
+      }
+    } else if (part.status === "waiting") {
+      instant(part.fromAt);
+      if (part.toAt !== null || part.durationMs !== null || !id(part.reason)) throw new TypeError("Invalid waiting integration interval.");
+    } else if (part.status !== "unavailable" || part.fromAt !== null || part.toAt !== null
+      || part.durationMs !== null || !id(part.reason)) throw new TypeError("Invalid unavailable integration interval.");
+    return part;
+  };
+  const seen = new Set<string>();
+  row.workstreams = array(row.workstreams, 128).map(value => {
+    const item = fields(value, ["workstreamId", "status", "eventId", "sourcePins", "reason", "queueWait",
+      "verifiedWakeToManagerStart", "jobRunId", "jobStatus", "jobRunStatus", "manager", "currentPlanRevisionId"]);
+    if (!id(item.workstreamId) || seen.has(item.workstreamId as string) || !["current", "stale", "unknown"].includes(String(item.status))
+      || item.reason !== null && !id(item.reason) || item.currentPlanRevisionId !== null && !id(item.currentPlanRevisionId)
+      || item.jobRunId !== null && !uuid(item.jobRunId)
+      || item.jobStatus !== null && !["pending", "leased", "delivered", "dead"].includes(String(item.jobStatus))
+      || item.jobRunStatus !== null && !["pending", "queued", "running", "cancelling", "succeeded", "failed", "cancelled"].includes(String(item.jobRunStatus))
+      || (item.jobRunId === null) !== (item.jobRunStatus === null)
+      || item.jobRunStatus !== null && item.jobStatus === null
+      || ["leased", "delivered"].includes(String(item.jobStatus)) && item.jobRunId === null
+      || item.jobStatus === "delivered" && item.jobRunStatus !== "succeeded") throw new TypeError("Invalid integration Workstream identity.");
+    seen.add(item.workstreamId as string);
+    const pins = new Set<string>();
+    item.sourcePins = array(item.sourcePins, 4096).map(value => {
+      const pin = fields(value, ["sourceId", "revisionId", "sha256"]);
+      if (!id(pin.sourceId) || !id(pin.revisionId) || typeof pin.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(pin.sha256)
+        || pins.has(pin.sourceId as string)) throw new TypeError("Invalid integration evidence pin.");
+      pins.add(pin.sourceId as string); return pin;
+    });
+    item.queueWait = interval(item.queueWait);
+    item.verifiedWakeToManagerStart = interval(item.verifiedWakeToManagerStart);
+    const queue = item.queueWait as Record<string, unknown>, managerWait = item.verifiedWakeToManagerStart as Record<string, unknown>;
+    if (item.status === "current" ? !id(item.eventId) || pins.size === 0
+      : item.eventId !== null || pins.size !== 0 || item.manager !== null || item.jobRunId !== null || item.jobStatus !== null || item.jobRunStatus !== null
+        || queue.status !== "unavailable" || managerWait.status !== "unavailable") throw new TypeError("Invalid current integration evidence.");
+    if (queue.status === "measured" && item.jobRunId === null
+      || managerWait.status === "measured" && item.manager === null
+      || queue.fromAt !== null && managerWait.fromAt !== null && queue.fromAt !== managerWait.fromAt) {
+      throw new TypeError("Invalid integration timing binding.");
+    }
+    if (item.manager !== null) {
+      const manager = fields(item.manager, ["agentId", "sessionId", "requestId", "runId"]);
+      if (!Object.values(manager).every(uuid) || item.currentPlanRevisionId === null || item.status !== "current") {
+        throw new TypeError("Invalid integration Manager receipt.");
+      }
+      item.manager = manager;
+    }
+    return item;
+  });
+  return row as IntegrationWaitMetricsRead;
+}
+
 export function parseExecutionMetricsDTO(value: unknown, workspaceId: string): ExecutionMetrics | null {
   const safeDuration = (value: unknown) => value === null || Number.isSafeInteger(value) && (value as number) >= 0;
   const id = (value: unknown) => typeof value === "string" && value.trim() && value.length <= 160 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -32,7 +122,9 @@ export function parseExecutionMetricsDTO(value: unknown, workspaceId: string): E
     && new Date(Date.parse(value)).toISOString() === value;
   try {
     const legacyFields = ["status", "workspaceId", "projectId", "observedAt", "consistency", "runs", "summary", "unmeasured", "completionAuthority"];
-    const row = fieldsWithLegacyShape(value, legacyFields, [...legacyFields, "development"]).row;
+    const optionalFields = value && typeof value === "object"
+      ? ["development", "integration"].filter(key => Object.hasOwn(value, key)) : [];
+    const row = fields(value, [...legacyFields, ...optionalFields]);
     if (row.status !== "ready" || !uuid(workspaceId) || row.workspaceId !== workspaceId || row.projectId !== workspaceId
       || !instant(row.observedAt) || row.consistency !== "rechecked-current-records-not-a-global-transaction"
       || row.completionAuthority !== "not-established" || !Array.isArray(row.runs) || Object.getPrototypeOf(row.runs) !== Array.prototype
@@ -140,6 +232,7 @@ export function parseExecutionMetricsDTO(value: unknown, workspaceId: string): E
         ? acceptedCommits.reduce((total, run) => total + (run.commitAcceptanceMs as number), 0) : null)
       || summary.totalExecutionMs !== sum("executionMs") || summary.totalQueueMs !== sum("queueMs")
       || ![summary.totalExecutionMs, summary.totalQueueMs, summary.totalCommitAcceptanceMs].every(safeDuration)) return null;
+    if (Object.hasOwn(row, "integration")) row.integration = parseIntegrationWaitDTO(row.integration, workspaceId, row.observedAt as string);
     return { ...row, runs, summary, unmeasured } as unknown as ExecutionMetrics;
   } catch { return null; }
 }
@@ -169,7 +262,7 @@ export function ExecutionMetricsPanel({ value, workspaceId, loading, error, onRe
           ["관측 실행 구간(중복 제외)", duration(metrics.development?.observedExecutionWindowMs ?? null)],
           ["누적 실행 큐 대기", duration(metrics.summary.totalQueueMs)], ["Commit 인수 대기", duration(metrics.summary.totalCommitAcceptanceMs)],
           ["Task 완료 시간", "미측정"], ["권한 대기", "미측정"],
-          ["통합 대기", "미측정"], ["기록 기반 재작업 횟수", metrics.unmeasured.reworkCount === null ? "미측정" : `${metrics.unmeasured.reworkCount}회`],
+          ["전체 통합 소요", "미측정"], ["기록 기반 재작업 횟수", metrics.unmeasured.reworkCount === null ? "미측정" : `${metrics.unmeasured.reworkCount}회`],
           ["수동 개입 횟수", "미측정"]].map(([label, result]) =>
           <div key={label}><dt style={{ color: "var(--builder-muted,#b6b6b6)" }}>{label}</dt><dd style={{ margin: "4px 0 0" }}>{result}</dd></div>)}
       </dl>
@@ -186,6 +279,23 @@ export function ExecutionMetricsPanel({ value, workspaceId, loading, error, onRe
           <td>{duration(run.commitAcceptanceMs ?? null)}</td>
         </tr>)}</tbody></table>
       </div>}
+      {metrics.integration && <>
+        <h3>통합 실행 대기</h3>
+        {metrics.integration.status === "unknown" ? <p role="status">통합 실행 기록을 확인할 수 없습니다.</p>
+          : !metrics.integration.workstreams.length ? <p>통합 대기 기록이 없습니다.</p>
+            : <div style={{ overflowX: "auto", maxWidth: "100%" }}><table style={{ width: "100%", minWidth: 600,
+              borderCollapse: "collapse", textAlign: "left", color: "var(--builder-text,#ededed)" }}><thead><tr>
+              {["Workstream", "검증 기록", "Job 상태", "Job 큐 대기", "검증 이벤트→Manager 시작"].map(label => <th key={label} style={{ padding: 8 }}>{label}</th>)}
+            </tr></thead><tbody>{metrics.integration.workstreams.map(row => <tr key={row.workstreamId}>
+              <td style={{ padding: 8, overflowWrap: "anywhere" }}>{row.workstreamId}</td>
+              <td>{row.status === "current" ? "현재 증거" : row.status === "stale" ? "변경됨" : "미확인"}</td>
+              <td>{row.jobStatus === "dead" || row.jobRunStatus === "failed" ? "실행 오류"
+                : row.jobRunStatus === "cancelled" ? "취소됨" : row.jobStatus === "pending" ? "배정 대기"
+                  : row.jobStatus === "leased" ? "배정됨" : row.jobStatus === "delivered" ? "이벤트 처리됨" : "미확인"}</td>
+              {[row.queueWait, row.verifiedWakeToManagerStart].map((part, index) => <td key={index}>
+                {part.status === "waiting" ? "실행 대기" : duration(part.durationMs)}</td>)}
+            </tr>)}</tbody></table></div>}
+      </>}
     </>}
   </section>;
 }

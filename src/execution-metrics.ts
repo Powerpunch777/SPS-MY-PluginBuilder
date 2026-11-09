@@ -12,6 +12,7 @@ import { readWorkstreams } from "./workstream-tools.ts";
 import { workstreamInstructionDigest } from "./cto-delivery-store.ts";
 import { createTaskQaRunReferenceStore, type TaskQaRunReference } from "./task-qa-run-references.ts";
 import { createTaskQaReportStore } from "./task-qa-reports.ts";
+import { readIntegrationWaitMetrics, type IntegrationWaitMetricsRead } from "./integration-wait-metrics.ts";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const MAX_RUNS = 128;
@@ -30,6 +31,7 @@ export type ExecutionMetrics = Readonly<{ status: "ready"; workspaceId: string; 
     measuredRuns: number; totalExecutionMs: number | null; totalQueueMs: number | null;
     commitAcceptanceCount: number; totalCommitAcceptanceMs: number | null }>;
   development?: Readonly<{ tasks: readonly TaskDevelopmentMetric[]; observedExecutionWindowMs: number | null }>;
+  integration?: IntegrationWaitMetricsRead;
   unmeasured: Readonly<{ taskCompletionMs: null; permissionWaitMs: null; integrationWaitMs: null;
     reworkCount: number | null; manualInterventionCount: null }>; completionAuthority: "not-established" }>;
 
@@ -521,6 +523,7 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
         }
       }
     }
+    const integration = await readIntegrationWaitMetrics({ workspaceId, projectId: workspaceId }, tracked);
     const observedAt = new Date().toISOString();
     // Recheck every observed mutable record once before returning the full projection.
     await check();
@@ -539,6 +542,7 @@ export async function readBuilderExecutionMetrics(workspaceId: string, platform:
         normalEndedRuns: runs.filter(run => run.normalEnded).length, measuredRuns: executions.length,
         totalExecutionMs, totalQueueMs, commitAcceptanceCount: acceptedCommits.length, totalCommitAcceptanceMs },
       development: { tasks, observedExecutionWindowMs: observedExecutionWindowMs(runs) },
+      integration,
       unmeasured: { taskCompletionMs: null, permissionWaitMs: null, integrationWaitMs: null,
         reworkCount: tasks.length && tasks.every(task => task.reworkCount !== null)
           ? tasks.reduce((total, task) => total + task.reworkCount!, 0) : null, manualInterventionCount: null },
