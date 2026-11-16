@@ -1,0 +1,103 @@
+import { parseDesignBaseline, type DesignBaseline } from "./design-baseline.ts";
+import type { BuilderSnapshot } from "./model.ts";
+
+function exactRecord(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError("Invalid design baseline view.");
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== keys.length || ownKeys.some(key => typeof key !== "string" || !keys.includes(key))) {
+    throw new TypeError("Invalid design baseline view fields.");
+  }
+  const row: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      throw new TypeError("Invalid design baseline view field.");
+    }
+    row[key] = descriptor.value;
+  }
+  return row;
+}
+
+async function canonicalDigest(value: unknown): Promise<string | null> {
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle || typeof subtle.digest !== "function") return null;
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+    return [...digest].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  } catch { return null; }
+}
+
+interface ParsedBaselineView {
+  snapshot: BuilderSnapshot;
+  baseline: DesignBaseline;
+  expectedDigest: string | undefined;
+  baselineId: string;
+}
+
+function parseBaselineView(snapshot: BuilderSnapshot, value: unknown): ParsedBaselineView | null {
+  if (value === null) return null;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid design baseline view.");
+  const hasDigest = Object.hasOwn(value, "baselineDigest");
+  const row = exactRecord(value, hasDigest
+    ? ["workspaceId", "projectId", "sequence", "baseline", "baselineDigest"]
+    : ["workspaceId", "projectId", "sequence", "baseline"]);
+  if (row.workspaceId !== snapshot.workspaceId || row.projectId !== snapshot.workspaceId
+    || typeof row.sequence !== "number" || !Number.isSafeInteger(row.sequence) || row.sequence < 1) {
+    throw new TypeError("Invalid or cross-scope design baseline view.");
+  }
+  let expectedDigest: string | undefined;
+  if (hasDigest) {
+    if (typeof row.baselineDigest !== "string" || !/^[a-f0-9]{64}$/u.test(row.baselineDigest)) {
+      throw new TypeError("Invalid design baseline digest.");
+    }
+    expectedDigest = row.baselineDigest;
+  }
+
+  const baseline: DesignBaseline = parseDesignBaseline(row.baseline, snapshot.workspaceId);
+  const baselineId = `design-baseline:${baseline.revisionId}`;
+  return { baseline, expectedDigest, baselineId, snapshot: {
+    ...snapshot,
+    documents: [...snapshot.documents, {
+      id: baselineId,
+      title: "설계 기준 · Lead 해석 기록",
+      revisionId: baseline.revisionId,
+      createdAt: baseline.createdAt,
+      text: JSON.stringify({
+        notice: "사용자 입력에 대한 Lead의 설계 해석입니다. 외부 계약 체결이나 코드 실행 권한이 아닙니다.",
+        ...baseline,
+      }, null, 2),
+      category: "design", sourceKind: "design-baseline", approvalStatus: "unknown", freshnessStatus: "unknown",
+      bodyAvailable: true,
+      sourcePins: [{ sourceId: `design-draft:${baseline.sourceDraftRevisionId}`, revisionId: baseline.sourceDraftRevisionId,
+        sha256: baseline.draftDigest }],
+      relatedIds: [baseline.sourceDraftRevisionId, baseline.specification.revisionId, baseline.graph.graphRevisionId,
+        ...baseline.specification.requirements.map(requirement => requirement.id)],
+    }],
+  } };
+}
+
+export function projectDesignBaseline(snapshot: BuilderSnapshot, value: unknown): BuilderSnapshot {
+  return parseBaselineView(snapshot, value)?.snapshot ?? snapshot;
+}
+
+export async function verifyDesignBaselineDigest(snapshot: BuilderSnapshot, value: unknown): Promise<BuilderSnapshot> {
+  const parsed = parseBaselineView(snapshot, value);
+  if (!parsed || parsed.expectedDigest === undefined) return parsed?.snapshot ?? snapshot;
+  const digest = await canonicalDigest(parsed.baseline);
+  if (digest === null) return parsed.snapshot;
+  if (digest !== parsed.expectedDigest) throw new TypeError("Design baseline digest does not match the normalized baseline.");
+
+  const document = parsed.snapshot.documents.at(-1);
+  if (!document || document.id !== parsed.baselineId) throw new TypeError("Design baseline projection is unavailable.");
+  return {
+    ...parsed.snapshot,
+    documents: [...parsed.snapshot.documents.slice(0, -1), {
+      ...document,
+      sourcePins: [{ sourceId: parsed.baselineId, revisionId: parsed.baseline.revisionId, sha256: digest }, ...(document.sourcePins ?? [])],
+    }],
+  };
+}

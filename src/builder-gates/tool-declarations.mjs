@@ -1,0 +1,45 @@
+const id = { type: "string", minLength: 1, maxLength: 160 };
+const uuid = { type: "string", format: "uuid" };
+const branch = { type: "string", minLength: 1, maxLength: 240 };
+export const PUBLISH_INTEGRATION_PLAN_TOOL = Object.freeze({
+  name: "builder.publish-integration-plan", displayName: "Publish the current integration plan",
+  description: "Main records the candidate Source/branch and exact current Baseline/UI scope. Optional validationPlans pin Host-approved test plans. deliveryInventoryPath names the exact relative JSON file to read from the integrated candidate for the proposed delivery inventory. This is a workflow reference, not approval or execution permission.",
+  parametersSchema: { type: "object", additionalProperties: false,
+    required: ["expectedBaseRevisionId", "sourceId", "folderKey", "baseBranch", "baseCommit", "candidateBranch"],
+    properties: { expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 }, sourceId: uuid, folderKey: id,
+      baseBranch: branch, baseCommit: { type: "string", pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" }, candidateBranch: branch,
+      deliveryInventoryPath: { type: "string", minLength: 1, maxLength: 1024 },
+      validationPlans: { type: "object", additionalProperties: false, required: ["ci", "e2e"], properties:
+        Object.fromEntries(["ci", "e2e", "regression"].map(stage => [stage, { type: "object", additionalProperties: false,
+          required: ["approvalTemplateId", "planSha256"], properties: { approvalTemplateId: uuid,
+            planSha256: { type: "string", pattern: "^[a-f0-9]{64}$" } } }])) } } },
+});
+const eventScope = { type: "object", additionalProperties: false, required: ["workstreamId", "eventId"],
+  properties: { workstreamId: id, eventId: id } };
+export const READ_VERIFIED_WORKSTREAM_TOOL = Object.freeze({
+  name: "builder.read-verified-workstream", displayName: "Read current verified integration evidence",
+  description: "Only the exact independently dispatched Integration Manager run may read its current persisted verification event. This is evidence inspection, not integration, CI completion or approval.",
+  parametersSchema: eventScope,
+});
+export const INTEGRATE_VERIFIED_TASK_TOOL = Object.freeze({
+  name: "builder.integrate-verified-task", displayName: "Integrate an exact verified Task into its candidate",
+  description: "The active Integration Manager may merge only a Task from its admitted, currently verified event into the Main-pinned candidate. Exact persisted source pins, reservation, current guards and the separate Host Git grant are required. A merge receipt is not CI, QA, final delivery or a protected base-branch update.",
+  parametersSchema: { ...eventScope, required: [...eventScope.required, "taskId"], properties: { ...eventScope.properties, taskId: id } },
+});
+export const READ_INTEGRATION_PROGRESS_TOOL = Object.freeze({
+  name: "builder.read-integration-progress", displayName: "Read exact integration progress",
+  description: "The exact active Integration Manager reads its admitted event's immutable attempts and actual technical receipts. projection=candidate checks current Workstreams, Git effects and configured CI/E2E/regression on one candidate. projection=delivery-inventory checks the Main-pinned manifest and exact selected Git/CI Artifact files without returning bytes. Missing evidence is not a pass. Neither read starts execution or approves delivery.",
+  parametersSchema: { ...eventScope, properties: { ...eventScope.properties, projection: { type: "string", enum: ["candidate", "delivery-inventory"] } } },
+});
+export const REQUEST_INTEGRATION_VALIDATION_TOOL = Object.freeze({
+  name: "builder.request-integration-validation", displayName: "Request exact candidate validation",
+  description: "The exact admitted Integration Manager requests only a Main-pinned Host-approved CI, E2E or regression plan for its current observed candidate Commit/Tree. New plans share one Core request per candidate and phase across Workstreams. Core still checks the technical template and permissions. Technical success is not QA, G6/G7 or delivery approval.",
+  parametersSchema: { ...eventScope, required: [...eventScope.required, "taskId", "phase"],
+    properties: { ...eventScope.properties, taskId: id, phase: { type: "string", enum: ["ci", "e2e", "regression"] } } },
+});
+export const PUBLISH_INTEGRATION_PACKET_TOOL = Object.freeze({
+  name: "builder.publish-integration-packet", displayName: "Hand integrated evidence to Main",
+  description: "Only the admitted Manager publishes the current complete Workstream/G6 and candidate CI/E2E/regression references with exact inventory and guides. Requires the current final-delivery journal head. Main still checks G7; this does not request or record user approval.",
+  parametersSchema: { ...eventScope, required: [...eventScope.required, "expectedBaseRevisionId"],
+    properties: { ...eventScope.properties, expectedBaseRevisionId: { anyOf: [{ type: "string", minLength: 1, maxLength: 200 }, { type: "null" }] } } },
+});

@@ -1,0 +1,247 @@
+import {
+  CREATE_CTO_TOOL,
+  INSPECT_SPEC_ASSURANCE_TOOL,
+  LIST_CTOS_TOOL,
+  PROPOSE_DESIGN_TOOL,
+  PUBLISH_DESIGN_BASELINE_TOOL,
+  PUBLISH_TECHNOLOGY_DECISIONS_TOOL,
+  READ_CHANGE_IMPACT_TOOL,
+  READ_DESIGN_BASELINE_TOOL,
+  READ_DESIGN_DRAFT_TOOL,
+  READ_DESIGN_SOURCES_TOOL,
+  READ_CONSULTATION_ANALYSIS_TOOL,
+  READ_LEAD_MEMORY_TOOL,
+  READ_SOLUTION_TOOL,
+  READ_TECHNOLOGY_DECISIONS_TOOL,
+  RESOLVE_DESIGN_QUESTION_TOOL,
+  UPDATE_LEAD_MEMORY_TOOL,
+} from "./tool-declarations.mjs";
+import { ACKNOWLEDGE_WORKSTREAM_TOOL, PUBLISH_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_TOOL, READ_WORKSTREAMS_TOOL } from "./workstream-tool-declarations.mjs";
+import { DISPATCH_CTO_WORKSTREAM_TOOL, READ_CTO_WORKSTREAM_DELIVERY_TOOL, CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL } from "./delivery-tool-declarations.mjs";
+import { READ_CTO_MEMORY_TOOL, UPDATE_CTO_MEMORY_TOOL } from "./cto-memory-tool-declarations.mjs";
+import { SUBMIT_CTO_QUESTION_TOOL, READ_OWN_CTO_QUESTION_TOOL, READ_CTO_QUESTIONS_TOOL, REVIEW_CTO_QUESTION_TOOL } from "./cto-question-tool-declarations.mjs";
+import { READ_CTO_TASK_PACKETS_TOOL, PUBLISH_CTO_TASK_PACKET_TOOL, PREPARE_TASK_WORKER_TOOL, READ_TASK_WORKERS_TOOL,
+  DISPATCH_TASK_WORKER_TOOL, READ_TASK_SOURCE_FILE_TOOL, WRITE_TASK_SOURCE_FILE_TOOL, DELETE_TASK_SOURCE_FILE_TOOL,
+  SUBMIT_TASK_SOURCE_TOOL, READ_TASK_SOURCE_SUBMISSIONS_TOOL, ACCEPT_TASK_SOURCE_SUBMISSION_TOOL,
+  REQUEST_PROTECTED_TASK_QA_TOOL, READ_PROTECTED_TASK_QA_TOOL } from "./task-packet-tool-declarations.mjs";
+import { READ_PROTECTED_TASK_QA_HISTORY_TOOL } from "./task-packet-tool-declarations.mjs";
+import { PUBLISH_TASK_QA_REPORT_TOOL, VERIFY_WORKSTREAM_TOOL } from "./task-packet-tool-declarations.mjs";
+import { PUBLISH_INTEGRATION_PLAN_TOOL, READ_VERIFIED_WORKSTREAM_TOOL, INTEGRATE_VERIFIED_TASK_TOOL,
+  READ_INTEGRATION_PROGRESS_TOOL, REQUEST_INTEGRATION_VALIDATION_TOOL, PUBLISH_INTEGRATION_PACKET_TOOL } from "./builder-gates/tool-declarations.mjs";
+import * as PlatformSdk from "@sonparkserver/plugin-sdk/platform";
+// Old SDKs retain their exact existing Main policy and must not silently send
+// a larger policy than their Worker/Host contract accepts.
+export const SESSION_POLICY_TOOL_LIMIT = (PlatformSdk as unknown as { SPS_SESSION_EXECUTION_POLICY_MAX_TOOLS?: number })
+  .SPS_SESSION_EXECUTION_POLICY_MAX_TOOLS === 64 ? 64 : 32;
+import type { LeadChannel } from "./domain/model.ts";
+import { SPEC_ASSURANCE_PACK_PROPOSAL_TOOL, READ_SPEC_ASSURANCE_PACK_TOOL, READ_FIRST_DESIGN_REVIEW_TOOL, PROPOSE_FIRST_DESIGN_REVIEW_TOOL,
+  RECORD_SPEC_GAPS_TOOL, READ_SPEC_GAPS_TOOL } from "./spec-assurance/tool-declarations.mjs";
+import { PROPOSE_UI_CONTRACT_TOOL, PUBLISH_UI_CONTRACT_TOOL, READ_UI_CONTRACTS_TOOL } from "./ui-contracts/tool-declarations.mjs";
+import { ATTEST_FINAL_PACKET_TOOL, READ_FINAL_REVIEW_TOOL, REQUEST_FINAL_REVIEW_TOOL } from "./delivery-evidence/tool-declarations.mjs";
+import { PROPOSE_DELIVERY_DOCUMENTS_TOOL, READ_DELIVERY_DOCUMENTS_TOOL } from "./project-documents/tool-declarations.mjs";
+import { READ_REUSE_CANDIDATES_TOOL, RECORD_REUSE_CANDIDATE_TOOL } from "./reuse-first/tool-declarations.mjs";
+
+export const LEAD_PLANNING_TOOL_NAMES = Object.freeze([
+  READ_SOLUTION_TOOL.name,
+  PROPOSE_DESIGN_TOOL.name,
+  READ_DESIGN_DRAFT_TOOL.name,
+  READ_DESIGN_SOURCES_TOOL.name,
+  READ_CONSULTATION_ANALYSIS_TOOL.name,
+  SPEC_ASSURANCE_PACK_PROPOSAL_TOOL.name,
+  READ_SPEC_ASSURANCE_PACK_TOOL.name,
+  RECORD_SPEC_GAPS_TOOL.name,
+  READ_SPEC_GAPS_TOOL.name,
+  READ_FIRST_DESIGN_REVIEW_TOOL.name,
+  PROPOSE_FIRST_DESIGN_REVIEW_TOOL.name,
+  READ_UI_CONTRACTS_TOOL.name,
+  PUBLISH_UI_CONTRACT_TOOL.name,
+  READ_FINAL_REVIEW_TOOL.name,
+  READ_CHANGE_IMPACT_TOOL.name,
+  READ_REUSE_CANDIDATES_TOOL.name,
+  ATTEST_FINAL_PACKET_TOOL.name,
+  READ_LEAD_MEMORY_TOOL.name,
+  UPDATE_LEAD_MEMORY_TOOL.name,
+  RESOLVE_DESIGN_QUESTION_TOOL.name,
+  CREATE_CTO_TOOL.name,
+  LIST_CTOS_TOOL.name,
+  PUBLISH_DESIGN_BASELINE_TOOL.name,
+  READ_DESIGN_BASELINE_TOOL.name,
+  INSPECT_SPEC_ASSURANCE_TOOL.name,
+  PUBLISH_TECHNOLOGY_DECISIONS_TOOL.name,
+  READ_TECHNOLOGY_DECISIONS_TOOL.name,
+  PUBLISH_WORKSTREAM_TOOL.name,
+  READ_WORKSTREAMS_TOOL.name,
+  DISPATCH_CTO_WORKSTREAM_TOOL.name,
+  READ_CTO_WORKSTREAM_DELIVERY_TOOL.name,
+  CANCEL_CTO_WORKSTREAM_DELIVERY_TOOL.name,
+  ...(SESSION_POLICY_TOOL_LIMIT > 32 ? [PUBLISH_INTEGRATION_PLAN_TOOL.name,
+    PROPOSE_DELIVERY_DOCUMENTS_TOOL.name, READ_DELIVERY_DOCUMENTS_TOOL.name] : []),
+].sort());
+
+export const CTO_WORKSTREAM_TOOL_NAMES = Object.freeze([
+  READ_CTO_WORKSTREAM_TOOL.name,
+  ACKNOWLEDGE_WORKSTREAM_TOOL.name,
+  READ_CTO_MEMORY_TOOL.name,
+  UPDATE_CTO_MEMORY_TOOL.name,
+  SUBMIT_CTO_QUESTION_TOOL.name,
+  READ_OWN_CTO_QUESTION_TOOL.name,
+  READ_CTO_TASK_PACKETS_TOOL.name,
+  PUBLISH_CTO_TASK_PACKET_TOOL.name,
+  PREPARE_TASK_WORKER_TOOL.name,
+  READ_TASK_WORKERS_TOOL.name,
+  DISPATCH_TASK_WORKER_TOOL.name,
+  READ_TASK_SOURCE_SUBMISSIONS_TOOL.name,
+  ACCEPT_TASK_SOURCE_SUBMISSION_TOOL.name,
+  READ_PROTECTED_TASK_QA_TOOL.name,
+  READ_PROTECTED_TASK_QA_HISTORY_TOOL.name,
+  VERIFY_WORKSTREAM_TOOL.name,
+].sort());
+
+export const TASK_WORKER_FILE_TOOL_NAMES = Object.freeze([
+  READ_TASK_SOURCE_FILE_TOOL.name, WRITE_TASK_SOURCE_FILE_TOOL.name, DELETE_TASK_SOURCE_FILE_TOOL.name, SUBMIT_TASK_SOURCE_TOOL.name,
+  REQUEST_PROTECTED_TASK_QA_TOOL.name, READ_PROTECTED_TASK_QA_TOOL.name,
+  PUBLISH_TASK_QA_REPORT_TOOL.name,
+].sort());
+export const TASK_WORKER_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
+  mode: "plugin-tools-only-v1", toolNames: TASK_WORKER_FILE_TOOL_NAMES,
+});
+
+export type SessionExecutionPolicy = Readonly<{
+  mode: "plugin-tools-only-v1";
+  toolNames: readonly string[];
+}>;
+
+export const INTEGRATION_MANAGER_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
+  mode: "plugin-tools-only-v1", toolNames: Object.freeze([
+    READ_VERIFIED_WORKSTREAM_TOOL.name, INTEGRATE_VERIFIED_TASK_TOOL.name, READ_INTEGRATION_PROGRESS_TOOL.name,
+    REQUEST_INTEGRATION_VALIDATION_TOOL.name,
+    PUBLISH_INTEGRATION_PACKET_TOOL.name,
+  ].sort()),
+});
+
+const names = (...toolNames: string[]) => Object.freeze([...new Set(toolNames)].sort());
+const LEAD_READ_TOOL_NAMES = names(
+  READ_DELIVERY_DOCUMENTS_TOOL.name,
+  READ_UI_CONTRACTS_TOOL.name,
+  READ_SOLUTION_TOOL.name, READ_DESIGN_DRAFT_TOOL.name, READ_DESIGN_SOURCES_TOOL.name,
+  READ_LEAD_MEMORY_TOOL.name, LIST_CTOS_TOOL.name, READ_DESIGN_BASELINE_TOOL.name,
+  INSPECT_SPEC_ASSURANCE_TOOL.name, READ_TECHNOLOGY_DECISIONS_TOOL.name, READ_WORKSTREAMS_TOOL.name,
+  READ_CTO_WORKSTREAM_DELIVERY_TOOL.name,
+);
+const LEAD_SHARED_TOOL_NAMES = names(...LEAD_READ_TOOL_NAMES, UPDATE_LEAD_MEMORY_TOOL.name);
+const MAIN_TOOL_NAMES = names(...LEAD_PLANNING_TOOL_NAMES);
+const UI_DESIGN_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, PROPOSE_DESIGN_TOOL.name, PROPOSE_UI_CONTRACT_TOOL.name);
+const BACKGROUND_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, PROPOSE_DESIGN_TOOL.name, PROPOSE_UI_CONTRACT_TOOL.name,
+  READ_REUSE_CANDIDATES_TOOL.name, RECORD_REUSE_CANDIDATE_TOOL.name);
+const QUESTION_INTAKE_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, RESOLVE_DESIGN_QUESTION_TOOL.name,
+  READ_CTO_QUESTIONS_TOOL.name, REVIEW_CTO_QUESTION_TOOL.name);
+const QUESTION_DISCUSSION_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES, RESOLVE_DESIGN_QUESTION_TOOL.name);
+const INTEGRATION_REVIEW_TOOL_NAMES = names(...LEAD_SHARED_TOOL_NAMES,
+  READ_FINAL_REVIEW_TOOL.name, REQUEST_FINAL_REVIEW_TOOL.name, READ_CHANGE_IMPACT_TOOL.name);
+
+const leadPolicies: Readonly<Record<LeadChannel, SessionExecutionPolicy>> = Object.freeze({
+  main: Object.freeze({ mode: "plugin-tools-only-v1", toolNames: MAIN_TOOL_NAMES }),
+  "ui-design": Object.freeze({ mode: "plugin-tools-only-v1", toolNames: UI_DESIGN_TOOL_NAMES }),
+  background: Object.freeze({ mode: "plugin-tools-only-v1", toolNames: BACKGROUND_TOOL_NAMES }),
+  "cto-inbox": Object.freeze({ mode: "plugin-tools-only-v1", toolNames: QUESTION_INTAKE_TOOL_NAMES }),
+  decisions: Object.freeze({ mode: "plugin-tools-only-v1", toolNames: QUESTION_DISCUSSION_TOOL_NAMES }),
+  "integration-review": Object.freeze({ mode: "plugin-tools-only-v1", toolNames: INTEGRATION_REVIEW_TOOL_NAMES }),
+});
+
+export function policyForLeadChannel(channel: LeadChannel): SessionExecutionPolicy {
+  return leadPolicies[channel];
+}
+
+/** Compatibility export for callers that explicitly require Main authority. */
+export const LEAD_SESSION_EXECUTION_POLICY = leadPolicies.main;
+
+export const CTO_SESSION_EXECUTION_POLICY: SessionExecutionPolicy = Object.freeze({
+  mode: "plugin-tools-only-v1",
+  toolNames: CTO_WORKSTREAM_TOOL_NAMES,
+});
+
+type SessionPolicyPlatform = {
+  readonly agents?: {
+    readonly sessions?: {
+      readonly describePolicySupport?: (sessionId: string, workspaceId: string) => Promise<unknown>;
+    };
+  };
+};
+
+function ownDataRecord(value: unknown, fields: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError("Session execution policy support is malformed.");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== fields.length || keys.some(key => typeof key !== "string" || !fields.includes(key))) {
+    throw new TypeError("Session execution policy support has unexpected fields.");
+  }
+  const result: Record<string, unknown> = Object.create(null);
+  for (const key of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      throw new TypeError("Session execution policy support contains an accessor or hidden field.");
+    }
+    result[key] = descriptor.value;
+  }
+  return result;
+}
+
+function ownDataProperty(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError("Session execution policy discovery is unavailable.");
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor || !Object.hasOwn(descriptor, "value")) {
+    throw new TypeError("Session execution policy discovery is unavailable.");
+  }
+  return descriptor.value;
+}
+
+function snapshotModes(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError("Session execution policy modes are malformed.");
+  }
+  if (value.length > 1) throw new TypeError("Session execution policy advertises too many modes.");
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || !keys.includes("length")) {
+    throw new TypeError("Session execution policy modes must be dense and exact.");
+  }
+  const modes: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")
+      || descriptor.value !== "plugin-tools-only-v1") {
+      throw new TypeError("Session execution policy advertises an unsupported mode.");
+    }
+    modes.push(descriptor.value);
+  }
+  if (new Set(modes).size !== modes.length) throw new TypeError("Session execution policy modes must be unique.");
+  return Object.freeze(modes);
+}
+
+export async function assertSessionExecutionPolicySupport(
+  platform: SessionPolicyPlatform,
+  sessionId: string,
+  workspaceId: string,
+): Promise<Readonly<{ schemaVersion: 1; modes: readonly "plugin-tools-only-v1"[];
+  enforcement: "dispatch-and-run"; readiness: "unknown"; osIsolation: "not-certified" }>> {
+  const agents = ownDataProperty(platform, "agents");
+  const sessions = ownDataProperty(agents, "sessions");
+  const methodDescriptor = Object.getOwnPropertyDescriptor(sessions, "describePolicySupport");
+  if (!methodDescriptor || !Object.hasOwn(methodDescriptor, "value") || typeof methodDescriptor.value !== "function") {
+    throw new TypeError("Host does not support session execution policy discovery.");
+  }
+
+  const raw = await methodDescriptor.value.call(sessions, sessionId, workspaceId);
+  const support = ownDataRecord(raw, ["schemaVersion", "modes", "enforcement", "readiness", "osIsolation"]);
+  const modes = snapshotModes(support.modes);
+  if (support.schemaVersion !== 1 || support.enforcement !== "dispatch-and-run"
+    || support.readiness !== "unknown" || support.osIsolation !== "not-certified" || modes.length === 0) {
+    throw new Error("Host does not support restricted session execution; unrestricted fallback is forbidden.");
+  }
+  return Object.freeze({ schemaVersion: 1, modes: modes as readonly "plugin-tools-only-v1"[],
+    enforcement: "dispatch-and-run", readiness: "unknown", osIsolation: "not-certified" });
+}

@@ -1,0 +1,57 @@
+const id = { type: "string", minLength: 1, maxLength: 160 };
+const text = { type: "string", minLength: 1, maxLength: 4096, pattern: "\\S" };
+const ids = { type: "array", maxItems: 128, uniqueItems: true, items: id };
+const texts = { type: "array", maxItems: 128, uniqueItems: true, items: text };
+const revisionPair = { type: "object", additionalProperties: false, required: ["oldRevisionId", "newRevisionId"],
+  properties: { oldRevisionId: id, newRevisionId: id } };
+const g5Handoff = { type: "object", additionalProperties: false,
+  required: ["oldBaselineRevisionId", "newBaselineRevisionId", "oldUiRevisionId", "newUiRevisionId", "technology", "workstreams", "tasks", "workstreamImpactStatus", "taskImpactStatus", "affectedTaskIds", "impactSha256"],
+  properties: { oldBaselineRevisionId: id, newBaselineRevisionId: id, oldUiRevisionId: id, newUiRevisionId: id,
+    technology: { anyOf: [{ type: "null" }, revisionPair] }, workstreams: revisionPair,
+    tasks: { type: "object", additionalProperties: false, required: ["ctoId", "workstreamId", "oldRevisionId", "newRevisionId"],
+      properties: { ctoId: id, workstreamId: id, oldRevisionId: id, newRevisionId: id } },
+    workstreamImpactStatus: { enum: ["CANDIDATES", "UNKNOWN"] },
+    taskImpactStatus: { enum: ["CANDIDATES", "NO_CANDIDATE_OBSERVED", "UNKNOWN"] },
+    affectedTaskIds: ids, impactSha256: { type: "string", minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" } } };
+const project = { type: "object", additionalProperties: false, required: ["projectId"], properties: { projectId: id } };
+
+export const PUBLISH_WORKSTREAM_TOOL = Object.freeze({
+  name: "builder.publish-workstream", displayName: "Record a versioned CTO Workstream instruction",
+  description: "Only the prepared Lead may publish a functional Workstream, not a dependency edge. Compare the approved requirements and AC against the current board first. Plan a distinct goal and deliverable, included/excluded scope, responsible CTO, prerequisites, shared interface versions and completion evidence; combine work when coordination costs exceed independent execution. Supply the exact next specification and base board revisions. An optional G5 handoff pins the published Baseline/UI/Workstream/Task revisions and is rechecked by the Host. Each Graph node has one responsible CTO; other CTOs can work in parallel through agreed interfaces without co-owning that node. This records an instruction pending CTO receipt, not execution or new authority. Unknown writes require reads, not automatic retry.",
+  parametersSchema: { type: "object", additionalProperties: false,
+    required: ["projectId", "expectedBaseRevisionId", "revisionId", "spec", "change"],
+    properties: { projectId: id, expectedBaseRevisionId: { type: ["string", "null"], maxLength: 160 }, revisionId: id,
+      spec: { type: "object", additionalProperties: false,
+        required: ["projectId", "id", "revision", "sourceSpecRevisionId", "assignedCtoId", "title", "goal", "scopeNodeIds", "included", "excluded", "dependencies", "interfaceContracts", "technologyDecisionsRef", "reuseCandidates", "acceptance", "evidenceRequired", "openQuestions"],
+        properties: { projectId: id, id, revision: { type: "integer", minimum: 1 }, sourceSpecRevisionId: id,
+          assignedCtoId: id, title: { type: "string", minLength: 1, maxLength: 512, pattern: "\\S" }, goal: text,
+          scopeNodeIds: { ...ids, minItems: 1 }, included: { ...texts, minItems: 1 }, excluded: texts,
+          dependencies: texts, interfaceContracts: ids, technologyDecisionsRef: id, reuseCandidates: texts,
+          acceptance: { ...texts, minItems: 1 }, evidenceRequired: { ...texts, minItems: 1 }, openQuestions: ids,
+        } },
+      change: { type: "object", additionalProperties: false,
+        required: ["previousRevision", "reason", "diff", "impactNodeIds", "impactInterfaceContracts", "impactTaskIds", "effectiveFrom"],
+        properties: { previousRevision: { type: ["integer", "null"], minimum: 1 }, reason: text, diff: text,
+          impactNodeIds: ids, impactInterfaceContracts: ids, impactTaskIds: ids, effectiveFrom: text,
+          g5Handoff } },
+    } },
+});
+export const READ_WORKSTREAMS_TOOL = Object.freeze({
+  name: "builder.read-workstreams", displayName: "Read the project Workstream board as Lead",
+  description: "The current prepared Lead reads the versioned project instructions and CTO readiness reports. Pending receipt is not delivery, readiness is not execution, and no PR/test/QA completion is inferred. Earlier revisions remain historical.",
+  parametersSchema: project,
+});
+export const READ_CTO_WORKSTREAM_TOOL = Object.freeze({
+  name: "builder.read-cto-workstream", displayName: "Read this CTO's assigned Workstream and pinned sources",
+  description: "Only the registered CTO's exact Agent/session can read its assigned instruction with published design/technology sources. Pass the received Workstream ID and read the board revision before acknowledging. On an exact Core-bound child-result turn, currentTaskResult identifies the Task, submitted Commit or QA report being handed off; it is not source acceptance, QA PASS or Workstream verification. Sources stay pinned, not silently upgraded. This is not another CTO's private memory, a dispatch or code execution authority.",
+  parametersSchema: { type: "object", additionalProperties: false, required: ["projectId", "ctoId", "workstreamId"],
+    properties: { projectId: id, ctoId: id, workstreamId: id } },
+});
+export const ACKNOWLEDGE_WORKSTREAM_TOOL = Object.freeze({
+  name: "builder.acknowledge-workstream", displayName: "Record the assigned CTO's understanding and readiness",
+  description: "Only the assigned CTO's exact independent session records understanding/readiness for the exact current Workstream specification and expected board revision. When that instruction contains a verified G5 handoff, the same receipt acknowledges only its pinned G5-scoped instruction; it does not establish complete impact inventory, reapproval, execution, QA or delivery. ready is a CTO report, never a running/completed state or code permission. Explain ambiguities/blocks; execution cancellation/continuation/rework and Worker/QA evidence are separate later contracts. Unknown writes require read reconciliation, not automatic retry. The user or Lead cannot impersonate this receipt.",
+  parametersSchema: { type: "object", additionalProperties: false,
+    required: ["projectId", "ctoId", "workstreamId", "expectedBaseRevisionId", "revisionId", "specRevision", "readiness", "note"],
+    properties: { projectId: id, ctoId: id, workstreamId: id, expectedBaseRevisionId: id, revisionId: id,
+      specRevision: { type: "integer", minimum: 1 }, readiness: { enum: ["ready", "needs-clarification", "blocked"] }, note: text } },
+});

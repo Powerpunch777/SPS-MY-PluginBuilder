@@ -1,0 +1,18 @@
+import type { JsonObject } from "@sonparkserver/plugin-sdk/platform";
+type Tool<Name extends string> = Readonly<{ name: Name; displayName: string; description: string; parametersSchema: JsonObject }>;
+export const READ_CTO_TASK_PACKETS_TOOL: Tool<"builder.read-task-packets">;
+export const PUBLISH_CTO_TASK_PACKET_TOOL: Tool<"builder.publish-task-packet">;
+export const PREPARE_TASK_WORKER_TOOL: Tool<"builder.prepare-task-worker">;
+export const READ_TASK_WORKERS_TOOL: Tool<"builder.read-task-workers">;
+export const DISPATCH_TASK_WORKER_TOOL: Tool<"builder.dispatch-task-worker">;
+export const READ_TASK_SOURCE_FILE_TOOL: Tool<"builder.read-task-source-file">;
+export const WRITE_TASK_SOURCE_FILE_TOOL: Tool<"builder.write-task-source-file">;
+export const DELETE_TASK_SOURCE_FILE_TOOL: Tool<"builder.delete-task-source-file">;
+export const SUBMIT_TASK_SOURCE_TOOL: Tool<"builder.submit-task-source">;
+export const READ_TASK_SOURCE_SUBMISSIONS_TOOL: Tool<"builder.read-task-source-submissions">;
+export const ACCEPT_TASK_SOURCE_SUBMISSION_TOOL: Tool<"builder.accept-task-source-submission">;
+export const REQUEST_PROTECTED_TASK_QA_TOOL: Tool<"builder.request-protected-task-qa">;
+export const READ_PROTECTED_TASK_QA_TOOL: Tool<"builder.read-protected-task-qa">;
+export const READ_PROTECTED_TASK_QA_HISTORY_TOOL: Tool<"builder.read-protected-task-qa-history">;
+export const PUBLISH_TASK_QA_REPORT_TOOL: Tool<"builder.publish-task-qa-report">;
+export const VERIFY_WORKSTREAM_TOOL: Tool<"builder.verify-workstream">;

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "plugin": {
+    "id": "com.sonparkserver.my-plugin-builder",
+    "version": "0.1.0",
+    "apiVersion": "1"
+  },
+  "runtime": {
+    "manifestEntry": "dist/manifest.js",
+    "manifestSha256": "5ec0f3330885c9484e032d8dea945aee5b53b86ce92dc9e0f5181af61a33b4ed"
+  },
+  "capabilities": [
+    "agent.sessions.cancel",
+    "agent.sessions.create",
+    "agent.sessions.read",
+    "agent.sessions.send",
+    "agent.tools.register",
+    "agents.read",
+    "plugin.state.read",
+    "plugin.state.write",
+    "ui.page.register",
+    "ui.workspaceShell.provide"
+  ],
+  "permissionsDigest": "8630132fd83455993738d1c67dd61a63abc4ee96765cd8235c444fcc8d6ef051"
+}
